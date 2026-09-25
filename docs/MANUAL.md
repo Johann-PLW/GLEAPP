@@ -499,6 +499,31 @@ Near-uniform images (flat screenshots, gradients, dark frames) are excluded
 from grouping because their perceptual hashes are meaningless. "Find similar"
 (context menu or `F`) does an ad-hoc perceptual search around one file.
 
+### Find similar: copies of a picture
+
+With the **Find-similar index** built (**Duplicates → Build Find-similar index**),
+right-click → **Find similar** on an image lists its copies: the same picture
+resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
+watermarked or pasted into a screenshot. Each result's badge says how it was
+confirmed: **N pts** is the number of points that line up with the searched
+picture; **match** means a picture with too little detail for points, matched by
+its whole-picture fingerprint instead. Until the index is built, Find similar runs
+the quick perceptual-hash check and the banner says so.
+
+The index is built from the thumbnails processing already made: about 400 bytes an
+image, kept in the case file. Measured on a 26,586-image phone case with 4,500 test
+copies added: 6 minutes and 10.6 MB for 31,086 images; a search took about a second,
+at most 8.
+
+Measured on 300 photos from that case, each edited 15 ways and searched among the
+whole case: 95.5% of the copies of the 262 photos with detail were found (82% of
+those pasted into a phone screenshot, 92 to 99% for every other edit). Smooth
+wallpapers, gradients and flat fills do far worse (36% of the copies of 38 of them),
+because a near-uniform picture has neither points to match nor a stable
+fingerprint. Other files returned were, in a hand-checked sample, related pictures
+already in the case: versions of the same page, the same map with different
+overlays, light and dark versions of one icon.
+
 ## 10. Face / skin screening
 
 Screening runs the **YuNet** face-detection neural network (a small bundled

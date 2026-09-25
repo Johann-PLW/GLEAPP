@@ -353,7 +353,10 @@ async function showSimilar(id) {
   renderFiles(d.files);
   renderPager();
   $("#simBanner").style.display = "flex";
-  $("#simId").textContent = `files similar to #${id}`;
+  $("#simId").textContent = `files similar to #${id}`
+    + (d.engine === "hash" && d.files[0] && d.files[0].kind === "image"
+       ? " (quick check only: build the Find-similar index under Duplicates for crops, mirrors, rotations and screenshots)"
+       : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer images not indexed yet)` : "");
   updateStat();
 }
 
@@ -397,7 +400,10 @@ function tileEl(f) {
   const nExact = f.stack_count || 1;
   const nVis = f.vstack_count || 0;
   // face-match results carry similarity with no "distance" (that's a pHash-only concept)
-  const dist = (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
+  // index matches say how they were confirmed: aligned points, or the whole-picture fingerprint
+  const dist = f.match === "copy"
+    ? `<span class="b" title="${f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint (too little detail for points)"}">${f.points ? f.points + " pts" : "match"}</span>`
+    : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
   const faces = f.faces ? `<span class="b face">${f.faces}\u{1F464}</span>` : "";
   const hit = hashBadges(f);
   const gps = f.gps_lat != null ? `<span class="b">\u{1F4CD}</span>` : "";
@@ -2372,6 +2378,7 @@ async function refreshContext() {
   state.flags = c.flags || [];
   try { await refreshFlags(); } catch (e) {}
   updateScreenInfo(c.screening);
+  refreshSimIndexInfo();
   updateArchInfo(c.archives);
   updateKnownHash(c.known_hash);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
@@ -2817,6 +2824,28 @@ function trackJob(infoSel, barSel, label, done) {
   };
   poll();
 }
+async function refreshSimIndexInfo() {
+  let st;
+  try { st = await api("/api/simindex/status"); } catch (e) { return; }
+  if (!st || st.error) return;
+  const todo = Math.max(0, st.indexable - st.indexed);
+  $("#simIndexInfo").textContent = !st.indexed
+    ? `Find similar is using its quick check. Build the index (${st.indexable.toLocaleString()} images) to find crops, mirrors, rotations and screenshots.`
+    : `Find similar index: ${st.indexed.toLocaleString()} images` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
+  $("#btnSimIndex").textContent = !st.indexed ? "Build Find-similar index" : todo ? `Index ${todo.toLocaleString()} new images` : "Find-similar index is up to date";
+  $("#btnSimIndex").disabled = !!st.indexed && !todo;
+}
+$("#btnSimIndex").onclick = async () => {
+  const r = await api("/api/simindex/build", { method: "POST" });
+  if (r.error) return toast(r.message || "Could not start the index");
+  $("#btnSimIndex").disabled = true;
+  trackJob("#simIndexInfo", "#taskProg", "Find-similar index", async ok => {
+    $("#btnSimIndex").disabled = false;
+    if (!ok) return;
+    await refreshSimIndexInfo();
+    toast("Find-similar index ready");
+  });
+};
 $("#btnRetryErr").onclick = async () => {
   const r = await api("/api/reprocess-errors", { method: "POST" });
   if (r.error) return toast(r.message || "Could not start");
@@ -4359,6 +4388,7 @@ $("#mapViewClose").onclick = closeMapView;
     document.title = "GLEAPP — " + (c.case || "");
     if (c.vic) $("#btnVic").style.display = "";
     updateScreenInfo(c.screening);
+    refreshSimIndexInfo();
     updateArchInfo(c.archives);
     updateKnownHash(c.known_hash);
     if (c.errors > 0) {

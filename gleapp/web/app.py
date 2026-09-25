@@ -1263,14 +1263,59 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.get("/api/similar/<int:file_id>")
     def similar(file_id: int):
+        """Copies of an image from the Find-similar index (gleapp/simindex.py) once the
+        case has one; a video, or a case without the index, gets the perceptual-hash
+        search, and the reply says whether the index still needs building."""
+        from .. import simindex
         thr = int(request.args.get("threshold", 12))
         case = C()
-        hits = find_similar(case, file_id, threshold=thr, limit=300)
+        target = case.db.get_file(file_id)
+        if target is None:
+            abort(404)
+        st = simindex.status(case)
+        engine = "hash"
+        if target["kind"] == "image" and st["vocab"] and st["indexed"]:
+            hits = simindex.find_copies(case, file_id, limit=300)
+            engine = "index"
+        else:
+            hits = find_similar(case, file_id, threshold=thr, limit=300)
         for h in hits:
             code = h.get("category") or 0
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
-        return jsonify({"file_id": file_id, "count": len(hits), "files": hits})
+        return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
+                        "unindexed": max(0, st["indexable"] - st["indexed"])})
+
+    @app.get("/api/simindex/status")
+    def simindex_status():
+        from .. import simindex
+        return jsonify(simindex.status(C()))
+
+    @app.post("/api/simindex/build")
+    def simindex_build():
+        """Index images for Find similar, as the shared background job."""
+        if state["case"] is None:
+            abort(409, description="no case open")
+        if state["job"]["running"]:
+            abort(409, description="a job is already running")
+        case = state["case"]
+        state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
+                        "message": "Indexing for Find similar…", "stats": None, "error": None}
+
+        def _job() -> None:
+            j = state["job"]
+            try:
+                from .. import simindex
+                n = simindex.build_index(case, progress=lambda d, t: j.update(done=d, total=t),
+                                         stage_cb=lambda m: j.update(message=m, done=0, total=0))
+                j.update(running=False, stage="done",
+                         message=f"Find similar index ready ({n:,} images added)",
+                         stats={"indexed": n})
+            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+                j.update(running=False, stage="error", error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_job, daemon=True).start()
+        return jsonify({"ok": True})
 
     @app.get("/api/faces/<int:file_id>")
     def faces_for_file(file_id: int):
