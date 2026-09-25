@@ -568,6 +568,34 @@ returned were, in a hand-checked sample, related pictures already in the case:
 versions of the same page, the same map with different overlays, light and dark
 versions of one icon.</p>
 
+<h3 id="similarcontent">Find similar: similar content</h3>
+<p>Copies are one kind of similar. The other is <strong>similar content</strong>: other
+photos of the same person, place, object or scene, and other drawings of the same
+character, where the pixels differ entirely. With the content index built, Find similar
+lists these after the copies, ranked, each with a <strong>&asymp; N%</strong> badge; the
+<strong>similar content from</strong> slider in the banner sets how alike a file must be
+to be listed (70% by default).</p>
+<p>This needs an image-understanding model, <strong>DINOv2-small</strong> (Meta AI,
+Apache-2.0), which is not shipped with GLEAPP. Get the file once, then
+<strong>Duplicates &rarr; Import content model&hellip;</strong>; GLEAPP accepts it only if its
+SHA-256 matches, copies it into its own data folder, and never goes online.</p>
+<ul>
+  <li>File: <code>model.onnx</code> from Hugging Face, <code>onnx-community/dinov2-small</code>,
+    commit <code>8b1f705</code>:
+    <code>https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705/onnx/model.onnx</code>
+    (88,532,934 bytes)</li>
+  <li>SHA-256: <code>f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a</code></li>
+</ul>
+<p>Then <strong>Build content index</strong>. It reads the thumbnails, not the evidence; it
+can be stopped and picks up where it left off. It is slow: about 25 images a second on an
+8-core laptop, so about 40 minutes for 57,000 images.</p>
+<p>Measured on a real laptop case, 93 images in 9 hand-labeled groups among 5,000 other
+images of the case: the other members of each group came first for the chair (all 10
+photos, from every angle), a sticker character in 25 different poses, a team photo
+taken three ways, and 16 renders of one room. Scores differ by subject (the chair photos
+scored 0.70 to 0.85 with each other, the sticker poses 0.88 to 0.91), which is why the
+results are ranked and the cutoff is yours to set.</p>
+
 <h2 id="screening">10. Face / skin screening</h2>
 <p>Screening runs the <strong>YuNet</strong> face-detection neural network (a small
 bundled ONNX model, via OpenCV) over every thumbnail and records a face count,
@@ -1428,6 +1456,12 @@ This product includes software developed by SecureAuth Corporation
 </table>
 <p>The web UI is hand-written vanilla JavaScript and CSS: no front-end framework,
 no bundler, no web fonts, nothing loaded from a CDN.</p>
+
+<h3>Find similar, similar content (section&nbsp;9)</h3>
+<p><strong>DINOv2-small</strong> (Maxime Oquab et al., Meta AI, "DINOv2: Learning Robust
+Visual Features without Supervision", 2023), Apache-2.0, in the ONNX conversion published
+by onnx-community on Hugging Face. Not shipped: the examiner imports it (see
+section&nbsp;9).</p>
 
 <h3>Face / skin screening (section&nbsp;10)</h3>
 <ul>

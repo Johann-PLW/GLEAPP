@@ -274,6 +274,11 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=("Basemap (*.pmtiles;*.mbtiles)", "All files (*.*)"),
                 )
+            elif kind == "model":
+                res = win.create_file_dialog(
+                    webview.OPEN_DIALOG,
+                    file_types=("ONNX model (*.onnx)", "All files (*.*)"),
+                )
             elif kind == "stashfile":
                 res = win.create_file_dialog(
                     webview.OPEN_DIALOG,
@@ -1263,11 +1268,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.get("/api/similar/<int:file_id>")
     def similar(file_id: int):
-        """Copies of an image from the Find-similar index (gleapp/simindex.py) once the
-        case has one; a video, or a case without the index, gets the perceptual-hash
-        search, and the reply says whether the index still needs building."""
-        from .. import simindex
+        """Find similar: the searched file, then its copies (exact duplicates, and for an
+        image the Find-similar index, gleapp/simindex.py, once built; otherwise the
+        perceptual-hash check), then files with similar content (gleapp/content.py, once
+        its index is built), ranked, down to ``min`` percent. A file is listed once."""
+        from .. import content, simindex
         thr = int(request.args.get("threshold", 12))
+        pct = min(99.0, max(30.0, float(request.args.get("min", 100 * content.DEFAULT_MIN))))
         case = C()
         target = case.db.get_file(file_id)
         if target is None:
@@ -1275,16 +1282,71 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         st = simindex.status(case)
         engine = "hash"
         if target["kind"] == "image" and st["vocab"] and st["indexed"]:
-            hits = simindex.find_copies(case, file_id, limit=300)
+            copies = simindex.find_copies(case, file_id, limit=300)
             engine = "index"
         else:
-            hits = find_similar(case, file_id, threshold=thr, limit=300)
+            copies = [dict(h, match="query" if h["id"] == file_id else "copy")
+                      for h in find_similar(case, file_id, threshold=thr, limit=300)]
+        seen = {h["id"] for h in copies}
+        if target["stack_id"] is not None:          # exact duplicates, always
+            copies += [dict(r, match="copy", exact=True) for r in
+                       case.db.iter_files("stack_id = ?", (target["stack_id"],)) if r["id"] not in seen]
+        cst = content.status(case)
+        content_on = bool(cst["model"] and cst["indexed"])
+        similar_content = []
+        if content_on:
+            similar_content = content.find_content(case, file_id, min_similarity=pct / 100,
+                                                   exclude={h["id"] for h in copies})
+        hits = copies + similar_content
         for h in hits:
             code = h.get("category") or 0
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
         return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
-                        "unindexed": max(0, st["indexable"] - st["indexed"])})
+                        "unindexed": max(0, st["indexable"] - st["indexed"]),
+                        "copies": len(copies) - 1, "content": len(similar_content),
+                        "content_on": content_on, "min": pct})
+
+    @app.get("/api/content/status")
+    def content_status():
+        from .. import content
+        return jsonify(dict(content.status(C()), sha256=content.MODEL_SHA256, url=content.MODEL_URL))
+
+    @app.post("/api/content/model")
+    def content_model():
+        from .. import content
+        raw = str((request.get_json(force=True) or {}).get("path", ""))
+        try:
+            dest = content.import_model(raw)
+        except (ValueError, OSError) as exc:
+            abort(400, description=str(exc))
+        return jsonify({"ok": True, "path": str(dest)})
+
+    @app.post("/api/content/build")
+    def content_build():
+        """Describe images for similar content, as the shared background job."""
+        from .. import content
+        if state["case"] is None:
+            abort(409, description="no case open")
+        if state["job"]["running"]:
+            abort(409, description="a job is already running")
+        if not content.model_ready():
+            abort(400, description="import the model file first")
+        case = state["case"]
+        state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
+                        "message": "Indexing content for Find similar…", "stats": None, "error": None}
+
+        def _job() -> None:
+            j = state["job"]
+            try:
+                n = content.build_index(case, progress=lambda d, t: j.update(done=d, total=t))
+                j.update(running=False, stage="done", message=f"Content index ready ({n:,} added)",
+                         stats={"indexed": n})
+            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+                j.update(running=False, stage="error", error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_job, daemon=True).start()
+        return jsonify({"ok": True})
 
     @app.get("/api/simindex/status")
     def simindex_status():

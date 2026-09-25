@@ -343,20 +343,25 @@ function gotoPage(n) {
   load();
 }
 
+let similarOfId = null;
 async function showSimilar(id) {
   const seq = ++loadSeq;
-  const d = await api(`/api/similar/${id}?threshold=14`);
+  const d = await api(`/api/similar/${id}?threshold=14&min=${+$("#simMin").value || 70}`);
   if (seq !== loadSeq) return;
+  if (d.error) return toast(d.message || "Find similar failed");
   rememberPlace(id);
+  similarOfId = id;
   state.similarOf = id;
   state.files = d.files;
   renderFiles(d.files);
   renderPager();
   $("#simBanner").style.display = "flex";
-  $("#simId").textContent = `files similar to #${id}`
+  $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "copy" : "copies"}`
+    + (d.content_on ? `, then ${d.content} with similar content` : "")
     + (d.engine === "hash" && d.files[0] && d.files[0].kind === "image"
-       ? " (quick check only: build the Find-similar index under Duplicates for crops, mirrors, rotations and screenshots)"
+       ? " (quick copy check only: build the Find-similar index under Duplicates for crops, mirrors, rotations and screenshots)"
        : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer images not indexed yet)` : "");
+  $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
 }
 
@@ -401,8 +406,11 @@ function tileEl(f) {
   const nVis = f.vstack_count || 0;
   // face-match results carry similarity with no "distance" (that's a pHash-only concept)
   // index matches say how they were confirmed: aligned points, or the whole-picture fingerprint
-  const dist = f.match === "copy"
-    ? `<span class="b" title="${f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint (too little detail for points)"}">${f.points ? f.points + " pts" : "match"}</span>`
+  const dist = f.match === "query" ? `<span class="b">searched</span>`
+    : f.match === "copy"
+    ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "copy · " + f.points + " pts" : "copy"}</span>`
+    : f.match === "content"
+    ? `<span class="b" title="similar content: how alike the two pictures are in what they show">≈ ${f.similarity}%</span>`
     : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
   const faces = f.faces ? `<span class="b face">${f.faces}\u{1F464}</span>` : "";
   const hit = hashBadges(f);
@@ -2379,6 +2387,7 @@ async function refreshContext() {
   try { await refreshFlags(); } catch (e) {}
   updateScreenInfo(c.screening);
   refreshSimIndexInfo();
+  refreshContentInfo();
   updateArchInfo(c.archives);
   updateKnownHash(c.known_hash);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
@@ -2824,6 +2833,42 @@ function trackJob(infoSel, barSel, label, done) {
   };
   poll();
 }
+$("#simMin").addEventListener("input", () => { $("#simMinV").textContent = $("#simMin").value + "%"; });
+$("#simMin").addEventListener("change", () => { if (state.similarOf && similarOfId != null) showSimilar(similarOfId); });
+async function refreshContentInfo() {
+  let st;
+  try { st = await api("/api/content/status"); } catch (e) { return; }
+  if (!st || st.error) return;
+  const todo = Math.max(0, st.indexable - st.indexed);
+  $("#btnContentModel").style.display = st.model ? "none" : "";
+  $("#btnContentIndex").style.display = st.model ? "" : "none";
+  $("#contentInfo").textContent = !st.model
+    ? "Similar content (other photos of the same person, place or object) needs the DINOv2-small model file, imported once. See Help."
+    : !st.indexed ? `Content index not built: ${st.indexable.toLocaleString()} images and videos (about 25 a second).`
+    : `Content index: ${st.indexed.toLocaleString()}` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
+  $("#btnContentIndex").textContent = !st.indexed ? "Build content index" : todo ? `Index ${todo.toLocaleString()} new files` : "Content index is up to date";
+  $("#btnContentIndex").disabled = !!st.indexed && !todo;
+}
+$("#btnContentModel").onclick = async () => {
+  const p = await pick("model", "Path to the DINOv2-small model file (model.onnx):");
+  if (!p) return;
+  const r = await api("/api/content/model", { method: "POST", headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ path: p }) });
+  if (r.error) return toast(r.message || "Could not import the model", 8000);
+  toast("Model imported");
+  refreshContentInfo();
+};
+$("#btnContentIndex").onclick = async () => {
+  const r = await api("/api/content/build", { method: "POST" });
+  if (r.error) return toast(r.message || "Could not start the content index");
+  $("#btnContentIndex").disabled = true;
+  trackJob("#contentInfo", "#taskProg", "Content index", async ok => {
+    $("#btnContentIndex").disabled = false;
+    if (!ok) return;
+    await refreshContentInfo();
+    toast("Content index ready");
+  });
+};
 async function refreshSimIndexInfo() {
   let st;
   try { st = await api("/api/simindex/status"); } catch (e) { return; }
@@ -4389,6 +4434,7 @@ $("#mapViewClose").onclick = closeMapView;
     if (c.vic) $("#btnVic").style.display = "";
     updateScreenInfo(c.screening);
     refreshSimIndexInfo();
+    refreshContentInfo();
     updateArchInfo(c.archives);
     updateKnownHash(c.known_hash);
     if (c.errors > 0) {

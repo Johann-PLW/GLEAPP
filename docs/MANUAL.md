@@ -524,6 +524,35 @@ fingerprint. Other files returned were, in a hand-checked sample, related pictur
 already in the case: versions of the same page, the same map with different
 overlays, light and dark versions of one icon.
 
+### Find similar: similar content
+
+Copies are one kind of similar. The other is **similar content**: other photos of the
+same person, place, object or scene, and other drawings of the same character, where
+the pixels differ entirely. With the content index built, Find similar lists these
+after the copies, ranked, each with a **≈ N%** badge; the **similar content from**
+slider in the banner sets how alike a file must be to be listed (70% by default).
+
+This needs an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
+is not shipped with GLEAPP. Get the file once, then **Duplicates → Import content
+model…**; GLEAPP accepts it only if its SHA-256 matches, copies it into its own data
+folder, and never goes online.
+
+* File: `model.onnx` from Hugging Face, `onnx-community/dinov2-small`, commit
+  `8b1f705`: https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705/onnx/model.onnx
+  (88,532,934 bytes)
+* SHA-256: `f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a`
+
+Then **Build content index**. It reads the thumbnails, not the evidence; it can be
+stopped and picks up where it left off. It is slow: about 25 images a second on an
+8-core laptop, so about 40 minutes for 57,000 images.
+
+Measured on a real laptop case, 93 images in 9 hand-labeled groups among 5,000 other
+images of the case: the other members of each group came first for the chair (all 10
+photos, from every angle), a sticker character in 25 different poses, a team photo
+taken three ways, and 16 renders of one room. Scores differ by subject (the chair
+photos scored 0.70 to 0.85 with each other, the sticker poses 0.88 to 0.91), which is
+why the results are ranked and the cutoff is yours to set.
+
 ## 10. Face / skin screening
 
 Screening runs the **YuNet** face-detection neural network (a small bundled
@@ -1519,6 +1548,12 @@ This product includes software developed by SecureAuth Corporation
 
 The web UI is hand-written vanilla JavaScript and CSS: no front-end framework,
 no bundler, no web fonts, nothing loaded from a CDN.
+
+### Find similar, similar content (section 9)
+
+**DINOv2-small** (Maxime Oquab et al., Meta AI, "DINOv2: Learning Robust Visual
+Features without Supervision", 2023), Apache-2.0, in the ONNX conversion published by
+onnx-community on Hugging Face. Not shipped: the examiner imports it (see section 9).
 
 ### Face / skin screening (section 10)
 

@@ -586,6 +586,9 @@
         <div id="redupInfo" class="fnote"></div>
         <button class="btn sm block" id="btnSimIndex" title="Right-click → Find similar uses this index to find copies of a picture: resized, cropped, mirrored, rotated, captioned, bordered or inside a screenshot">Build Find-similar index</button>
         <div id="simIndexInfo" class="fnote"></div>
+        <button class="btn sm block" id="btnContentModel" title="The image-understanding model (DINOv2-small) Find similar uses for similar content: other photos of the same person, place, object or scene">Import content model…</button>
+        <button class="btn sm block" id="btnContentIndex" style="display:none">Build content index</button>
+        <div id="contentInfo" class="fnote"></div>
       </div>
     </details>
 
@@ -667,6 +670,9 @@
     </div>
     <div class="banner" id="simBanner" style="display:none">
       <span>Showing <b id="simId"></b></span>
+      <span id="simCtl" style="display:none;align-items:center;gap:6px;margin-left:12px" title="How alike in content a file must be to be listed under similar content">
+        similar content from <input type="range" id="simMin" min="50" max="95" value="70" style="width:110px">
+        <b id="simMinV">70%</b></span>
       <button class="btn" id="simBack">Back to all</button>
     </div>
     <div class="pager" id="pagerTop"></div>
