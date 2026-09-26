@@ -1021,9 +1021,24 @@ or an archive found inside a source:
 - A joined item that is neither an image nor a video (an audio track, an HLS
   playlist, a DASH manifest, or bytes with no recognisable header) is kept only
   when the source includes other files, the same rule as for archive members.
-- Video streamed in segments (HLS, DASH) is cached one segment per item, so a
-  joined segment is only as long as the segment; a DASH segment also needs its
-  initialisation segment to play.
+- **A DASH stream is joined from its manifest.** A DASH player fetches a stream
+  as an initialisation segment and a list of media segments, and ExoPlayer caches
+  each as its own item, with the manifest (MPD) it played from cached beside them.
+  Where the manifest is cached, GLEAPP reads which items make up each stream and
+  in what order, and joins the initialisation segment and the media segments, in
+  the manifest's order, up to the first one missing or incomplete, into one file:
+  *App cache* then names the manifest, the stream (type, codec, size, bitrate),
+  and how many of the listed segments were joined. The segments it holds are not
+  listed again on their own. Membership comes only from the manifest: segments
+  whose addresses merely look alike are never joined.
+- **Video and sound are separate DASH streams.** Each is joined into its own file,
+  so the video is silent; the sound is kept when the source includes other files,
+  and each names the other. A stream stored as one file fetched in ranges (Reddit's
+  `DASH_720.mp4` beside `DASH_audio.mp4`, for example) is already whole, and *App
+  cache* names the manifest that lists it and the other cached streams it lists.
+- An MP4 whose only track is sound is kept as audio, not as a video with no frames.
+- HLS video is cached one segment per item, so a joined HLS segment is only as
+  long as the segment. A DASH manifest described by a SegmentTemplate is not used.
 
 A case ingested before this version did not keep the pieces, so re-ingest the
 source to join them. **Expand archives** also runs the join on a case that

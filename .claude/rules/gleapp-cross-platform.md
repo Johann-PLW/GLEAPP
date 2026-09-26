@@ -200,6 +200,20 @@ joined are not image or video (Snapchat's pieces carry no recognisable header, a
 audio, playlists and manifests), and every joined file that does not decode is a DASH
 segment cached as its own item, which the existing fragmented-MP4 messages describe.
 
+DASH streams are joined only from a cached manifest (`exocache.representations`,
+`_dash_streams`): ExoPlayer keys a segment by its address resolved against the
+representation's first BaseURL (`DashUtil.resolveCacheKey`), and resolving the cached
+MPD the same way matched cached keys exactly on the test images. Google's segment
+addresses carry per-request signatures, so a stream's segments share no key that
+string edits could recover, and grouping by look-alike keys would join pieces of two
+different videos; do not add it. Measured 2026-09-26 over eight images: 160 manifests,
+30 SegmentList streams with their initialization and media segments cached (all Google
+Maps), 77 of 77 cached media segments contiguous from each stream's first, and 196
+single-file (SegmentBase) streams. An audio-only stream is recognised
+from its init segment's `hdlr`, not from a manifest attribute, and processing leaves it
+audio (`exocache.is_audio_item`): its brand is a video one, so the byte sniff would
+otherwise call it a video with no frames.
+
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 
 A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered segments
