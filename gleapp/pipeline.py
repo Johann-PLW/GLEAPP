@@ -701,8 +701,8 @@ def process(
         traceback.print_exc()   # the gallery recomputes it on demand anyway
 
     # Find similar's two indexes, built now so a right-click works as soon as processing
-    # ends. Both add only what is not indexed yet; the content one needs the model file,
-    # and without it the gallery offers the import later.
+    # ends. Both add only what is not indexed yet; the content one uses the model that
+    # ships in gleapp/models.
     if similar:
         from . import content, simindex
         run_stage("similar_copies", "Indexing for Find similar (copies)…",

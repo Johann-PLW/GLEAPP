@@ -5,11 +5,13 @@ Copies of a picture are simindex.py's job. This describes each image by its cont
 DINOv2-small (Meta AI, Apache-2.0), run through OpenCV's DNN module, and ranks the case
 by cosine similarity to the searched image.
 
-The model is not shipped. The examiner imports the file once; it is accepted only if its
-SHA-256 is the one below, and copied under the app's data folder. Each image's vector
-(768 float16s: the model's summary token and the average of its patch tokens, each made
-unit length) is made from the thumbnail the case already holds, so building the index
-never reads the evidence again.
+The model ships with GLEAPP in gleapp/models: Meta's own facebook/dinov2-small weights
+(Hugging Face revision ed25f3a31f01632728cabb09d1542f84ab7b0056), converted to ONNX
+with PyTorch 2.14 (opset 17); its vectors matched those of the onnx-community conversion
+the measurements below were made with to a cosine of 1.00000 on 300 real thumbnails.
+Each image's vector (768 float16s: the model's summary token and the average of its
+patch tokens, each made unit length) is made from the thumbnail the case already holds,
+so building the index never reads the evidence again.
 
 Measured on a real laptop case (belkawindows), 93 images in 9 hand-labeled groups among
 5,000 other images of that case: ranking every image by this similarity, the other
@@ -24,21 +26,14 @@ are ranked and cut off by a strictness the examiner sets. Building the index ran
 
 from __future__ import annotations
 
-import hashlib
-import os
-import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 
-from . import appconfig
-
-# onnx-community/dinov2-small, onnx/model.onnx at commit 8b1f705, a conversion of
-# facebook/dinov2-small; 88,532,934 bytes.
-MODEL_SHA256 = "f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a"
-MODEL_URL = "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705/onnx/model.onnx"
+# gleapp/models/dinov2_small.onnx, 88,411,480 bytes; tests/test_content.py checks it.
+MODEL_SHA256 = "b88d3157590250f1ed413bd41289ce2b4f6c65f3699684eaa913efc2330e2822"
 MODEL_NAME = "dinov2_small.onnx"
 INDEX_VERSION = "1"
 DIM = 768
@@ -50,36 +45,11 @@ _CACHE: dict = {}
 
 # ---- the model --------------------------------------------------------------------------
 def model_path() -> Path:
-    return appconfig.data_dir() / "models" / MODEL_NAME
+    return Path(__file__).with_name("models") / MODEL_NAME
 
 
 def model_ready() -> bool:
     return model_path().is_file()
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def import_model(src) -> Path:
-    """Copy the model file into place, only if it is exactly the expected one."""
-    src = Path(str(src).strip().strip('"'))
-    if not src.is_file():
-        raise ValueError(f"not a file: {src}")
-    got = _sha256(src)
-    if got != MODEL_SHA256:
-        raise ValueError(f"this is not the expected model file (SHA-256 {got}, "
-                         f"expected {MODEL_SHA256})")
-    dest = model_path()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".part")
-    shutil.copyfile(src, tmp)
-    os.replace(tmp, dest)
-    return dest
 
 
 # ---- storage ----------------------------------------------------------------------------
@@ -152,7 +122,7 @@ def build_index(case, *, workers: int = 6, progress=None) -> int:
     keeps what it wrote and the next picks up the rest."""
     import cv2
     if not model_ready():
-        raise ValueError("import the model file first")
+        raise ValueError("the content model is missing from this build")
     with case.db.lock:
         _ensure(case.db.conn)
         rows = case.db.conn.execute(

@@ -274,11 +274,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=("Basemap (*.pmtiles;*.mbtiles)", "All files (*.*)"),
                 )
-            elif kind == "model":
-                res = win.create_file_dialog(
-                    webview.OPEN_DIALOG,
-                    file_types=("ONNX model (*.onnx)", "All files (*.*)"),
-                )
             elif kind == "stashfile":
                 res = win.create_file_dialog(
                     webview.OPEN_DIALOG,
@@ -1310,17 +1305,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
     @app.get("/api/content/status")
     def content_status():
         from .. import content
-        return jsonify(dict(content.status(C()), sha256=content.MODEL_SHA256, url=content.MODEL_URL))
-
-    @app.post("/api/content/model")
-    def content_model():
-        from .. import content
-        raw = str((request.get_json(force=True) or {}).get("path", ""))
-        try:
-            dest = content.import_model(raw)
-        except (ValueError, OSError) as exc:
-            abort(400, description=str(exc))
-        return jsonify({"ok": True, "path": str(dest)})
+        return jsonify(content.status(C()))
 
     @app.post("/api/content/build")
     def content_build():
@@ -1331,7 +1316,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         if state["job"]["running"]:
             abort(409, description="a job is already running")
         if not content.model_ready():
-            abort(400, description="import the model file first")
+            abort(400, description="the content model is missing from this build")
         case = state["case"]
         state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
                         "message": "Indexing content for Find similar…", "stats": None, "error": None}

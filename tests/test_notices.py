@@ -224,6 +224,13 @@ UPSTREAM_MODEL_LICENCES = {
 }
 
 
+# DINOv2's licence as Meta publishes it, the LICENSE file of github.com/
+# facebookresearch/dinov2, copied byte for byte at commit 7764ea0f912e.
+UPSTREAM_MODEL_LICENCES["LICENSE-dinov2"] = (
+    11359, "600cc67cc4cb2f5ea317dcfc687ad1c74dc4bec8782bbe9db0afd83513b935b7",
+    "Version 2.0, January 2004")
+
+
 @pytest.mark.parametrize("name", sorted(UPSTREAM_MODEL_LICENCES))
 def test_the_model_licences_are_opencv_zoos_text_unchanged(name):
     """Kept verbatim: an edited licence is not the licence."""

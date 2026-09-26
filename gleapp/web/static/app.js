@@ -2840,24 +2840,14 @@ async function refreshContentInfo() {
   try { st = await api("/api/content/status"); } catch (e) { return; }
   if (!st || st.error) return;
   const todo = Math.max(0, st.indexable - st.indexed);
-  $("#btnContentModel").style.display = st.model ? "none" : "";
   $("#btnContentIndex").style.display = st.model ? "" : "none";
   $("#contentInfo").textContent = !st.model
-    ? "Similar content (other photos of the same person, place or object) needs the DINOv2-small model file, imported once. See Help."
+    ? "Similar content is not available: the model file is missing from this build."
     : !st.indexed ? `Content index not built: ${st.indexable.toLocaleString()} images and videos (about 25 a second; icons and exact copies are skipped).`
     : `Content index: ${st.indexed.toLocaleString()}` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
   $("#btnContentIndex").textContent = !st.indexed ? "Build content index" : todo ? `Index ${todo.toLocaleString()} new files` : "Content index is up to date";
   $("#btnContentIndex").disabled = !!st.indexed && !todo;
 }
-$("#btnContentModel").onclick = async () => {
-  const p = await pick("model", "Path to the DINOv2-small model file (model.onnx):");
-  if (!p) return;
-  const r = await api("/api/content/model", { method: "POST", headers: { "Content-Type": "application/json" },
-                                              body: JSON.stringify({ path: p }) });
-  if (r.error) return toast(r.message || "Could not import the model", 8000);
-  toast("Model imported");
-  refreshContentInfo();
-};
 $("#btnContentIndex").onclick = async () => {
   const r = await api("/api/content/build", { method: "POST" });
   if (r.error) return toast(r.message || "Could not start the content index");

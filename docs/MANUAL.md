@@ -534,18 +534,9 @@ the pixels differ entirely. With the content index built, Find similar lists the
 after the copies, ranked, each with a **≈ N%** badge; the **similar content from**
 slider in the banner sets how alike a file must be to be listed (70% by default).
 
-This needs an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
-is not shipped with GLEAPP. Get the file once, then **Duplicates → Import content
-model…**; GLEAPP accepts it only if its SHA-256 matches, copies it into its own data
-folder, and never goes online.
-
-* File: `model.onnx` from Hugging Face, `onnx-community/dinov2-small`, commit
-  `8b1f705`: https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705/onnx/model.onnx
-  (88,532,934 bytes)
-* SHA-256: `f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a`
-
-Once the model is imported, processing builds the content index too, after the copy
-index; for a case processed before, **Build content index** does it once. It reads the
+This uses an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
+ships with GLEAPP and runs on the computer: nothing goes online. Processing builds the
+content index too, after the copy index; for a case processed before, **Build content index** does it once. It reads the
 thumbnails, not the evidence, and can be stopped and picks up where it left off. Each
 picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
@@ -1561,8 +1552,10 @@ no bundler, no web fonts, nothing loaded from a CDN.
 ### Find similar, similar content (section 9)
 
 **DINOv2-small** (Maxime Oquab et al., Meta AI, "DINOv2: Learning Robust Visual
-Features without Supervision", 2023), Apache-2.0, in the ONNX conversion published by
-onnx-community on Hugging Face. Not shipped: the examiner imports it (see section 9).
+Features without Supervision", 2023), Apache-2.0: Meta's `facebook/dinov2-small` weights
+(Hugging Face revision `ed25f3a3`), converted to ONNX for GLEAPP
+(`gleapp/models/dinov2_small.onnx`). The licence text ships beside it at
+`gleapp/models/LICENSE-dinov2`, as the licence requires.
 
 ### Face / skin screening (section 10)
 

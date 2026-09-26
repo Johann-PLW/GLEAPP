@@ -1,9 +1,7 @@
-"""Find similar, similar content (content.py): model import, index and ranking.
+"""Find similar, similar content (content.py): the bundled model, index and ranking.
 
-The real model is an 88 MB file the examiner imports, so these tests stand in for it:
-the import check is exercised with a file that is not the model, and the index is
-filled with hand-made vectors so the ranking, the cutoff and the combined Find similar
-reply can be checked exactly.
+The index is filled with hand-made vectors so the ranking, the cutoff and the combined
+Find similar reply can be checked exactly without running the model.
 """
 
 from __future__ import annotations
@@ -53,20 +51,23 @@ def test_files_listed_elsewhere_are_left_out(case_with_vectors):
     assert [h["id"] for h in hits] == [ids["far"]]
 
 
-def test_a_file_that_is_not_the_model_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setattr(content, "model_path", lambda: tmp_path / "models" / "m.onnx")
-    fake = tmp_path / "model.onnx"
-    fake.write_bytes(b"not the model")
-    with pytest.raises(ValueError, match="not the expected model file"):
-        content.import_model(fake)
-    assert not (tmp_path / "models" / "m.onnx").exists()
+def test_the_bundled_model_is_the_recorded_file():
+    """The model ships in gleapp/models; a truncated or swapped file must not pass."""
+    import hashlib
+    path = content.model_path()
+    assert path.is_file(), "gleapp/models/dinov2_small.onnx is missing"
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    assert h.hexdigest() == content.MODEL_SHA256
 
 
 def test_build_needs_the_model(tmp_path, monkeypatch):
     monkeypatch.setattr(content, "model_path", lambda: tmp_path / "missing.onnx")
     c = open_case(tmp_path / "case", create=True, examiner="t")
     try:
-        with pytest.raises(ValueError, match="import the model"):
+        with pytest.raises(ValueError, match="missing from this build"):
             content.build_index(c)
     finally:
         c.close()

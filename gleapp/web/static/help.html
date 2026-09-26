@@ -576,19 +576,9 @@ character, where the pixels differ entirely. With the content index built, Find 
 lists these after the copies, ranked, each with a <strong>&asymp; N%</strong> badge; the
 <strong>similar content from</strong> slider in the banner sets how alike a file must be
 to be listed (70% by default).</p>
-<p>This needs an image-understanding model, <strong>DINOv2-small</strong> (Meta AI,
-Apache-2.0), which is not shipped with GLEAPP. Get the file once, then
-<strong>Duplicates &rarr; Import content model&hellip;</strong>; GLEAPP accepts it only if its
-SHA-256 matches, copies it into its own data folder, and never goes online.</p>
-<ul>
-  <li>File: <code>model.onnx</code> from Hugging Face, <code>onnx-community/dinov2-small</code>,
-    commit <code>8b1f705</code>:
-    <code>https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705/onnx/model.onnx</code>
-    (88,532,934 bytes)</li>
-  <li>SHA-256: <code>f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a</code></li>
-</ul>
-<p>Once the model is imported, processing builds the content index too, after the copy
-index; for a case processed before, <strong>Build content index</strong> does it once. It
+<p>This uses an image-understanding model, <strong>DINOv2-small</strong> (Meta AI,
+Apache-2.0), which ships with GLEAPP and runs on the computer: nothing goes online.</p>
+<p>Processing builds the content index too, after the copy index; for a case processed before, <strong>Build content index</strong> does it once. It
 reads the thumbnails, not the evidence, and can be stopped and picks up where it left off.
 Each picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
@@ -1467,9 +1457,10 @@ no bundler, no web fonts, nothing loaded from a CDN.</p>
 
 <h3>Find similar, similar content (section&nbsp;9)</h3>
 <p><strong>DINOv2-small</strong> (Maxime Oquab et al., Meta AI, "DINOv2: Learning Robust
-Visual Features without Supervision", 2023), Apache-2.0, in the ONNX conversion published
-by onnx-community on Hugging Face. Not shipped: the examiner imports it (see
-section&nbsp;9).</p>
+Visual Features without Supervision", 2023), Apache-2.0: Meta's
+<code>facebook/dinov2-small</code> weights (Hugging Face revision <code>ed25f3a3</code>),
+converted to ONNX for GLEAPP (<code>gleapp/models/dinov2_small.onnx</code>). The licence text
+ships beside it at <code>gleapp/models/LICENSE-dinov2</code>, as the licence requires.</p>
 
 <h3>Face / skin screening (section&nbsp;10)</h3>
 <ul>
