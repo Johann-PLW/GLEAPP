@@ -58,9 +58,9 @@
       "version": "0.1.0",
       "upstream": "https://github.com/abrignoni/exoprobe",
       "upstream_file": "exoprobe.py",
-      "commit": "58ee014e3f0eb051b5814ce68d0bd325d5745b43",
-      "commit_date": "2026-09-26T18:10:34-04:00",
-      "sha256": "5d3f18ac4499dde08d465f66f420fbc33ea36df9c543cc4aeb7dc6f3d002d4f6",
+      "commit": "ed9438fed17e59f8e0b6ea95bfa007dc29341ee2",
+      "commit_date": "2026-09-26T18:29:24-04:00",
+      "sha256": "5248e8375375c000b8dbebbeb575d04d81794bb1ca4a78eaa840e8d16869aa5b",
       "licence": "MIT",
       "licence_file": "gleapp/vendor/LICENSE-exoprobe",
       "note": "Copied verbatim. Fix upstream and re-vendor; edits here are reverted by the next sync. Reads ExoPlayer caches, joins their pieces and DASH streams, and muxes video with its audio; gleapp/exocache.py registers what it produces."

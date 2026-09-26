@@ -20,7 +20,10 @@ The layout, from androidx/media 1.11.1
   the cache folder (``SimpleCacheSpan.getCacheFile``, ``SimpleCache``
   ``SUBDIRECTORY_COUNT``): ``id`` names the cached item, ``position`` is the byte
   offset the piece starts at, ``timestamp`` is its last-touch time in milliseconds
-  (``System.currentTimeMillis``). Older caches wrote
+  (``System.currentTimeMillis``). The name is rewritten on a later touch only when
+  the app's evictor asks for touches and the cache keeps no file index; with an
+  ``ExoPlayerCacheFileMetadata`` table the new time goes there instead
+  (``SimpleCache.touchSpan``). Older caches wrote
   ``<key>.<position>.<timestamp>.v2.exo`` (the key escaped with ``%xx``,
   ``Util.escapeFileName``) or ``.v1.exo`` (not escaped) in the cache folder itself,
   so the key is in the name and no index is needed.
@@ -297,9 +300,9 @@ def _copy_from(fh, out, skip: int) -> int:
 def join(pieces: Iterable[Piece], out, *, max_bytes: int = MAX_ITEM_BYTES) -> dict:
     """Write ``pieces`` into the binary file ``out`` from position 0 until the first
     gap. Where two pieces start at one position the one with the later last-touch
-    time is used: ExoPlayer renames a piece to its new time when it touches it
-    (``CachedContent.setLastTouchTimestamp``), so a live cache holds only one, and
-    the later name is the later state.
+    time is used: when ExoPlayer touches a piece it renames the file to the new time
+    (``CachedContent.setLastTouchTimestamp``) rather than adding one, so a live cache
+    holds only one, and the later name is the later state.
 
     Returns ``{"used": [pieces], "bytes": n, "gap": offset or None, "left_out": n}``:
     the pieces joined, the bytes written, where the first gap is (None when there is
