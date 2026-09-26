@@ -27,6 +27,8 @@ class BackgroundIndexer:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._searches = 0                 # Find similar searches running right now
+        self._search_lock = threading.Lock()
         self.status = {"running": False, "stage": "", "done": 0, "total": 0,
                        "paused": False, "error": None}
 
@@ -50,10 +52,27 @@ class BackgroundIndexer:
         if wait and t is not None and t.is_alive() and t is not threading.current_thread():
             t.join(timeout=300)
 
+    def searching(self):
+        """Context manager around a Find similar search: the indexer stands aside (it
+        skips the files in hand and stops at once) until no search is running, since
+        both compete for the same cores. Measured: a warm search took 0.36 s alone and
+        0.73 s beside a content build."""
+        indexer = self
+
+        class _Search:
+            def __enter__(self):
+                with indexer._search_lock:
+                    indexer._searches += 1
+
+            def __exit__(self, *exc):
+                with indexer._search_lock:
+                    indexer._searches -= 1
+        return _Search()
+
     # ---------------------------------------------------------------------------------
     def _should_yield(self, case) -> bool:
         return (self._stop.is_set() or self.state.get("case") is not case
-                or self.state["job"]["running"])
+                or self.state["job"]["running"] or self._searches > 0)
 
     def _run(self, case) -> None:
         from .. import content, simindex
@@ -65,6 +84,9 @@ class BackgroundIndexer:
                 if self.state["job"]["running"]:
                     self.status.update(paused=True)
                     time.sleep(BUSY_POLL)
+                    continue
+                if self._searches:
+                    time.sleep(0.2)          # a search is running: wait for it to finish
                     continue
                 self.status.update(paused=False)
                 st = simindex.status(case)

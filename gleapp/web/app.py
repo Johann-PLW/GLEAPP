@@ -1274,13 +1274,18 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         image the Find-similar index, gleapp/simindex.py, once built; otherwise the
         perceptual-hash check), then files with similar content (gleapp/content.py, once
         its index is built), ranked, down to ``min`` percent. A file is listed once."""
-        from .. import content, simindex
+        from .. import content
         thr = int(request.args.get("threshold", 12))
         pct = min(99.0, max(30.0, float(request.args.get("min", 100 * content.DEFAULT_MIN))))
         case = C()
         target = case.db.get_file(file_id)
         if target is None:
             abort(404)
+        with indexer.searching():             # the background indexer stands aside
+            return _similar(case, target, file_id, thr, pct)
+
+    def _similar(case, target, file_id, thr, pct):
+        from .. import content, simindex
         st = simindex.status(case)
         engine = "hash"
         if st["vocab"] and st["indexed"]:

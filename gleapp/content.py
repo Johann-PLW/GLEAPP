@@ -134,8 +134,11 @@ def build_index(case, *, workers: int = 6, progress=None, stop=None) -> int:
             ).fetchall()
     total = len(rows)
     local = threading.local()
+    stopped = stop or (lambda: False)
 
     def one(r):
+        if stopped():
+            return r[0], None                # not written: the next build does it
         if not hasattr(local, "net"):
             local.net = cv2.dnn.readNetFromONNX(str(model_path()))  # pylint: disable=no-member
         try:
@@ -146,7 +149,6 @@ def build_index(case, *, workers: int = 6, progress=None, stop=None) -> int:
             return r[0], None
         return r[0], v.astype(np.float16).tobytes()
 
-    stopped = stop or (lambda: False)
     done = 0
     with ThreadPoolExecutor(max(1, workers)) as ex:
         for k in range(0, total, CHUNK):

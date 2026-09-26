@@ -260,8 +260,10 @@ def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None,
         return 0
     thumbs = case.thumb_dir
 
-    def features(item):
+    def features(item, interruptible=True):
         fid, thumb = item
+        if interruptible and stopped():
+            return fid, None                 # not written: the next build does it
         g = _gray(thumbs / thumb)
         if g is None:
             return fid, None
@@ -277,7 +279,8 @@ def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None,
         pick = [by_id[i] for i in rng.choice(len(by_id), min(len(by_id), 6000), replace=False)]
         parts = []
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            for _, f in ex.map(features, pick):
+            # the vocabulary sample is never cut short: a partial one would change it
+            for _, f in ex.map(lambda it: features(it, interruptible=False), pick):
                 if f is not None and f[1] is not None:
                     d = f[1]
                     parts.append(d[rng.choice(len(d), min(8, len(d)), replace=False)])
