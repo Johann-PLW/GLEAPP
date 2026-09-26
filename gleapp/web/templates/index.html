@@ -584,7 +584,15 @@
         <label class="fck" title="one tile per distinct image: exact copies + visual matches"><input type="checkbox" id="fcollapse" checked> Collapse duplicates &amp; visual matches</label>
         <button class="btn sm block" id="btnRedup">Re-scan for duplicates</button>
         <div id="redupInfo" class="fnote"></div>
-        <button class="btn sm block" id="btnSimIndex" title="Right-click → Find similar uses two indexes: copies of a picture (resized, cropped, mirrored, rotated, captioned, bordered or inside a screenshot) and similar content (other photos of the same person, place or object). Processing builds both; this builds them for a case processed before.">Build Find-similar indexes</button>
+      </div>
+    </details>
+
+    <details class="fsec" data-sec="similar">
+      <summary>Find similar <span class="fdot"></span></summary>
+      <div class="fbody">
+        <div class="fnote">Right-click a picture or video &rarr; <b>Find similar</b> lists its copies, then
+          other photos with similar content. Both need the indexes below.</div>
+        <button class="btn sm block" id="btnSimIndex" title="Right-click → Find similar uses two indexes: copies of a picture (resized, cropped, mirrored, rotated, captioned, bordered or inside a screenshot) and similar content (other photos of the same person, place or object). Processing builds them; this builds them for a case processed before they existed.">Build Find-similar indexes</button>
         <div id="simIndexInfo" class="fnote"></div>
         <div id="contentInfo" class="fnote"></div>
       </div>

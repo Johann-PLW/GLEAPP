@@ -587,7 +587,7 @@ def process(
     progress=None,
     stage_cb=None,
     reason: str = "",   # why this run happened, for the audit log - see PROCESS_REASONS
-    similar: bool = True,
+    similar: bool = True,   # build / update the Find-similar indexes
 ) -> RunStats:
     stats = RunStats()
 
@@ -700,9 +700,9 @@ def process(
     except sqlite3.Error:
         traceback.print_exc()   # the gallery recomputes it on demand anyway
 
-    # Find similar's two indexes, built now so a right-click works as soon as processing
-    # ends. Both add only what is not indexed yet; the content one uses the model that
-    # ships in gleapp/models.
+    # Find similar's two indexes, built as the last stages so a right-click works as soon
+    # as processing ends. Both add only what is not indexed yet, so a later run (more
+    # evidence, expanded archives, retried files) indexes just its new files.
     if similar:
         from . import content, simindex
         run_stage("similar_copies", "Indexing for Find similar (copies)…",

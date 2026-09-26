@@ -360,7 +360,7 @@ async function showSimilar(id) {
     + (d.quick ? `, ${d.quick} unconfirmed quick ${d.quick === 1 ? "match" : "matches"}` : "")
     + (d.content_on ? `, then ${d.content} with similar content` : "")
     + (d.engine === "hash"
-       ? " (the Find-similar copy index is not built for this case: Duplicates → Build Find-similar index)"
+       ? " (the Find-similar indexes are not built for this case: Find similar → Build Find-similar indexes in the left pane)"
        : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer files not indexed yet)` : "");
   $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
@@ -411,7 +411,7 @@ function tileEl(f) {
     : f.match === "copy"
     ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "copy · " + f.points + " pts" : "copy"}</span>`
     : f.match === "hash"
-    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the Find-similar index under Duplicates for real copy matching">quick match?</span>`
+    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the Find-similar indexes (Find similar section, left pane) for real copy matching">quick match?</span>`
     : f.match === "content"
     ? `<span class="b" title="similar content: how alike the two pictures are in what they show">≈ ${f.similarity}%</span>`
     : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";

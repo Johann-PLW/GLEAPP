@@ -501,10 +501,11 @@ from grouping because their perceptual hashes are meaningless. "Find similar"
 
 ### Find similar: copies of a picture
 
-Processing builds the **Find-similar index** as its last stage, so right-click →
-**Find similar** works as soon as a case is processed; a case processed by an older
-version builds it once with **Duplicates → Build Find-similar indexes**. Find similar on
-an image then lists its copies: the same picture
+Right-click → **Find similar** uses the case's two Find-similar indexes. Processing
+builds them as its last stages, so Find similar works as soon as a case is processed,
+and files added later are indexed as they are processed. A case processed before these
+indexes existed builds them once with the button in the left pane's **Find similar**
+section, which also shows how much each index holds. Find similar on an image then lists its copies: the same picture
 resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
 watermarked or pasted into a screenshot. Each result's badge says how it was
 confirmed: **N pts** is the number of points that line up with the searched
@@ -535,8 +536,8 @@ after the copies, ranked, each with a **≈ N%** badge; the **similar content fr
 slider in the banner sets how alike a file must be to be listed (70% by default).
 
 This uses an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
-ships with GLEAPP and runs on the computer: nothing goes online. Processing builds the
-content index too, after the copy index; for a case processed before, **Build Find-similar indexes** does both once. It reads the
+ships with GLEAPP and runs on the computer: nothing goes online. Processing and that
+button build the content index after the copy index. It reads the
 thumbnails, not the evidence, and can be stopped and picks up where it left off. Each
 picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
