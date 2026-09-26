@@ -157,7 +157,7 @@ def _build_dmg() -> Path:
         sys.exit(f"build: {app} not found; run 'exe' first, the one-folder build, which "
                  "produces the bundle on macOS")
     # macOS only, in the [build] extra that phase 1 installs.
-    import dmgbuild  # pylint: disable=import-outside-toplevel
+    import dmgbuild  # pylint: disable=import-outside-toplevel,import-error
     version = read_version()
     out = DIST / f"{APP}-{version}.dmg"
     if out.exists():
