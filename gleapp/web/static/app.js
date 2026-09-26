@@ -369,7 +369,7 @@ function showSimilarResult(id, d) {
   renderPager();
   $("#simBanner").style.display = "flex";
   const idx = state.simIndexing;
-  $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "copy" : "copies"}`
+  $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "match" : "matches"}`
     + (d.quick ? `, ${d.quick} unconfirmed quick ${d.quick === 1 ? "match" : "matches"}` : "")
     + (d.content_on ? `, then ${d.content} with similar content` : "")
     + (d.engine === "hash"
@@ -424,7 +424,7 @@ function tileEl(f) {
   // index matches say how they were confirmed: aligned points, or the whole-picture fingerprint
   const dist = f.match === "query" ? `<span class="b">searched</span>`
     : f.match === "copy"
-    ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "copy · " + f.points + " pts" : "copy"}</span>`
+    ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "match · " + f.points + " pts" : "match"}</span>`
     : f.match === "hash"
     ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the Find-similar indexes (Find similar section, left pane) for real copy matching">quick match?</span>`
     : f.match === "content"

@@ -556,9 +556,10 @@ indexed the first time it is opened. The left pane's <strong>Find similar</stron
 shows each index's progress. From the command line, processing builds them at its end. Find similar on an
 image then lists its copies: the same picture resized, recompressed, cropped, mirrored, rotated,
 recolored, captioned, framed, watermarked or pasted into a screenshot. Each result's
-badge says how it was confirmed: <strong>N pts</strong> is the number of points that
-line up with the searched picture; <strong>match</strong> means a picture with too
-little detail for points, matched by its whole-picture fingerprint instead. Until the
+badge says how it was confirmed: <strong>match &middot; N pts</strong> means N points line
+up with the searched picture; <strong>match</strong> alone, a picture with too little detail
+for points, matched by its whole-picture fingerprint instead; <strong>identical</strong>, an
+exact duplicate of the file. Until the
 index is built, Find similar runs the quick perceptual-hash check and the banner says
 so.</p>
 <p>The index is built from the thumbnails processing already made: about 400 bytes an

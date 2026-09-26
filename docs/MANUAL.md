@@ -511,9 +511,9 @@ indexed the first time it is opened. The left pane's **Find similar** section sh
 each index's progress. From the command line, processing builds them at its end. Find similar on an image then lists its copies: the same picture
 resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
 watermarked or pasted into a screenshot. Each result's badge says how it was
-confirmed: **N pts** is the number of points that line up with the searched
-picture; **match** means a picture with too little detail for points, matched by
-its whole-picture fingerprint instead. Until the index is built, Find similar runs
+confirmed: **match · N pts** means N points line up with the searched picture;
+**match** alone, a picture with too little detail for points, matched by its
+whole-picture fingerprint instead; **identical**, an exact duplicate of the file. Until the index is built, Find similar runs
 the quick perceptual-hash check and the banner says so.
 
 The index is built from the thumbnails processing already made: about 400 bytes an
