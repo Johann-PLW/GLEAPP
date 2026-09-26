@@ -4,6 +4,29 @@ plain script while ``gleapp`` stays importable as a package."""
 import multiprocessing
 import sys
 
+# Options gleapp's command line takes ahead of a subcommand, each followed by a value.
+_LEADING_OPTIONS = ("-c", "--case", "--examiner")
+
+
+def wants_web(args: list[str]) -> bool:
+    """True when the command line asks for the browser interface.
+
+    ``GLEAPP web`` and ``GLEAPP -c <case> web`` go to ``gleapp web``, the same
+    interface served to a browser, which needs no GUI toolkit. Everything else still
+    opens the desktop window.
+    """
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in _LEADING_OPTIONS:
+            i += 2
+        elif arg.startswith(tuple(f"{o}=" for o in _LEADING_OPTIONS if o.startswith("--"))):
+            i += 1
+        else:
+            break
+    return i < len(args) and args[i] == "web"
+
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     # isolated workers re-invoke GLEAPP.exe (crash-safe decoding)
@@ -42,7 +65,8 @@ if __name__ == "__main__":
     if "--selfcheck" in sys.argv[1:]:
         import importlib
         import traceback
-        names = ["numpy", "PIL.Image", "cv2", "gleapp.web.app", "gleapp.desktop"]
+        names = ["numpy", "PIL.Image", "cv2", "gleapp.web.app", "gleapp.desktop",
+                 "gleapp.cli"]
         if sys.platform == "win32":
             names.append("webview.platforms.winforms")
         for name in names:
@@ -55,5 +79,8 @@ if __name__ == "__main__":
             print(f"ok {name}")
         print("selfcheck passed")
         sys.exit(0)
+    if wants_web(sys.argv[1:]):
+        from gleapp.cli import main as cli_main
+        sys.exit(cli_main(sys.argv[1:]))
     from gleapp.desktop import main
     sys.exit(main())

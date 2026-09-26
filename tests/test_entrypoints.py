@@ -258,3 +258,102 @@ def test_a_window_that_cannot_start_names_the_browser_alternative(tmp_path, monk
     assert "could not start" in err
     assert "QT or GTK" in err
     assert "gleapp.py web" in err
+
+
+def test_a_frozen_build_names_its_own_browser_command(tmp_path, monkeypatch, capsys):
+    """A frozen build has no gleapp.py, so the fallback it names must be the binary's own
+    ``web``, quoted when the path holds a space."""
+    _stub_webview(tmp_path, monkeypatch, start_raises="no toolkit")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    from gleapp import desktop
+
+    monkeypatch.setattr(sys, "executable", "/opt/GLEAPP/GLEAPP")
+    assert desktop.main([]) == 1
+    err = capsys.readouterr().err
+    assert "    /opt/GLEAPP/GLEAPP web" in err
+    assert "gleapp.py" not in err
+
+    monkeypatch.setattr(sys, "executable", r"C:\Program Files\GLEAPP\GLEAPP.exe")
+    assert desktop.main([]) == 1
+    assert r'    "C:\Program Files\GLEAPP\GLEAPP.exe" web' in capsys.readouterr().err
+
+
+def test_a_window_that_cannot_start_falls_back_to_the_browser_from_a_terminal(tmp_path, monkeypatch, capsys):
+    """Started from a terminal, a window that cannot start hands the same interface to the
+    browser, served without the native flag so the file pickers fall back to typed paths."""
+    import json
+    import urllib.request
+
+    _stub_webview(tmp_path, monkeypatch, start_raises="no toolkit")
+    from gleapp import desktop
+
+    opened = []
+    seen = {}
+
+    def fake_wait(_server):
+        url = opened[0]
+        with urllib.request.urlopen(url, timeout=10) as r:
+            seen["page"] = r.read().decode("utf-8", "replace")
+        req = urllib.request.Request(url + "api/pick", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            seen["pick"] = json.loads(r.read())
+
+    monkeypatch.setattr(desktop, "_has_terminal", lambda: True)
+    monkeypatch.setattr(desktop, "_wait_for_interrupt", fake_wait)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+
+    assert desktop.main([]) == 0
+    assert len(opened) == 1 and opened[0].startswith("http://127.0.0.1:")
+    assert "GLEAPP" in seen["page"]
+    assert seen["pick"]["error"] == "not running in desktop mode"
+    err = capsys.readouterr().err
+    assert "Opening the same interface in your browser instead." in err
+    assert opened[0] in err
+
+
+def test_smoke_mode_never_falls_back_to_the_browser(tmp_path, monkeypatch):
+    """The desktop smoke test exists to prove the window starts, so a window that cannot
+    start fails it even when a terminal is attached."""
+    _stub_webview(tmp_path, monkeypatch, start_raises="no toolkit")
+    monkeypatch.setenv("GLEAPP_DESKTOP_SMOKE", "1")
+    from gleapp import desktop
+
+    monkeypatch.setattr(desktop, "_has_terminal", lambda: True)
+    monkeypatch.setattr(desktop, "_serve_in_browser",
+                        lambda case_dir: pytest.fail("smoke mode fell back to the browser"))
+    assert desktop.main([]) == 1
+
+
+def _frozen_entrypoint():
+    spec = importlib.util.spec_from_file_location("gleapp_frozen_entry", ROOT / "packaging" / "entrypoint.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("args, expected", [
+    (["web"], True),
+    (["web", "--port", "9000"], True),
+    (["-c", "mycase", "web"], True),
+    (["--case=mycase", "--examiner", "AB", "web"], True),
+    ([], False),
+    (["mycase"], False),
+    (["mycase", "web"], False),
+    (["--version"], False),
+])
+def test_the_frozen_entrypoint_sends_web_to_the_command_line(args, expected):
+    """``GLEAPP web`` has to reach ``gleapp web``: the Linux binary bundles no window
+    toolkit, so the browser is the only interface it has."""
+    assert _frozen_entrypoint().wants_web(args) is expected
+
+
+@pytest.mark.parametrize("args", [["web", "--help"], ["-c", "mycase", "web", "--help"]])
+def test_the_frozen_entrypoint_runs_the_web_subcommand(args):
+    """Run as a script, the way the frozen build runs it, ``web`` reaches the web
+    subcommand's own parser rather than being taken for a case folder."""
+    env = {**__import__("os").environ, "PYTHONPATH": str(ROOT)}
+    r = subprocess.run([sys.executable, str(ROOT / "packaging" / "entrypoint.py"), *args],
+                       capture_output=True, text=True, cwd=ROOT, env=env, check=False, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert "usage: gleapp" in r.stdout and "--no-browser" in r.stdout

@@ -125,6 +125,29 @@ jobs:
           # The import the two checks above never make. cv2 comes in through
           # gleapp.desktop, so a bundle can pass both of them and still not start.
           "$BIN" --selfcheck
+          # `web` serves the same interface to a browser and needs no GUI toolkit. It is
+          # the interface the Linux binary relies on, since the build bundles neither GTK
+          # nor Qt for the desktop window.
+          PORT=18749
+          "$BIN" web --no-browser --port "$PORT" > web.log 2>&1 &
+          WEBPID=$!
+          served=""
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q GLEAPP; then served=1; break; fi
+            sleep 1
+          done
+          kill "$WEBPID" 2>/dev/null || true
+          [ -n "$served" ] || { cat web.log; echo "::error::GLEAPP web did not serve the interface"; exit 1; }
+          echo "web -> served the interface on port $PORT"
+          # With no toolkit the window cannot start. Without a terminal it must name the
+          # binary's own browser command and exit, rather than hang or suggest gleapp.py.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            rc=0; timeout 120 "$BIN" > nowindow.log 2>&1 < /dev/null || rc=$?
+            cat nowindow.log
+            [ "$rc" = "1" ] || { echo "::error::expected exit 1 without a toolkit, got $rc"; exit 1; }
+            grep -q "GLEAPP web" nowindow.log || { echo "::error::no browser command named"; exit 1; }
+            if grep -q "gleapp.py" nowindow.log; then echo "::error::names gleapp.py, which the binary lacks"; exit 1; fi
+          fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             APPBIN=dist/GLEAPP.app/Contents/MacOS/GLEAPP
             [ -x "$APPBIN" ] || { echo "no .app bundle produced"; exit 1; }
