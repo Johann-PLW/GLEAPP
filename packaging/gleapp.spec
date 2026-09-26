@@ -27,7 +27,7 @@ datas = [
     (str(PKG / "models"), "gleapp/models"),
 ]
 binaries = []
-hiddenimports = ["gleapp.desktop", "gleapp.web.app", "gleapp.projectvic",
+hiddenimports = ["gleapp.desktop", "gleapp.cli", "gleapp.web.app", "gleapp.projectvic",
                  "gleapp._vidworker", "gleapp._texworker", "gleapp.imaging",
                  "texture2ddecoder", "liblzfse", "zstandard", "gleapp.lzc",
                  "gleapp.nested", "gleapp.hashstore", "gleapp.hashdb", "gleapp.stash",

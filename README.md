@@ -137,8 +137,10 @@ with no prebuilt wheels, and it is not what GLEAPP uses. On Linux pywebview need
 a GUI toolkit that pip does not install by default: either
 `pip install "pywebview[qt]"` (Qt wheels, about 200 MB), or the distribution's
 PyGObject and WebKitGTK packages, which pywebview's installation guide lists.
-Without one, `python gleappGUI.py` says so and exits, and `python gleapp.py web`
-runs the same interface in a browser.
+Without one, `python gleappGUI.py` says so and opens the same interface in your
+browser instead, as `python gleapp.py web` does. Installing a toolkit this way helps a
+source install only: the release binaries carry their own Python and never see
+packages installed on the system.
 
 `pip install -e .` adds the `gleapp` and `gleapp-desktop` console commands.
 
@@ -163,10 +165,11 @@ macOS also produces `dist/GLEAPP.app`, unsigned; sign it with `codesign` before 
 A Linux AppImage is not wired up yet.
 
 The Linux build is made on Ubuntu 24.04, so it needs glibc 2.39 or newer and will not
-start on an older distribution; build it there yourself if you need one. CI smoke-tests
-that build headlessly, `--version` and a decode, and never opens a window, so the
-desktop window on Linux is unexercised. It needs one of the toolkits under Desktop app
-above, and `gleapp web` in a browser is the path that is tested.
+start on an older distribution; build it there yourself if you need one. The Linux
+binary bundles neither GTK nor Qt, so it cannot open the desktop window. Started from a
+terminal it opens the interface in your browser instead, and `./GLEAPP web` does that
+directly (`./GLEAPP -c <case> web` for a case). CI smoke-tests that build headlessly:
+`--version`, a decode, and `web` serving the interface.
 
 #### macOS: take OpenCV from conda-forge
 

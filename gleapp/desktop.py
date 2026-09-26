@@ -95,6 +95,79 @@ def _wait_until_up(port: int, timeout: float = 10.0) -> bool:
     return False
 
 
+def _web_command() -> str:
+    """The command that opens the same interface in a browser, as this copy runs.
+
+    From a source checkout that is ``python gleapp.py web``. A frozen build has no
+    gleapp.py, so it names its own executable, which accepts ``web`` too.
+    """
+    if getattr(sys, "frozen", False):
+        exe = sys.executable
+        return f'"{exe}" web' if " " in exe else f"{exe} web"
+    return "python gleapp.py web"
+
+
+def _has_terminal() -> bool:
+    """True when someone started GLEAPP from a terminal and can read and stop it there.
+
+    The browser fallback prints its address and runs until Ctrl-C, so it is only
+    offered where both of those reach a person. A windowed build started from a file
+    manager has no stream to print to, and a server nobody can stop would outlive the
+    browser tab.
+    """
+    stream = sys.stderr
+    try:
+        return stream is not None and stream.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _close_case(app) -> None:
+    """Take the final snapshot of the open case, if one is open."""
+    try:
+        close = app.config.get("STATE", {}).get("close_current")
+        if close:
+            close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wait_for_interrupt(server: "_Server") -> None:
+    """Block until Ctrl-C or until the server stops."""
+    while server.is_alive():
+        server.join(0.5)
+
+
+def _serve_in_browser(case_dir: str | None) -> int:
+    """Serve the interface to the default browser, as ``gleapp web`` does.
+
+    Used when the desktop window cannot start. The app is created without the native
+    flag, so the file pickers fall back to typed paths as they do in ``gleapp web``.
+    """
+    import webbrowser
+
+    app = create_app(case_dir)
+    port = _free_port()
+    server = _Server(app, port)
+    server.start()
+    if not _wait_until_up(port):
+        print("error: local server failed to start", file=sys.stderr)
+        return 1
+    url = f"http://{HOST}:{port}/"
+    print(f"GLEAPP review UI -> {url}  (Ctrl-C to stop)\n"
+          f"To open it in a browser directly next time, run:\n    {_web_command()}",
+          file=sys.stderr, flush=True)
+    webbrowser.open(url)
+    try:
+        _wait_for_interrupt(server)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _close_case(app)
+        server.stop()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Imported here rather than at module level so importing gleapp.desktop never
     # needs a GUI lib. --version is answered in packaging/entrypoint.py before this runs.
@@ -135,12 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_closed() -> None:
         # final snapshot of the open case, then shut the local server down
-        try:
-            close = app.config.get("STATE", {}).get("close_current")
-            if close:
-                close()
-        except Exception:  # noqa: BLE001
-            pass
+        _close_case(app)
         server.stop()
 
     smoke = _Smoke(webview) if os.environ.get(SMOKE_ENV) else None
@@ -162,15 +230,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if smoke.ok else 1
     except webview.WebViewException as exc:
         # pywebview's own words name the cause: on Linux, that neither GTK nor Qt
-        # bindings are installed, which pip does not do by default.
+        # bindings are installed, which pip does not do by default. The Linux release
+        # binary bundles neither, so there the browser is the only interface.
+        server.stop()
+        print(f"error: the desktop window could not start: {exc}", file=sys.stderr)
+        if smoke is None and _has_terminal():
+            print("Opening the same interface in your browser instead.", file=sys.stderr)
+            return _serve_in_browser(case_dir)
         print(
-            f"error: the desktop window could not start: {exc}\n"
             "See the README's Desktop app section for what the window needs on this\n"
             "platform. To open the same interface in a browser instead:\n"
-            "    python gleapp.py web",
+            f"    {_web_command()}",
             file=sys.stderr,
         )
-        server.stop()
         return 1
 
 
