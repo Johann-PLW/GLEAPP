@@ -10,18 +10,14 @@
 | macOS, Intel | `-macos-x64.dmg` |
 | Linux, 64-bit | `-linux-x64.tar.gz` |
 
-## The binaries are not signed
+## First launch
 
-Expect a warning the first time you run one.
+The macOS disk images are signed with a Developer ID and notarised by Apple, so they
+open without a warning.
 
-On macOS you get "GLEAPP cannot be opened because the developer cannot be verified".
-Right-click the app, choose Open, then confirm.
-
-On Windows, SmartScreen says "Windows protected your PC".
-Choose More info, then Run anyway.
-
-Signing is not wired up yet. If you would rather not clear a warning, run from source
-instead; the README has the steps.
+The Windows binaries are not signed yet, so SmartScreen says "Windows protected your
+PC" the first time. Choose More info, then Run anyway. If you would rather not clear a
+warning, run from source instead; the README has the steps.
 
 ## Verify what you downloaded
 
