@@ -188,3 +188,13 @@ def test_without_the_copy_index_nothing_is_called_a_copy(tmp_path):
         assert {f["match"] for f in d["files"][1:]} == {"hash"}
     finally:
         client.post("/api/case/close")
+
+
+def test_bit_counting_is_the_same_without_numpy_2(monkeypatch):
+    """NumPy 2 counts bits a word at a time; the declared floor (1.24) has no
+    bitwise_count, and the byte-table fallback must give the same answer."""
+    import numpy as np
+    x = np.random.default_rng(0).integers(0, 2 ** 63, size=(40, 7, 4), dtype=np.uint64)
+    fast = simindex._bits(x)  # pylint: disable=protected-access
+    monkeypatch.delattr(np, "bitwise_count", raising=False)
+    assert (simindex._bits(x) == fast).all()  # pylint: disable=protected-access

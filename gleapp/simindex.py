@@ -44,7 +44,8 @@ from .case import Case
 INDEX_VERSION = "1"
 FP_SIDE = 160           # fingerprints are taken from the thumbnail at this long side
 WORD_POINTS = 300       # SIFT points per thumbnail for the points shortlist
-CHECK_POINTS = 800      # SIFT points per thumbnail for the confirmation
+CHECK_POINTS = 500      # SIFT points per thumbnail for the confirmation (800 found the same
+                        # copies on the 300-photo test and a phone case's videos, 20-25% slower)
 SHORTLIST = 150         # from each of the two shortlists
 MIN_POINTS = 10         # confirmation: aligned one-to-one points...
 MIN_COVER = 0.05        # ...covering at least this share of either image
@@ -58,6 +59,17 @@ FEW_FP = 24             # ...at most this many of 256 bits apart
 RATIO = 0.8
 TOP, LEAF = 64, 64      # vocabulary: 64 x 64 = 4,096 visual words
 _POP = np.array([bin(i).count("1") for i in range(256)], np.uint8)
+
+
+def _bits(x: np.ndarray) -> np.ndarray:
+    """Set bits of each 256-bit fingerprint in ``x`` (uint64, last axis of 4), summed.
+    NumPy 2 counts a 64-bit word at a time; older NumPy falls back to a byte table.
+    Measured: the whole-case fingerprint comparison of one picture fell from about
+    0.19 s to a few hundredths on a 14,000-picture case."""
+    if hasattr(np, "bitwise_count"):
+        return np.bitwise_count(x).sum(-1, dtype=np.int32)
+    b = np.ascontiguousarray(x).view(np.uint8)
+    return _POP[b].reshape(*x.shape[:-1], -1).sum(-1, dtype=np.int32)
 
 _CACHE: dict = {}
 _SIFT = threading.local()
@@ -362,11 +374,20 @@ def _confirm(a, b) -> tuple[int, float, float]:
     return n, max(ca, cb), min(ca, cb)
 
 
+def _passes(r: tuple) -> bool:
+    """A confirmation result (points, larger cover, smaller cover) that makes a copy."""
+    return r[0] >= MIN_POINTS and r[1] >= MIN_COVER and r[2] >= MIN_BOTH
+
+
+SAME_FRAME = 20          # key frames this close (bits of 256) to one already searched are skipped
+
+
 def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
     """Copies of ``file_id``, strongest first; the file itself first. Each result
     carries ``points`` (aligned points; None when confirmed by fingerprint) and
     ``similarity``, a display figure: how much of the picture the match covers. A video
-    is searched by its thumbnail and by each of its key frames."""
+    is searched by its thumbnail and by each of its key frames that differs from those
+    already searched; each candidate is checked against the frames that shortlisted it."""
     target = case.db.get_file(file_id)
     if target is None or not target["thumb"]:
         return [dict(target, similarity=100.0, match="query")] if target else []
@@ -377,19 +398,57 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
         thumbs = {r[0]: r[1] for r in case.db.conn.execute(
             f"SELECT id, thumb FROM files WHERE {_indexable_sql()}")}
     out = [dict(target, similarity=100.0, match="query", points=None)]
-    if len(loaded[0]) == 0:
+    ids = loaded[0]
+    if len(ids) == 0:
         return out
     frames = [target["thumb"]]
     if target["kind"] == "video":
         frames += [k["thumb"] for k in case.db.keyframes_for(file_id) if k["thumb"]]
-    best: dict[int, tuple] = {}
+    # stage 1 for every distinct frame; which frames shortlisted which candidate
+    by_cand: dict[int, list] = {}
+    kept: list = []
     for frame in dict.fromkeys(frames):
-        for fid, pts, cov in _search_frame(case, frame, file_id, vocab, loaded, thumbs):
-            prev = best.get(fid)
-            if prev is None or ((pts or 0), cov) > ((prev[0] or 0), prev[1]):
-                best[fid] = (pts, cov)
-    found = sorted(best.items(), key=lambda r: (-(r[1][0] or 0), -r[1][1]))
-    for fid, (pts, cov) in found[:max(limit - 1, 0)]:
+        g = _gray(case.thumb_dir / frame)
+        if g is None:
+            continue
+        probes = _probes(g)
+        if any(int(_POP[probes[0] ^ k[1][0]].sum()) <= SAME_FRAME for k in kept):
+            continue                         # (nearly) the same picture as a frame already searched
+        kept.append((frame, probes))
+        for i in _shortlist(g, probes, file_id, vocab, loaded):
+            by_cand.setdefault(i, []).append((frame, probes))
+    # stage 2: each candidate against the frames that shortlisted it
+    _, fp, npts = loaded[0], loaded[1], loaded[2]
+
+    def check(item):
+        i, fr = item
+        fid = int(ids[i])
+        th = thumbs.get(fid)
+        if not th or fid == file_id:
+            return None
+        b = _check_features(case.thumb_dir, th)
+        best = None
+        for frame, probes in fr:
+            q = _check_features(case.thumb_dir, frame)
+            r = _confirm(q, b)
+            if not _passes(r):               # a mirrored copy: try the frame mirrored
+                r2 = _confirm(_check_features(case.thumb_dir, frame, mirror=True), b)
+                r = r2 if _passes(r2) or r2[0] > r[0] else r
+            if _passes(r):
+                if best is None or (r[0], r[1]) > (best[0] or 0, best[1]):  # pylint: disable=unsubscriptable-object
+                    best = (r[0], r[1])
+                continue
+            q_few = q is None or len(q[0]) < FEW_POINTS
+            if best is None and (q_few or npts[i] < FEW_POINTS):
+                d = int(_POP[fp[i, 0][None, :] ^ probes].sum(1).min())
+                if d <= FEW_FP:
+                    best = (None, 1.0 - d / 256)
+        return None if best is None else (fid, best[0], best[1])
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        found = [r for r in ex.map(check, by_cand.items()) if r is not None]
+    found.sort(key=lambda r: (-(r[1] or 0), -r[2]))
+    for fid, pts, cov in found[:max(limit - 1, 0)]:
         row = case.db.get_file(fid)
         if row is not None:
             out.append(dict(row, match="copy", points=pts,
@@ -397,28 +456,21 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
     return out
 
 
-def _search_frame(case: Case, thumb: str, file_id: int, vocab, loaded, thumbs) -> list[tuple]:
-    """(file id, points, coverage) of every confirmed copy of one thumbnail."""
-    ids, fp, npts, _, owner, allw, df, norm = loaded
-    g = _gray(case.thumb_dir / thumb)
-    if g is None:
-        return []
-
-    # 1. shortlist: fingerprints ...
-    probes = _probes(g)
-    full = fp[:, :2].reshape(-1, 32)                       # picture, trimmed
-    best = _POP[full[:, None, :] ^ probes[None, :, :]].sum(2).min(1).reshape(len(ids), 2).min(1)
-    win = _POP[fp[:, 2:].reshape(-1, 32)[:, None, :] ^ probes[None, :, :]].sum(2).min(1)
-    best = np.minimum(best, win.reshape(len(ids), 5).min(1))
-    own = _fingerprints(g)                                 # this image's windows against
-    wq = _POP[fp[:, :2].reshape(-1, 32)[:, None, :] ^ own[None, 2:, :]].sum(2).min(1)
-    best = np.minimum(best, wq.reshape(len(ids), 2).min(1))   # the others' whole pictures
+def _shortlist(g, probes, file_id: int, vocab, loaded) -> set:
+    """Stage 1 for one picture: the index rows of its fingerprint and point shortlists."""
+    ids, fp, _, _, owner, allw, df, norm = loaded
+    f64 = np.ascontiguousarray(fp).view(np.uint64)          # rows x 7 x 4
+    p64 = np.ascontiguousarray(probes).view(np.uint64)      # probes x 4
+    # the others' picture, trimmed picture and windows against this picture's probes ...
+    best = _bits(f64[:, :, None, :] ^ p64[None, None, :, :]).min(axis=(1, 2))
+    own = np.ascontiguousarray(_fingerprints(g)).view(np.uint64)
+    # ... and this picture's windows against the others' whole pictures
+    best = np.minimum(best, _bits(f64[:, :2, None, :] ^ own[None, None, 2:, :]).min(axis=(1, 2)))
     self_i = np.searchsorted(ids, file_id)
     is_self = self_i < len(ids) and ids[self_i] == file_id
     if is_self:
         best[self_i] = 10 ** 6
     short = set(np.argsort(best, kind="stable")[:SHORTLIST].tolist())
-    # ... and points
     if vocab is not None:
         _, desc = _sift(WORD_POINTS).detectAndCompute(g, None)
         if desc is not None and len(allw):
@@ -430,30 +482,6 @@ def _search_frame(case: Case, thumb: str, file_id: int, vocab, loaded, thumbs) -
                 sc[self_i] = -1
             top = np.argsort(-sc)[:SHORTLIST]
             short |= set(top[sc[top] > 0].tolist())
-    short.discard(int(self_i) if is_self else -1)
-
-    # 2. confirmation
-    q = _check_features(case.thumb_dir, thumb)
-    qm = _check_features(case.thumb_dir, thumb, mirror=True)
-    q_few = q is None or len(q[0]) < FEW_POINTS
-    whole = probes                                          # for the featureless rule
-
-    def check(i):
-        fid = int(ids[i])
-        th = thumbs.get(fid)
-        if not th or fid == file_id:
-            return None
-        b = _check_features(case.thumb_dir, th)
-        r1 = _confirm(q, b)
-        r2 = _confirm(qm, b)
-        pts, cov, low = r1 if r1[0] >= r2[0] else r2
-        if pts >= MIN_POINTS and cov >= MIN_COVER and low >= MIN_BOTH:
-            return fid, pts, cov
-        if q_few or npts[i] < FEW_POINTS:
-            d = int(_POP[fp[i, 0][None, :] ^ whole].sum(1).min())
-            if d <= FEW_FP:
-                return fid, None, 1.0 - d / 256
-        return None
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        return [r for r in ex.map(check, sorted(short)) if r is not None]
+    if is_self:
+        short.discard(int(self_i))
+    return short
