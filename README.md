@@ -60,11 +60,11 @@ for Python, and no toolchain.
 | macOS, Intel | `-macos-x64.dmg` |
 | Linux, 64-bit | `-linux-x64.tar.gz`, built on Ubuntu 24.04 so it needs glibc 2.39 or newer |
 
-**The binaries are not signed**, so the first launch warns.
 
-On macOS you get "GLEAPP cannot be opened because the developer cannot be verified".
-Right-click the app, choose Open, then confirm.
+The macOS disk images are signed with a Developer ID and notarised by Apple, so they
+open without a warning.
 
+**The Windows binaries are not signed**, so the first launch warns.
 On Windows, SmartScreen says "Windows protected your PC".
 Choose More info, then Run anyway.
 
