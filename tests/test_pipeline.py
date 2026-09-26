@@ -2349,12 +2349,12 @@ def test_clearing_recent_cases_empties_the_list_but_not_the_cases(tmp_path, evid
 
 def test_processing_builds_the_find_similar_index(case):  # pylint: disable=redefined-outer-name
     """Find similar works as soon as processing ends: the copy index is built as a
-    processing stage, one entry per picture (exact duplicates share one)."""
+    processing stage, one entry per picture or video (exact duplicates share one)."""
     from gleapp import simindex
     assert case.db.get_meta("sim_index_version")
     st = simindex.status(case)
     assert st["vocab"] and st["indexed"] == st["indexable"] > 0
     groups = case.db.conn.execute(
         "SELECT COUNT(DISTINCT COALESCE(stack_id, id)) FROM files "
-        "WHERE kind = 'image' AND thumb IS NOT NULL").fetchone()[0]
+        "WHERE kind IN ('image', 'video') AND thumb IS NOT NULL").fetchone()[0]
     assert st["indexed"] == groups

@@ -357,10 +357,11 @@ async function showSimilar(id) {
   renderPager();
   $("#simBanner").style.display = "flex";
   $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "copy" : "copies"}`
+    + (d.quick ? `, ${d.quick} unconfirmed quick ${d.quick === 1 ? "match" : "matches"}` : "")
     + (d.content_on ? `, then ${d.content} with similar content` : "")
-    + (d.engine === "hash" && d.files[0] && d.files[0].kind === "image"
-       ? " (quick copy check only: build the Find-similar index under Duplicates for crops, mirrors, rotations and screenshots)"
-       : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer images not indexed yet)` : "");
+    + (d.engine === "hash"
+       ? " (the Find-similar copy index is not built for this case: Duplicates → Build Find-similar index)"
+       : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer files not indexed yet)` : "");
   $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
 }
@@ -409,6 +410,8 @@ function tileEl(f) {
   const dist = f.match === "query" ? `<span class="b">searched</span>`
     : f.match === "copy"
     ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "copy · " + f.points + " pts" : "copy"}</span>`
+    : f.match === "hash"
+    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the Find-similar index under Duplicates for real copy matching">quick match?</span>`
     : f.match === "content"
     ? `<span class="b" title="similar content: how alike the two pictures are in what they show">≈ ${f.similarity}%</span>`
     : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
@@ -2387,7 +2390,6 @@ async function refreshContext() {
   try { await refreshFlags(); } catch (e) {}
   updateScreenInfo(c.screening);
   refreshSimIndexInfo();
-  refreshContentInfo();
   updateArchInfo(c.archives);
   updateKnownHash(c.known_hash);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
@@ -2835,50 +2837,30 @@ function trackJob(infoSel, barSel, label, done) {
 }
 $("#simMin").addEventListener("input", () => { $("#simMinV").textContent = $("#simMin").value + "%"; });
 $("#simMin").addEventListener("change", () => { if (state.similarOf && similarOfId != null) showSimilar(similarOfId); });
-async function refreshContentInfo() {
-  let st;
-  try { st = await api("/api/content/status"); } catch (e) { return; }
-  if (!st || st.error) return;
-  const todo = Math.max(0, st.indexable - st.indexed);
-  $("#btnContentIndex").style.display = st.model ? "" : "none";
-  $("#contentInfo").textContent = !st.model
-    ? "Similar content is not available: the model file is missing from this build."
-    : !st.indexed ? `Content index not built: ${st.indexable.toLocaleString()} images and videos (about 25 a second; icons and exact copies are skipped).`
-    : `Content index: ${st.indexed.toLocaleString()}` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
-  $("#btnContentIndex").textContent = !st.indexed ? "Build content index" : todo ? `Index ${todo.toLocaleString()} new files` : "Content index is up to date";
-  $("#btnContentIndex").disabled = !!st.indexed && !todo;
-}
-$("#btnContentIndex").onclick = async () => {
-  const r = await api("/api/content/build", { method: "POST" });
-  if (r.error) return toast(r.message || "Could not start the content index");
-  $("#btnContentIndex").disabled = true;
-  trackJob("#contentInfo", "#taskProg", "Content index", async ok => {
-    $("#btnContentIndex").disabled = false;
-    if (!ok) return;
-    await refreshContentInfo();
-    toast("Content index ready");
-  });
-};
 async function refreshSimIndexInfo() {
-  let st;
-  try { st = await api("/api/simindex/status"); } catch (e) { return; }
-  if (!st || st.error) return;
-  const todo = Math.max(0, st.indexable - st.indexed);
+  let st, ct;
+  try { [st, ct] = await Promise.all([api("/api/simindex/status"), api("/api/content/status")]); }
+  catch (e) { return; }
+  if (!st || st.error || !ct || ct.error) return;
+  const todo = Math.max(0, st.indexable - st.indexed), ctodo = ct.model ? Math.max(0, ct.indexable - ct.indexed) : 0;
   $("#simIndexInfo").textContent = !st.indexed
-    ? `Find similar is using its quick check. Build the index (${st.indexable.toLocaleString()} images) to find crops, mirrors, rotations and screenshots.`
-    : `Find similar index: ${st.indexed.toLocaleString()} images` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
-  $("#btnSimIndex").textContent = !st.indexed ? "Build Find-similar index" : todo ? `Index ${todo.toLocaleString()} new images` : "Find-similar index is up to date";
-  $("#btnSimIndex").disabled = !!st.indexed && !todo;
+    ? `Find similar's indexes are not built for this case (processed before this version): ${st.indexable.toLocaleString()} files.`
+    : `Copies: ${st.indexed.toLocaleString()} indexed` + (todo ? `, ${todo.toLocaleString()} to add.` : ".");
+  $("#contentInfo").textContent = !ct.model ? "Similar content is not available: the model file is missing from this build."
+    : `Similar content: ${ct.indexed.toLocaleString()} indexed` + (ctodo ? `, ${ctodo.toLocaleString()} to add (icons and exact copies are skipped).` : ".");
+  const pending = todo + ctodo;
+  $("#btnSimIndex").textContent = !st.indexed ? "Build Find-similar indexes" : pending ? `Index ${pending.toLocaleString()} new files` : "Find-similar indexes are up to date";
+  $("#btnSimIndex").disabled = !!st.indexed && !pending;
 }
 $("#btnSimIndex").onclick = async () => {
   const r = await api("/api/simindex/build", { method: "POST" });
-  if (r.error) return toast(r.message || "Could not start the index");
+  if (r.error) return toast(r.message || "Could not start the indexes");
   $("#btnSimIndex").disabled = true;
-  trackJob("#simIndexInfo", "#taskProg", "Find-similar index", async ok => {
+  trackJob("#simIndexInfo", "#taskProg", "Find-similar indexes", async ok => {
     $("#btnSimIndex").disabled = false;
     if (!ok) return;
     await refreshSimIndexInfo();
-    toast("Find-similar index ready");
+    toast("Find similar is ready");
   });
 };
 $("#btnRetryErr").onclick = async () => {
@@ -4424,7 +4406,6 @@ $("#mapViewClose").onclick = closeMapView;
     if (c.vic) $("#btnVic").style.display = "";
     updateScreenInfo(c.screening);
     refreshSimIndexInfo();
-    refreshContentInfo();
     updateArchInfo(c.archives);
     updateKnownHash(c.known_hash);
     if (c.errors > 0) {

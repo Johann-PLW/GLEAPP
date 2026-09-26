@@ -48,6 +48,11 @@ CHECK_POINTS = 800      # SIFT points per thumbnail for the confirmation
 SHORTLIST = 150         # from each of the two shortlists
 MIN_POINTS = 10         # confirmation: aligned one-to-one points...
 MIN_COVER = 0.05        # ...covering at least this share of either image
+MIN_BOTH = 0.02         # ...and at least this share of the other one: a logo or watermark
+# matched whole inside a video frame is not a copy of the video (measured on a real phone
+# case: the TikTok logo and a 'TikTok Shop' banner were 4 'copies' of two TikTok videos at 0,
+# none at 0.02, with every copy of the 300-photo test still found; 0.05 lost 10% of the
+# photos pasted into a screenshot)
 FEW_POINTS = 25         # fewer points than this: confirm by fingerprint instead
 FEW_FP = 24             # ...at most this many of 256 bits apart
 RATIO = 0.8
@@ -75,7 +80,9 @@ def _ensure(conn) -> None:
 
 
 def _indexable_sql() -> str:
-    return "kind = 'image' AND thumb IS NOT NULL"
+    # a video is indexed by its thumbnail (a frame from it); a video *search* also
+    # checks each of its key frames, so a still taken from it is found too
+    return "kind IN ('image', 'video') AND thumb IS NOT NULL"
 
 
 def status(case: Case) -> dict:
@@ -321,11 +328,12 @@ def _check_features(thumb_dir: Path, thumb: str, mirror: bool = False):
     return out
 
 
-def _confirm(a, b) -> tuple[int, float]:
-    """(aligned one-to-one points, the larger share of either image they cover)."""
+def _confirm(a, b) -> tuple[int, float, float]:
+    """(aligned one-to-one points, the larger and the smaller share of the two images
+    they cover)."""
     import cv2
     if a is None or b is None or a[1] is None or b[1] is None or len(a[0]) < 8 or len(b[0]) < 8:
-        return 0, 0.0
+        return 0, 0.0, 0.0
     good: dict[int, tuple[float, int]] = {}
     for m in cv2.BFMatcher(cv2.NORM_L2).knnMatch(a[1], b[1], k=2):  # pylint: disable=no-member
         if len(m) == 2 and m[0].distance < RATIO * m[1].distance:
@@ -333,43 +341,68 @@ def _confirm(a, b) -> tuple[int, float]:
             if prev is None or m[0].distance < prev[0]:
                 good[m[0].trainIdx] = (m[0].distance, m[0].queryIdx)
     if len(good) < 6:
-        return 0, 0.0
+        return 0, 0.0, 0.0
     ci = np.array(list(good))
     qi = np.array([v[1] for v in good.values()])
     src, dst = a[0][qi], b[0][ci]
     M, mask = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC,  # pylint: disable=no-member
                                           ransacReprojThreshold=3.0, maxIters=2000)
     if M is None:
-        return 0, 0.0
+        return 0, 0.0, 0.0
     inl = mask.ravel().astype(bool)
     if not 0.1 < math.hypot(M[0, 0], M[1, 0]) < 10:
-        return 0, 0.0
+        return 0, 0.0, 0.0
     n = min(len(np.unique(np.round(src[inl]), axis=0)), len(np.unique(np.round(dst[inl]), axis=0)))
 
     def cover(p, shape):
         if len(p) < 3:
             return 0.0
         return float(cv2.contourArea(cv2.convexHull(p.astype(np.float32)))) / (shape[0] * shape[1])  # pylint: disable=no-member
-    return n, max(cover(src[inl], a[2]), cover(dst[inl], b[2]))
+    ca, cb = cover(src[inl], a[2]), cover(dst[inl], b[2])
+    return n, max(ca, cb), min(ca, cb)
 
 
 def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
     """Copies of ``file_id``, strongest first; the file itself first. Each result
     carries ``points`` (aligned points; None when confirmed by fingerprint) and
-    ``similarity``, a display figure: how much of the picture the match covers."""
+    ``similarity``, a display figure: how much of the picture the match covers. A video
+    is searched by its thumbnail and by each of its key frames."""
     target = case.db.get_file(file_id)
     if target is None or not target["thumb"]:
         return [dict(target, similarity=100.0, match="query")] if target else []
     with case.db.lock:
         _ensure(case.db.conn)
         vocab = _vocab(case.db.conn)
-        ids, fp, npts, _, owner, allw, df, norm = _loaded(case)
+        loaded = _loaded(case)
         thumbs = {r[0]: r[1] for r in case.db.conn.execute(
             f"SELECT id, thumb FROM files WHERE {_indexable_sql()}")}
-    g = _gray(case.thumb_dir / target["thumb"])
     out = [dict(target, similarity=100.0, match="query", points=None)]
-    if g is None or len(ids) == 0:
+    if len(loaded[0]) == 0:
         return out
+    frames = [target["thumb"]]
+    if target["kind"] == "video":
+        frames += [k["thumb"] for k in case.db.keyframes_for(file_id) if k["thumb"]]
+    best: dict[int, tuple] = {}
+    for frame in dict.fromkeys(frames):
+        for fid, pts, cov in _search_frame(case, frame, file_id, vocab, loaded, thumbs):
+            prev = best.get(fid)
+            if prev is None or ((pts or 0), cov) > ((prev[0] or 0), prev[1]):
+                best[fid] = (pts, cov)
+    found = sorted(best.items(), key=lambda r: (-(r[1][0] or 0), -r[1][1]))
+    for fid, (pts, cov) in found[:max(limit - 1, 0)]:
+        row = case.db.get_file(fid)
+        if row is not None:
+            out.append(dict(row, match="copy", points=pts,
+                            similarity=round(100 * min(1.0, cov), 1)))
+    return out
+
+
+def _search_frame(case: Case, thumb: str, file_id: int, vocab, loaded, thumbs) -> list[tuple]:
+    """(file id, points, coverage) of every confirmed copy of one thumbnail."""
+    ids, fp, npts, _, owner, allw, df, norm = loaded
+    g = _gray(case.thumb_dir / thumb)
+    if g is None:
+        return []
 
     # 1. shortlist: fingerprints ...
     probes = _probes(g)
@@ -381,7 +414,8 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
     wq = _POP[fp[:, :2].reshape(-1, 32)[:, None, :] ^ own[None, 2:, :]].sum(2).min(1)
     best = np.minimum(best, wq.reshape(len(ids), 2).min(1))   # the others' whole pictures
     self_i = np.searchsorted(ids, file_id)
-    if self_i < len(ids) and ids[self_i] == file_id:
+    is_self = self_i < len(ids) and ids[self_i] == file_id
+    if is_self:
         best[self_i] = 10 ** 6
     short = set(np.argsort(best, kind="stable")[:SHORTLIST].tolist())
     # ... and points
@@ -392,26 +426,28 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
             idf = np.log(len(ids) / np.maximum(df, 1))
             hit = np.isin(allw, qw)
             sc = np.bincount(owner[hit], weights=idf[allw[hit]], minlength=len(ids)) / norm
-            if self_i < len(ids) and ids[self_i] == file_id:
+            if is_self:
                 sc[self_i] = -1
-            short |= set(np.argsort(-sc)[:SHORTLIST][sc[np.argsort(-sc)[:SHORTLIST]] > 0].tolist())
+            top = np.argsort(-sc)[:SHORTLIST]
+            short |= set(top[sc[top] > 0].tolist())
+    short.discard(int(self_i) if is_self else -1)
 
     # 2. confirmation
-    q = _check_features(case.thumb_dir, target["thumb"])
-    qm = _check_features(case.thumb_dir, target["thumb"], mirror=True)
+    q = _check_features(case.thumb_dir, thumb)
+    qm = _check_features(case.thumb_dir, thumb, mirror=True)
     q_few = q is None or len(q[0]) < FEW_POINTS
     whole = probes                                          # for the featureless rule
 
     def check(i):
         fid = int(ids[i])
         th = thumbs.get(fid)
-        if not th:
+        if not th or fid == file_id:
             return None
         b = _check_features(case.thumb_dir, th)
-        p1, c1 = _confirm(q, b)
-        p2, c2 = _confirm(qm, b)
-        pts, cov = (p1, c1) if p1 >= p2 else (p2, c2)
-        if pts >= MIN_POINTS and cov >= MIN_COVER:
+        r1 = _confirm(q, b)
+        r2 = _confirm(qm, b)
+        pts, cov, low = r1 if r1[0] >= r2[0] else r2
+        if pts >= MIN_POINTS and cov >= MIN_COVER and low >= MIN_BOTH:
             return fid, pts, cov
         if q_few or npts[i] < FEW_POINTS:
             d = int(_POP[fp[i, 0][None, :] ^ whole].sum(1).min())
@@ -420,11 +456,4 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
         return None
 
     with ThreadPoolExecutor(max_workers=6) as ex:
-        found = [r for r in ex.map(check, sorted(short)) if r is not None]
-    found.sort(key=lambda r: (-(r[1] or 0), -r[2]))
-    for fid, pts, cov in found[:max(limit - 1, 0)]:
-        row = case.db.get_file(fid)
-        if row is not None:
-            out.append(dict(row, match="copy", points=pts,
-                            similarity=round(100 * min(1.0, cov), 1)))
-    return out
+        return [r for r in ex.map(check, sorted(short)) if r is not None]

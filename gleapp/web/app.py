@@ -1276,11 +1276,14 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(404)
         st = simindex.status(case)
         engine = "hash"
-        if target["kind"] == "image" and st["vocab"] and st["indexed"]:
+        if st["vocab"] and st["indexed"]:
             copies = simindex.find_copies(case, file_id, limit=300)
             engine = "index"
         else:
-            copies = [dict(h, match="query" if h["id"] == file_id else "copy")
+            # no copy index yet: the old perceptual-hash check, which is not reliable
+            # enough to call anything a copy (measured: 9% of what it returned was
+            # unrelated, more for video key frames), so its results say what they are
+            copies = [dict(h, match="query" if h["id"] == file_id else "hash")
                       for h in find_similar(case, file_id, threshold=thr, limit=300)]
         seen = {h["id"] for h in copies}
         if target["stack_id"] is not None:          # exact duplicates, always
@@ -1299,39 +1302,15 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             h["category_color"] = categories.color(case.db, code)
         return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
                         "unindexed": max(0, st["indexable"] - st["indexed"]),
-                        "copies": len(copies) - 1, "content": len(similar_content),
+                        "copies": sum(1 for h in copies if h.get("match") == "copy"),
+                        "quick": sum(1 for h in copies if h.get("match") == "hash"),
+                        "content": len(similar_content),
                         "content_on": content_on, "min": pct})
 
     @app.get("/api/content/status")
     def content_status():
         from .. import content
         return jsonify(content.status(C()))
-
-    @app.post("/api/content/build")
-    def content_build():
-        """Describe images for similar content, as the shared background job."""
-        from .. import content
-        if state["case"] is None:
-            abort(409, description="no case open")
-        if state["job"]["running"]:
-            abort(409, description="a job is already running")
-        if not content.model_ready():
-            abort(400, description="the content model is missing from this build")
-        case = state["case"]
-        state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
-                        "message": "Indexing content for Find similar…", "stats": None, "error": None}
-
-        def _job() -> None:
-            j = state["job"]
-            try:
-                n = content.build_index(case, progress=lambda d, t: j.update(done=d, total=t))
-                j.update(running=False, stage="done", message=f"Content index ready ({n:,} added)",
-                         stats={"indexed": n})
-            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-                j.update(running=False, stage="error", error=f"{type(exc).__name__}: {exc}")
-
-        threading.Thread(target=_job, daemon=True).start()
-        return jsonify({"ok": True})
 
     @app.get("/api/simindex/status")
     def simindex_status():
@@ -1340,7 +1319,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.post("/api/simindex/build")
     def simindex_build():
-        """Index images for Find similar, as the shared background job."""
+        """Build both Find-similar indexes, copies then content, as the shared
+        background job: what processing does for a new case, for one processed before."""
         if state["case"] is None:
             abort(409, description="no case open")
         if state["job"]["running"]:
@@ -1352,12 +1332,16 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         def _job() -> None:
             j = state["job"]
             try:
-                from .. import simindex
+                from .. import content, simindex
                 n = simindex.build_index(case, progress=lambda d, t: j.update(done=d, total=t),
                                          stage_cb=lambda m: j.update(message=m, done=0, total=0))
+                m = 0
+                if content.model_ready():
+                    j.update(message="Indexing content for Find similar…", done=0, total=0)
+                    m = content.build_index(case, progress=lambda d, t: j.update(done=d, total=t))
                 j.update(running=False, stage="done",
-                         message=f"Find similar index ready ({n:,} images added)",
-                         stats={"indexed": n})
+                         message=f"Find similar is ready ({n:,} copies and {m:,} content entries added)",
+                         stats={"indexed": n, "content": m})
             except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 j.update(running=False, stage="error", error=f"{type(exc).__name__}: {exc}")
 

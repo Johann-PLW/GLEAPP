@@ -503,7 +503,7 @@ from grouping because their perceptual hashes are meaningless. "Find similar"
 
 Processing builds the **Find-similar index** as its last stage, so right-click →
 **Find similar** works as soon as a case is processed; a case processed by an older
-version builds it once with **Duplicates → Build Find-similar index**. Find similar on
+version builds it once with **Duplicates → Build Find-similar indexes**. Find similar on
 an image then lists its copies: the same picture
 resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
 watermarked or pasted into a screenshot. Each result's badge says how it was
@@ -536,7 +536,7 @@ slider in the banner sets how alike a file must be to be listed (70% by default)
 
 This uses an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
 ships with GLEAPP and runs on the computer: nothing goes online. Processing builds the
-content index too, after the copy index; for a case processed before, **Build content index** does it once. It reads the
+content index too, after the copy index; for a case processed before, **Build Find-similar indexes** does both once. It reads the
 thumbnails, not the evidence, and can be stopped and picks up where it left off. Each
 picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and

@@ -549,7 +549,7 @@ menu or <kbd>F</kbd>) does an ad-hoc perceptual search around one file.</p>
 <p>Processing builds the <strong>Find-similar index</strong> as its last stage, so
 right-click &rarr; <strong>Find similar</strong> works as soon as a case is processed; a case
 processed by an older version builds it once with <strong>Duplicates &rarr; Build
-Find-similar index</strong>. Find similar on an image then lists its copies: the same picture resized, recompressed, cropped, mirrored, rotated,
+Find-similar indexes</strong>. Find similar on an image then lists its copies: the same picture resized, recompressed, cropped, mirrored, rotated,
 recolored, captioned, framed, watermarked or pasted into a screenshot. Each result's
 badge says how it was confirmed: <strong>N pts</strong> is the number of points that
 line up with the searched picture; <strong>match</strong> means a picture with too
@@ -578,7 +578,7 @@ lists these after the copies, ranked, each with a <strong>&asymp; N%</strong> ba
 to be listed (70% by default).</p>
 <p>This uses an image-understanding model, <strong>DINOv2-small</strong> (Meta AI,
 Apache-2.0), which ships with GLEAPP and runs on the computer: nothing goes online.</p>
-<p>Processing builds the content index too, after the copy index; for a case processed before, <strong>Build content index</strong> does it once. It
+<p>Processing builds the content index too, after the copy index; for a case processed before, <strong>Build Find-similar indexes</strong> does both once. It
 reads the thumbnails, not the evidence, and can be stopped and picks up where it left off.
 Each picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and

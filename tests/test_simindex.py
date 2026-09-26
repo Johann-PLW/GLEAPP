@@ -144,3 +144,47 @@ def test_the_route_uses_the_index_once_built(tmp_path):
         assert d["engine"] == "index" and mid in {f["id"] for f in d["files"]}
     finally:
         client.post("/api/case/close")
+
+
+def test_a_video_is_searched_by_its_frames_and_found_by_them(indexed):
+    """A video's thumbnail is indexed like a picture, and a video search also checks
+    each key frame: a still taken from the video is found, and the video is found
+    from the still."""
+    c, ids = indexed
+    frame = _scene(77)
+    vid = c.db.upsert_file("/evidence/clip.mp4", kind="video", thumb="clip_poster.jpg", md5="clip")
+    poster = _scene(78)
+    poster.thumbnail((320, 320))
+    poster.save(c.thumb_dir / "clip_poster.jpg", quality=90)
+    t = frame.copy()
+    t.thumbnail((320, 320))
+    t.save(c.thumb_dir / "clip_kf1.jpg", quality=90)
+    c.db.add_keyframe(vid, 3.0, "clip_kf1.jpg", None)
+    still = _add(c, "still_from_clip", frame.resize((600, 433)))
+    c.db.conn.commit()
+    simindex.build_index(c, workers=2)
+    assert vid in {r[0] for r in c.db.conn.execute("SELECT file_id FROM sim_items")}
+    hits = simindex.find_copies(c, vid)
+    assert hits[0]["id"] == vid and still in {h["id"] for h in hits[1:]}
+    assert not {h["id"] for h in hits[1:]} & {ids[f"other{n}"] for n in range(12)}
+
+
+def test_without_the_copy_index_nothing_is_called_a_copy(tmp_path):
+    """The old perceptual-hash check is shown as unconfirmed quick matches."""
+    from gleapp.web.app import create_app
+    c = open_case(tmp_path / "case", create=True, examiner="t")
+    c.thumb_dir.mkdir(parents=True, exist_ok=True)
+    a = _add(c, "a", _scene(5))
+    b = _add(c, "b", _scene(5))
+    for fid in (a, b):
+        c.db.conn.execute("UPDATE files SET phash='a5b59ada352d6322', dhash='a5b59ada352d6322' WHERE id=?", (fid,))
+    c.db.conn.commit()
+    root = c.root
+    c.close()
+    client = create_app(str(root)).test_client()
+    try:
+        d = client.get(f"/api/similar/{a}").get_json()
+        assert d["engine"] == "hash" and d["copies"] == 0 and d["quick"] == 1
+        assert {f["match"] for f in d["files"][1:]} == {"hash"}
+    finally:
+        client.post("/api/case/close")
