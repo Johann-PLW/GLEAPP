@@ -125,6 +125,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         "last_backup": 0.0,
     }
     app.config["STATE"] = state
+    from .indexer import BackgroundIndexer
+    indexer = BackgroundIndexer(state)     # Find similar's indexes, built while you work
+    state["indexer"] = indexer
 
     if case_dir and (Path(case_dir) / "case.gleapp").exists():
         state["case"] = open_case(case_dir)
@@ -327,6 +330,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         cur = state["case"]
         if cur is None:
             return
+        indexer.stop()                     # finishes its chunk, then lets go of the case
         try:
             if getattr(cur.db, "dirty", False):
                 snap = backup.snapshot(cur, auto=True)
@@ -337,6 +341,17 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         cur.close()
 
     state["close_current"] = _close_current
+
+    def _index_added_files(case) -> None:
+        """After a job added files (archives expanded, carving, retried files), index them
+        when the case already has Find-similar indexes; a case without them waits for the
+        examiner to start them (Find similar section)."""
+        from .. import content, simindex
+        try:
+            if simindex.status(case)["indexed"] or content.status(case)["indexed"]:
+                indexer.start()
+        except sqlite3.Error:
+            pass
 
     @app.post("/api/case/close")
     def case_close():
@@ -488,12 +503,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             try:
                 from ..pipeline import process
                 st = process(case, where="error IS NOT NULL", force=True,
-                             screen=False, reason="retry-errors",
+                             screen=False, reason="retry-errors", similar=False,
                              progress=lambda d, t: j.update(done=d, total=t),
                              stage_cb=lambda m: j.update(message=m))
                 fixed = n - case.db.conn.execute(
                     "SELECT COUNT(*) n FROM files WHERE error IS NOT NULL"
                 ).fetchone()["n"]
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=f"Recovered {fixed} of {n}",
                          stats={**st.as_dict(), "recovered": fixed})
@@ -535,9 +551,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 if added:
                     j.update(stage="process", done=0, total=added,
                              message=f"Processing {added:,} extracted file(s)…")
-                    process(case, where="md5 IS NULL", reason="expand-archives",
+                    process(case, where="md5 IS NULL", reason="expand-archives", similar=False,
                             progress=lambda d, t: j.update(done=d, total=t),
                             stage_cb=lambda m: j.update(message=m))
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=(f"{added:,} file(s) recovered from archives"
                                   if added else "No new files in the archives"),
@@ -1263,14 +1280,79 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.get("/api/similar/<int:file_id>")
     def similar(file_id: int):
+        """Find similar: the searched file, then its copies (exact duplicates, and for an
+        image the Find-similar index, gleapp/simindex.py, once built; otherwise the
+        perceptual-hash check), then files with similar content (gleapp/content.py, once
+        its index is built), ranked, down to ``min`` percent. A file is listed once."""
+        from .. import content
         thr = int(request.args.get("threshold", 12))
+        pct = min(99.0, max(30.0, float(request.args.get("min", 100 * content.DEFAULT_MIN))))
         case = C()
-        hits = find_similar(case, file_id, threshold=thr, limit=300)
+        target = case.db.get_file(file_id)
+        if target is None:
+            abort(404)
+        # a video is answered in two steps: ?quick=1 searches its thumbnail only (about
+        # half a second), and the page then asks again for all its key frames, which is
+        # the full answer; a picture has one frame, so both are the same
+        quick = request.args.get("quick") == "1" and target["kind"] == "video"
+        with indexer.searching():             # the background indexer stands aside
+            return _similar(case, target, file_id, thr, pct, quick)
+
+    def _similar(case, target, file_id, thr, pct, quick=False):
+        from .. import content, simindex
+        st = simindex.status(case)
+        engine = "hash"
+        if st["vocab"] and st["indexed"]:
+            copies = simindex.find_copies(case, file_id, limit=300, first_frame_only=quick)
+            engine = "index"
+        else:
+            # no copy index yet: the old perceptual-hash check, which is not reliable
+            # enough to call anything a copy (measured: 9% of what it returned was
+            # unrelated, more for video key frames), so its results say what they are
+            copies = [dict(h, match="query" if h["id"] == file_id else "hash")
+                      for h in find_similar(case, file_id, threshold=thr, limit=300)]
+        seen = {h["id"] for h in copies}
+        if target["stack_id"] is not None:          # exact duplicates, always
+            copies += [dict(r, match="copy", exact=True) for r in
+                       case.db.iter_files("stack_id = ?", (target["stack_id"],)) if r["id"] not in seen]
+        cst = content.status(case)
+        content_on = bool(cst["model"] and cst["indexed"])
+        similar_content = []
+        if content_on:
+            similar_content = content.find_content(case, file_id, min_similarity=pct / 100,
+                                                   exclude={h["id"] for h in copies})
+        hits = copies + similar_content
         for h in hits:
             code = h.get("category") or 0
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
-        return jsonify({"file_id": file_id, "count": len(hits), "files": hits})
+        return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
+                        "more": bool(quick and engine == "index"),
+                        "unindexed": max(0, st["indexable"] - st["indexed"]),
+                        "copies": sum(1 for h in copies if h.get("match") == "copy"),
+                        "quick": sum(1 for h in copies if h.get("match") == "hash"),
+                        "content": len(similar_content),
+                        "content_on": content_on, "min": pct})
+
+    @app.get("/api/content/status")
+    def content_status():
+        from .. import content
+        return jsonify(content.status(C()))
+
+    @app.get("/api/simindex/status")
+    def simindex_status():
+        from .. import simindex
+        return jsonify(dict(simindex.status(C()), background=dict(indexer.status)))
+
+    @app.post("/api/simindex/build")
+    def simindex_build():
+        """Build Find similar's indexes in the background. An ingest starts this by
+        itself; for a case that was not indexed on ingest (processed by an older
+        version, or indexing stopped when it closed), the examiner starts it here."""
+        C()
+        indexer.stop()
+        indexer.start()
+        return jsonify({"ok": True, "background": dict(indexer.status)})
 
     @app.get("/api/faces/<int:file_id>")
     def faces_for_file(file_id: int):
@@ -1844,7 +1926,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 if total_new:
                     j.update(stage="process", done=0, total=total_new,
                              message=f"Processing {total_new:,} recovered file(s)…")
-                    process(case, where="md5 IS NULL", reason="carve-source",
+                    process(case, where="md5 IS NULL", reason="carve-source", similar=False,
                             progress=lambda d, t: j.update(done=d, total=t),
                             stage_cb=lambda m: j.update(message=m))
                 parts = []
@@ -1852,6 +1934,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     parts.append(f"{recovered:,} recovered from deleted records")
                 if added:
                     parts.append(f"{added:,} carved")
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=("; ".join(parts) if parts else "Nothing new was recovered"),
                          stats={"recovered": recovered, "carved": added})
@@ -2200,6 +2283,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         except Exception:  # noqa: BLE001
             pass
         # 2. close the live DB, swap the file in, reopen
+        indexer.stop()
         case.close()
         state["case"] = None
         try:
@@ -2316,7 +2400,10 @@ def _run_job(state: dict, sources, opts: dict) -> None:
             phash_cluster_threshold=int(opts.get("cluster_threshold", 8)),
             progress=progress,
             stage_cb=lambda msg: job.update(message=msg),
+            similar=False,        # the background indexer builds them after, see indexer.py
         )
+        if state.get("indexer") is not None:
+            state["indexer"].start()          # Find similar's indexes, in the background
         job.update(running=False, stage="done", message="Done",
                    stats=stats.as_dict())
     except Exception as exc:  # noqa: BLE001

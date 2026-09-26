@@ -343,17 +343,39 @@ function gotoPage(n) {
   load();
 }
 
+let similarOfId = null;
 async function showSimilar(id) {
   const seq = ++loadSeq;
-  const d = await api(`/api/similar/${id}?threshold=14`);
+  const q = `/api/similar/${id}?threshold=14&min=${+$("#simMin").value || 70}`;
+  // a video comes back in two steps: its thumbnail's results at once, then the full
+  // answer with every key frame; a picture comes back in one
+  const d = await api(q + "&quick=1");
   if (seq !== loadSeq) return;
+  if (d.error) return toast(d.message || "Find similar failed");
   rememberPlace(id);
+  similarOfId = id;
+  showSimilarResult(id, d);
+  if (!d.more) return;
+  const full = await api(q);
+  if (seq !== loadSeq || full.error) return;      // the examiner moved on, or it failed
+  const keep = { t: $("#grid").scrollTop, m: $("#main").scrollTop };
+  showSimilarResult(id, full);
+  $("#grid").scrollTop = keep.t; $("#main").scrollTop = keep.m;
+}
+function showSimilarResult(id, d) {
   state.similarOf = id;
   state.files = d.files;
   renderFiles(d.files);
   renderPager();
   $("#simBanner").style.display = "flex";
-  $("#simId").textContent = `files similar to #${id}`;
+  const idx = state.simIndexing;
+  $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "match" : "matches"}`
+    + (d.quick ? `, ${d.quick} unconfirmed` : "")
+    + (d.content_on ? `, ${d.content} similar` : "")
+    + (d.engine === "hash" ? " (not indexed: see Find similar in the left pane)"
+       : idx ? " (still indexing)" : "");
+  if (d.more) $("#simId").textContent += " (checking key frames…)";
+  $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
 }
 
@@ -397,7 +419,15 @@ function tileEl(f) {
   const nExact = f.stack_count || 1;
   const nVis = f.vstack_count || 0;
   // face-match results carry similarity with no "distance" (that's a pHash-only concept)
-  const dist = (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
+  // index matches say how they were confirmed: aligned points, or the whole-picture fingerprint
+  const dist = f.match === "query" ? `<span class="b">searched</span>`
+    : f.match === "copy"
+    ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "match · " + f.points + " pts" : "match"}</span>`
+    : f.match === "hash"
+    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the indexes (Find similar, left pane) for real matching">quick match?</span>`
+    : f.match === "content"
+    ? `<span class="b" title="similar content: how alike the two pictures are in what they show">≈ ${f.similarity}%</span>`
+    : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
   const faces = f.faces ? `<span class="b face">${f.faces}\u{1F464}</span>` : "";
   const hit = hashBadges(f);
   const gps = f.gps_lat != null ? `<span class="b">\u{1F4CD}</span>` : "";
@@ -2372,6 +2402,7 @@ async function refreshContext() {
   state.flags = c.flags || [];
   try { await refreshFlags(); } catch (e) {}
   updateScreenInfo(c.screening);
+  refreshSimIndexInfo();
   updateArchInfo(c.archives);
   updateKnownHash(c.known_hash);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
@@ -2817,6 +2848,59 @@ function trackJob(infoSel, barSel, label, done) {
   };
   poll();
 }
+$("#simMin").addEventListener("input", () => { $("#simMinV").textContent = $("#simMin").value + "%"; });
+$("#simMin").addEventListener("change", () => { if (state.similarOf && similarOfId != null) showSimilar(similarOfId); });
+/* Find similar's indexes build in the background after processing (gleapp/web/
+   indexer.py); this section shows how far they are and polls while they run. */
+let _simPoll = null, _simBarShown = false;
+state.simIndexing = null;
+async function refreshSimIndexInfo() {
+  let st, ct;
+  try { [st, ct] = await Promise.all([api("/api/simindex/status"), api("/api/content/status")]); }
+  catch (e) { return; }
+  if (!st || st.error || !ct || ct.error) return;
+  const bg = st.background || {};
+  const todo = Math.max(0, st.indexable - st.indexed), ctodo = ct.model ? Math.max(0, ct.indexable - ct.indexed) : 0;
+  const pct = (a, b) => b ? Math.floor(100 * a / b) + "%" : "100%";
+  const working = bg.running && bg.stage && bg.stage !== "idle";
+  // one short status line; the details live in the button's tooltip and the help
+  $("#simIndexInfo").textContent = bg.error ? `Indexing stopped: ${bg.error}`
+    : !(todo || ctodo) ? "Ready."
+    : bg.paused ? "Indexing paused while a job runs."
+    : working ? `Indexing… matches ${pct(st.indexed, st.indexable)}, content ${pct(ct.indexed, ct.indexable)}`
+    : st.indexed || ct.indexed ? `Partly indexed (matches ${pct(st.indexed, st.indexable)}, content ${pct(ct.indexed, ct.indexable)}).`
+    : "Not indexed yet.";
+  state.simIndexing = (todo || ctodo) ? { copies: pct(st.indexed, st.indexable), content: pct(ct.indexed, ct.indexable) } : null;
+  $("#btnSimIndex").style.display = !bg.running && (todo || ctodo) ? "" : "none";
+  // the shared progress bar at the bottom of the pane, like every other background task;
+  // left alone while a job runs (the indexer is paused then, and the job owns the bar)
+  const bar = $("#taskProg");
+  if (working && !bg.paused && (todo || ctodo)) {
+    const copiesStage = bg.stage === "copies";
+    const done = copiesStage ? st.indexed : ct.indexed, total = copiesStage ? st.indexable : ct.indexable;
+    const p = total ? Math.floor(100 * done / total) : 0;
+    bar.classList.remove("err", "indeterminate");
+    bar.style.display = "block";
+    bar.querySelector("i").style.width = p + "%";
+    bar.querySelector(".jbtxt").textContent = `Find similar: indexing ${copiesStage ? "matches" : "content"}`;
+    bar.querySelector(".jbpct").textContent = `${p}% · ${done.toLocaleString()}/${total.toLocaleString()}`;
+    _simBarShown = true;
+  } else if (_simBarShown && !bg.paused) {
+    bar.style.display = "none";
+    _simBarShown = false;
+  } else if (bg.paused) {
+    _simBarShown = false;
+  }
+  clearTimeout(_simPoll);
+  // quickly while indexing or paused, slowly otherwise, to notice files a later job adds
+  if (bg.running) _simPoll = setTimeout(refreshSimIndexInfo, (todo || ctodo || bg.paused) ? 1500 : 10000);
+}
+$("#btnSimIndex").onclick = async () => {
+  const r = await api("/api/simindex/build", { method: "POST" });
+  if (r.error) return toast(r.message || "Could not start indexing");
+  toast("Indexing in the background");
+  refreshSimIndexInfo();
+};
 $("#btnRetryErr").onclick = async () => {
   const r = await api("/api/reprocess-errors", { method: "POST" });
   if (r.error) return toast(r.message || "Could not start");
@@ -4359,6 +4443,7 @@ $("#mapViewClose").onclick = closeMapView;
     document.title = "GLEAPP — " + (c.case || "");
     if (c.vic) $("#btnVic").style.display = "";
     updateScreenInfo(c.screening);
+    refreshSimIndexInfo();
     updateArchInfo(c.archives);
     updateKnownHash(c.known_hash);
     if (c.errors > 0) {

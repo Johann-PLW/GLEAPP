@@ -545,6 +545,62 @@ capture date, click the list view's <strong>Captured (EXIF)</strong> header.
 grouping because their perceptual hashes are meaningless. "Find similar" (context
 menu or <kbd>F</kbd>) does an ad-hoc perceptual search around one file.</p>
 
+<h3 id="findsimilar">Find similar: copies of a picture</h3>
+<p>Right-click &rarr; <strong>Find similar</strong> uses the case's two Find-similar
+indexes. An ingest builds them in the background after processing, so they add no time to
+it (progress on the bar at the bottom of the left pane): likely examiner material first,
+the system's and applications' own artwork last. Find similar works on whatever is
+indexed so far, and its banner says when indexing is still under way. Indexing pauses
+while a job runs; evidence added later is indexed too. A case that was not indexed on
+ingest (processed by an older version, or closed before indexing finished) shows
+<strong>Build indexes</strong> in the left pane's <strong>Find similar</strong> section;
+nothing starts until you click it. From the command line, processing builds them at its
+end. Find similar on an image then lists its matches: the same picture resized, recompressed, cropped, mirrored, rotated,
+recolored, captioned, framed, watermarked or pasted into a screenshot. Each result's
+badge says how it was confirmed: <strong>match &middot; N pts</strong> means N points line
+up with the searched picture; <strong>match</strong> alone, a picture with too little detail
+for points, matched by its whole-picture fingerprint instead; <strong>identical</strong>, an
+exact duplicate of the file. Until the
+index is built, Find similar runs the quick perceptual-hash check and the banner says
+so.</p>
+<p>The index is built from the thumbnails processing already made: about 400 bytes an
+image, kept in the case file. Measured on a 26,586-image phone case with 4,500 test
+copies added: 6 minutes and 10.6&nbsp;MB for 31,086 images; a search took about a
+second, at most 8.</p>
+<p>Measured on 300 photos from that case, each edited 15 ways and searched among the
+whole case: 95.5% of the copies of the 262 photos with detail were found (82% of those
+pasted into a phone screenshot, 92 to 99% for every other edit). Smooth wallpapers,
+gradients and flat fills do far worse (36% of the copies of 38 of them), because a
+near-uniform picture has neither points to match nor a stable fingerprint. Other files
+returned were, in a hand-checked sample, related pictures already in the case:
+versions of the same page, the same map with different overlays, light and dark
+versions of one icon.</p>
+
+<h3 id="similarcontent">Find similar: similar content</h3>
+<p>Copies are one kind of similar. The other is <strong>similar content</strong>: other
+photos of the same person, place, object or scene, and other drawings of the same
+character, where the pixels differ entirely. With the content index built, Find similar
+lists these after the copies, ranked, each with a <strong>&asymp; N%</strong> badge; the
+<strong>similar from</strong> slider in the banner sets how alike a file must be
+to be listed (70% by default).</p>
+<p>This uses an image-understanding model, <strong>DINOv2-small</strong> (Meta AI,
+Apache-2.0), which ships with GLEAPP and runs on the computer: nothing goes online.</p>
+<p>The content index is built after the copy index. It
+reads the thumbnails, not the evidence, and can be stopped and picks up where it left off.
+Each picture is described once however many exact copies of it the case holds, pictures
+under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
+applications' own artwork comes last, so a search over your material works early. The
+model runs at about 25 images a second on an 8-core laptop; on a Windows laptop case of
+57,406 images this left 4,975 to describe, which took 4 minutes 16 seconds (all of them
+would have taken about 40 minutes), and on two phone cases it left 15,346 of 27,188 and
+19,888 of 33,109.</p>
+<p>Measured on a real laptop case, 93 images in 9 hand-labeled groups among 5,000 other
+images of the case: the other members of each group came first for the chair (all 10
+photos, from every angle), a sticker character in 25 different poses, a team photo
+taken three ways, and 16 renders of one room. Scores differ by subject (the chair photos
+scored 0.70 to 0.85 with each other, the sticker poses 0.88 to 0.91), which is why the
+results are ranked and the cutoff is yours to set.</p>
+
 <h2 id="screening">10. Face / skin screening</h2>
 <p>Screening runs the <strong>YuNet</strong> face-detection neural network (a small
 bundled ONNX model, via OpenCV) over every thumbnail and records a face count,
@@ -1412,6 +1468,13 @@ This product includes software developed by SecureAuth Corporation
 </table>
 <p>The web UI is hand-written vanilla JavaScript and CSS: no front-end framework,
 no bundler, no web fonts, nothing loaded from a CDN.</p>
+
+<h3>Find similar, similar content (section&nbsp;9)</h3>
+<p><strong>DINOv2-small</strong> (Maxime Oquab et al., Meta AI, "DINOv2: Learning Robust
+Visual Features without Supervision", 2023), Apache-2.0: Meta's
+<code>facebook/dinov2-small</code> weights (Hugging Face revision <code>ed25f3a3</code>),
+converted to ONNX for GLEAPP (<code>gleapp/models/dinov2_small.onnx</code>). The licence text
+ships beside it at <code>gleapp/models/LICENSE-dinov2</code>, as the licence requires.</p>
 
 <h3>Face / skin screening (section&nbsp;10)</h3>
 <ul>

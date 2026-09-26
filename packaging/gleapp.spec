@@ -31,7 +31,8 @@ hiddenimports = ["gleapp.desktop", "gleapp.web.app", "gleapp.projectvic",
                  "gleapp._vidworker", "gleapp._texworker", "gleapp.imaging",
                  "texture2ddecoder", "liblzfse", "zstandard", "gleapp.lzc",
                  "gleapp.nested", "gleapp.hashstore", "gleapp.hashdb", "gleapp.stash",
-                 "gleapp.timeutil", "tzdata", "py7zr"]
+                 "gleapp.timeutil", "tzdata", "py7zr", "gleapp.simindex",
+                 "gleapp.content"]
 if sys.platform == "win32":
     # pythonnet, for WebView2. Absent elsewhere, and PyInstaller logs a missing hidden
     # import as an ERROR even though the build succeeds.
