@@ -75,7 +75,10 @@ control still expanded.
 PyInstaller strips signatures while it builds, its own log says so, so `codesign` runs
 after phase 1 on the finished bundle, never before. The `.app` comes from a `BUNDLE` block
 in the spec with identifier `org.leapp.gleapp.app`, the shape LAVA uses; the `.dmg` comes
-from `hdiutil` and is verified before it is reported. `packaging/gleapp.icns` and
+from `dmgbuild` and is verified with `hdiutil` before it is reported. `dmgbuild` writes the
+Finder's `.DS_Store` itself (background `packaging/dmg_background.png`, layout in
+`packaging/dmg_settings.py`, the same as the other LEAPPs). It is a build-time
+dependency only, in the `[build]` extra under a darwin marker. `packaging/gleapp.icns` and
 `packaging/gleapp.ico` carry the logo and the spec picks them up automatically.
 
 ## Headless smoke tests of the frozen binary
