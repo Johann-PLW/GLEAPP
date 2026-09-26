@@ -29,10 +29,24 @@ if __name__ == "__main__":
     # v2026.5.0 passed both and still could not start, because a harfbuzz collision in
     # the bundle made importing cv2 fail. A frozen build that cannot import these
     # cannot run, so this is what a smoke test has to call.
+    # On Windows it also imports pywebview's WinForms backend, which is where pythonnet
+    # loads .NET and the window's assemblies: gleapp.desktop imports webview only inside
+    # main(), so without it the check passed on a v2026.5.1 portable build that could not
+    # open its window. This build has no console, so an uncaught exception would open a
+    # dialog and wait for a click; the check reports the failure and exits 1 instead.
     if "--selfcheck" in sys.argv[1:]:
         import importlib
-        for name in ("numpy", "PIL.Image", "cv2", "gleapp.web.app", "gleapp.desktop"):
-            importlib.import_module(name)
+        import traceback
+        names = ["numpy", "PIL.Image", "cv2", "gleapp.web.app", "gleapp.desktop"]
+        if sys.platform == "win32":
+            names.append("webview.platforms.winforms")
+        for name in names:
+            try:
+                importlib.import_module(name)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                print(f"selfcheck failed importing {name}", file=sys.stderr)
+                sys.exit(1)
             print(f"ok {name}")
         print("selfcheck passed")
         sys.exit(0)

@@ -88,6 +88,24 @@ jobs:
         shell: bash
         run: python packaging/build.py exe
 
+      # Windows only. Extracting a downloaded zip with Explorer copies the zip's
+      # downloaded-from-the-internet mark (a Zone.Identifier stream, zone 3) onto every
+      # file, and .NET Framework will not load an assembly that carries it: the
+      # v2026.5.1 portable build failed that way on a user's machine, with "Failed to
+      # resolve Python.Runtime.Loader.Initialize". Marking the build the same way before
+      # the checks below makes them test what a user who downloads the zip gets.
+      - name: Windows, mark the build as downloaded from the internet
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -File dist/GLEAPP
+          foreach ($f in $files) {
+            Set-Content -LiteralPath $f.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+          }
+          $marked = @($files | Where-Object { Get-Item -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue }).Count
+          Write-Host "marked $marked of $($files.Count) files"
+          if ($marked -ne $files.Count -or $marked -eq 0) { exit 1 }
+
       # Neither check opens a window. --version is answered by packaging/entrypoint.py
       # before the desktop shell is imported; --texworker is the isolated decoder the app
       # itself re-invokes, and it exercises Pillow and the texture decoders inside the
