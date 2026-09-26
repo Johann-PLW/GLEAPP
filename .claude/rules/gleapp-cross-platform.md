@@ -99,6 +99,19 @@ does. `tests/test_worker_launch.py` runs all three workers from an empty directo
 from one holding a decoy package, with a control proving the decoy is live; all six fail
 on the code before the change. Do not go back to `-m`.
 
+## A transport stream cannot be seeked by frame number, so key frames fall back to reading in order
+
+`media.extract_keyframes` seeks to evenly spaced frame numbers. OpenCV cannot do that in
+an MPEG transport stream (`.ts`, and every HLS segment), although reading one in order
+works: measured 2026-09-26 on an H.264 `.ts` from ffmpeg and on HLS segments joined from
+an app's ExoPlayer cache, the seek read nothing and processing called each file
+undecodable, while a plain read gave every frame. When the seeks give nothing, the
+sampler now reads the stream once, in order, and keeps the frames it asked for. A
+seekable file still takes one pass. `tests/fixtures/h264-segment.ts` is ffmpeg's test
+pattern (the command is in its test), because OpenCV's writer cannot encode H.264 on
+every platform CI runs, and MPEG-4 in a transport stream happens to seek, so a fixture
+written that way passes on the old code.
+
 ## Paths
 
 Never publish an absolute path from the examiner's machine into a report or an export.
