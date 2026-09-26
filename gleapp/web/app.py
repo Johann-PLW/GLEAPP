@@ -25,10 +25,12 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from .. import appconfig, archive, backup, basemaps, categories, flags, lava, relink, report
+from .. import (appconfig, archive, backup, basemaps, categories, exocache, flags, lava,
+               relink, report)
 from ..case import open_case, parse_source_spec
 from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
 from ..facematch import find_matching_faces
+from ..ingest import is_exoplayer_cache_name
 from ..pipeline import ingest_sources, process
 from ..similar import find_similar
 
@@ -39,7 +41,8 @@ FIELDS = (
     "skin_ratio, category, triage, reviewed, reviewed_by, reviewed_at, notes, "
     "hashset_hit, hashset_cat, hashset_kind, hashset_sources, hashset_mask, "
     "stack_id, vstack_id, cluster_id, thumb, error, "
-    "media_id, orig_name, orig_path, mime, vic_flags, alt_paths, recorded_times, origin"
+    "media_id, orig_name, orig_path, mime, vic_flags, alt_paths, recorded_times, origin, "
+    "cache_info"
 )
 
 # columns the details list-view may sort and filter on (must all be in FIELDS)
@@ -170,6 +173,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         d["category_label"] = categories.label(case.db, code)
         d["category_color"] = categories.color(case.db, code)
         d["flags"] = [dict(r) for r in case.db.flags_for(d["id"])]
+        # a file joined from an app's ExoPlayer cache, described for the details pane
+        d["cache_desc"] = exocache.describe(d)
         d["has_keyframes"] = bool(
             case.db.conn.execute(
                 "SELECT 1 FROM keyframes WHERE file_id=? LIMIT 1", (d["id"],)
@@ -528,11 +533,12 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(409, description="a job is already running")
         case = state["case"]
         force = bool((request.get_json(silent=True) or {}).get("force"))
-        n = case.db.conn.execute(
-            "SELECT COUNT(*) n FROM files WHERE kind = 'archive' OR "
+        # an ExoPlayer cache file is a container row but not an archive to open
+        n = sum(1 for r in case.db.conn.execute(
+            "SELECT orig_path, rel_path, path FROM files WHERE kind = 'archive' OR "
             "(kind = 'other' AND lower(ext) IN "
-            "('.zip','.tar','.gz','.tgz','.bz2','.tbz2','.xz','.txz','.7z','.rar'))"
-        ).fetchone()["n"]
+            "('.zip','.tar','.gz','.tgz','.bz2','.tbz2','.xz','.txz','.7z','.rar'))")
+            if not is_exoplayer_cache_name(r["orig_path"] or r["rel_path"] or r["path"]))
         state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
                         "message": f"Opening {n} archive(s)…", "stats": None,
                         "error": None}
@@ -544,6 +550,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 added = nested.expand_containers(
                     case, force=force,
                     progress=lambda k: j.update(done=k, message=f"{k:,} files found"))
+                added += exocache.assemble(case, force=force)
                 try:
                     winsearch.correlate_thumbnails(case)
                 except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
@@ -1130,6 +1137,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 cols = (f"COALESCE(NULLIF(orig_name, ''), {_rp})",
                         f"COALESCE(NULLIF(orig_path, ''), {_rp})",
                         "alt_paths",            # the other storage views a file sat under
+                        "cache_info",           # an app cache's key, often the URL it came from
                         "camera", "notes", "mime", "source", "created_dt",
                         "reviewed_by", "hashset_hit", "error",
                         "md5", "sha1", "sha256", "phash")
