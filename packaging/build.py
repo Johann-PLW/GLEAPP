@@ -3,7 +3,7 @@
     python packaging/build.py exe                 phase 1: PyInstaller -> dist/GLEAPP/ (one-folder)
     python packaging/build.py exe --onefile       phase 1: one executable in dist/ (no installer from this)
     python packaging/build.py installer           phase 2: Windows -> dist/GLEAPP-Setup-<version>.exe (Inno Setup);
-                                                  macOS -> dist/GLEAPP-<version>.dmg around dist/GLEAPP.app
+                                                  macOS -> dist/GLEAPP-<version>.dmg around dist/GLEAPP.app (dmgbuild)
     python packaging/build.py installer --sign-tool NAME
                                                   phase 2, with Inno Setup signing the installer and the
                                                   uninstaller using the Sign Tool configured under NAME
@@ -41,6 +41,9 @@ ROOT = Path(__file__).resolve().parent.parent
 PACKAGING = ROOT / "packaging"
 SPEC = PACKAGING / "gleapp.spec"
 ISS = PACKAGING / "installer.iss"
+ICNS = PACKAGING / "gleapp.icns"
+DMG_SETTINGS = PACKAGING / "dmg_settings.py"
+DMG_BACKGROUND = PACKAGING / "dmg_background.png"
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 APP = "GLEAPP"
@@ -153,10 +156,16 @@ def _build_dmg() -> Path:
     if not app.is_dir():
         sys.exit(f"build: {app} not found; run 'exe' first, the one-folder build, which "
                  "produces the bundle on macOS")
+    # macOS only, in the [build] extra that phase 1 installs.
+    import dmgbuild  # pylint: disable=import-outside-toplevel
     version = read_version()
     out = DIST / f"{APP}-{version}.dmg"
-    run(["hdiutil", "create", "-volname", APP, "-srcfolder", str(app), "-ov",
-         "-format", "UDZO", str(out)])
+    if out.exists():
+        out.unlink()
+    print(f"==> dmgbuild -s {DMG_SETTINGS.relative_to(ROOT)} {APP} {out}", flush=True)
+    dmgbuild.build_dmg(str(out), APP, settings_file=str(DMG_SETTINGS),
+                       defines={"app": str(app), "icon": str(ICNS),
+                                "background": str(DMG_BACKGROUND)})
     run(["hdiutil", "verify", str(out)])
     assert_artifact(out, "disk image")
     return out
@@ -195,7 +204,9 @@ def verify(paths: list[str], subject: str | None) -> int:
     failures = 0
     for raw in paths:
         path = Path(raw)
-        if not path.is_file():
+        # A macOS bundle is a folder, and codesign verifies it as one.
+        is_bundle = sys.platform == "darwin" and path.suffix == ".app" and path.is_dir()
+        if not (path.is_file() or is_bundle):
             print(f"FAIL  {path}: no such file")
             failures += 1
             continue

@@ -31,8 +31,12 @@ makes it; an exit code is not evidence. `build/` and `dist/` are git-ignored.
 
 ## What is and is not wired up
 
-Windows: executable and Inno Setup installer. macOS: `.app` and `.dmg`, unsigned until
-codesign. Linux: the one-folder build runs; no AppImage yet, since an AppImage needs
+Windows: executable and Inno Setup installer, unsigned. macOS: `.app` and `.dmg`; the
+release workflow signs the `.app` with a Developer ID and the hardened runtime
+(`packaging/entitlements.plist`), then signs, notarises and staples the `.dmg`, when the
+`MACOS_*` secrets are set. A tag refuses to publish without them; a dispatched rehearsal
+builds unsigned. The signed bundle is smoke-tested again, because the hardened runtime is
+what breaks a frozen app and the first smoke test ran the unsigned one-folder build. Linux: the one-folder build runs; no AppImage yet, since an AppImage needs
 a `.desktop` file of its own. Windows on ARM: the installer
 needs an `arm64` architecture variant and a CI leg on an ARM runner; check that runner's
 availability and billing for this repository's visibility before adding it. Windows and
