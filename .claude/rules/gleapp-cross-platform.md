@@ -108,9 +108,9 @@ an app's ExoPlayer cache, the seek read nothing and processing called each file
 undecodable, while a plain read gave every frame. When the seeks give nothing, the
 sampler now reads the stream once, in order, and keeps the frames it asked for. A
 seekable file still takes one pass. `tests/fixtures/h264-segment.ts` is ffmpeg's test
-pattern (the command is in its test), because OpenCV's writer cannot encode H.264 on
-every platform CI runs, and MPEG-4 in a transport stream happens to seek, so a fixture
-written that way passes on the old code.
+pattern (the command is in its test), committed rather than written by OpenCV at test
+time: MPEG-4 in a transport stream happens to seek, so a fixture written that way passes
+on the old code, and whether OpenCV can write H.264 was checked only on macOS.
 
 ## Paths
 
