@@ -80,22 +80,35 @@ SYSTEM_PATH_SQL = ("(LOWER(COALESCE(orig_path, path)) LIKE '%/windows/%' "
 
 
 def _todo_sql() -> str:
-    """One row per picture still to describe: exact duplicates share one description
-    (the group's lowest id), icons under MIN_SIDE are skipped, and the examiner's likely
-    material comes before the system's and applications' own artwork, larger first.
+    """One row per picture to describe: exact duplicates share one description (the
+    group's lowest id; the same bytes give the same description) and icons under
+    MIN_SIDE are skipped. A search lists a described file's exact duplicates beside it.
 
     Measured on four real cases: skipping duplicates and icons left 4,975 of 57,406 images
     on a Windows laptop (about 40 minutes of model time down to about 3.5), 7,270 of 24,320
-    on another laptop, 15,346 of 27,188 and 19,888 of 33,109 on two phones."""
+    on another laptop, 15,346 of 27,188 and 19,888 of 33,109 on two phones. Sharing one
+    description across visual copies too (processing's looser "same picture re-saved"
+    groups) would have taken 20-36% more off, but lost 89 of the results 90 labeled
+    searches found: their members can look quite different to the model."""
     return (f"SELECT MIN(id) AS id FROM files WHERE {_INDEXABLE} "
             "GROUP BY COALESCE(stack_id, id)")
+
+
+def _group(conn, file_id: int) -> list[int]:
+    """``file_id`` and its exact duplicates, which share its description."""
+    r = conn.execute("SELECT stack_id FROM files WHERE id = ?", (file_id,)).fetchone()
+    if r is None or r[0] is None:
+        return [file_id]
+    return sorted({file_id} | {x[0] for x in conn.execute(
+        "SELECT id FROM files WHERE stack_id = ?", (r[0],))})
 
 
 def status(case) -> dict:
     with case.db.lock:
         _ensure(case.db.conn)
         q = lambda sql: case.db.conn.execute(sql).fetchone()[0]
-        return {"model": model_ready(), "indexed": q("SELECT COUNT(*) FROM content_vecs"),
+        return {"model": model_ready(),
+                "indexed": q(f"SELECT COUNT(*) FROM content_vecs WHERE file_id IN ({_todo_sql()})"),
                 "indexable": q(f"SELECT COUNT(*) FROM ({_todo_sql()})")}
 
 
@@ -185,26 +198,35 @@ def _matrix(case):
 def find_content(case, file_id: int, *, min_similarity: float = DEFAULT_MIN,
                  limit: int = 300, exclude=()) -> list[dict]:
     """Other files ranked by content similarity to ``file_id``, best first, down to
-    ``min_similarity``; ``exclude`` holds ids already listed elsewhere."""
+    ``min_similarity``; ``exclude`` holds ids already listed elsewhere. A file that shares
+    its group's description searches with it; each hit is followed by its exact duplicates
+    at the same score, and the searched file's own duplicates come first."""
+    conn = case.db.conn
     with case.db.lock:
-        _ensure(case.db.conn)
+        _ensure(conn)
         ids, mat = _matrix(case)
-    at = np.searchsorted(ids, file_id)
-    if at >= len(ids) or ids[at] != file_id:
-        # an exact duplicate that was not described itself uses its group's description
-        row = case.db.get_file(file_id)
-        others = [] if row is None or row["stack_id"] is None else [
-            r[0] for r in case.db.conn.execute(
-                "SELECT id FROM files WHERE stack_id = ? ORDER BY id", (row["stack_id"],))]
-        found = [np.searchsorted(ids, o) for o in others]
-        found = [k for k, o in zip(found, others) if k < len(ids) and ids[k] == o]
-        if not found:
-            return []
-        at = found[0]
-        exclude = set(exclude) | set(others)     # the group itself is listed as copies
+        own = _group(conn, file_id)
+    at = -1
+    for fid in [file_id] + [g for g in own if g != file_id]:
+        k = np.searchsorted(ids, fid)
+        if k < len(ids) and ids[k] == fid:
+            at = k
+            break
+    if at < 0:
+        return []
     sims = mat @ mat[at]
     skip = set(exclude) | {file_id}
     out = []
+
+    def add(fid, s):
+        row = case.db.get_file(fid)
+        if row is not None:
+            out.append(dict(row, match="content", similarity=round(100 * min(1.0, s), 1)))
+        skip.add(fid)
+
+    for fid in own:                            # the searched picture's own group
+        if fid not in skip:
+            add(fid, 1.0)
     for k in np.argsort(-sims):
         s = float(sims[k])
         if s < min_similarity or len(out) >= limit:
@@ -212,7 +234,9 @@ def find_content(case, file_id: int, *, min_similarity: float = DEFAULT_MIN,
         fid = int(ids[k])
         if fid in skip:
             continue
-        row = case.db.get_file(fid)
-        if row is not None:
-            out.append(dict(row, match="content", similarity=round(100 * min(1.0, s), 1)))
+        with case.db.lock:
+            members = _group(conn, fid)
+        for m in members:
+            if m not in skip and len(out) < limit:
+                add(m, s)
     return out

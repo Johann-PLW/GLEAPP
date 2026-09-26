@@ -25,7 +25,8 @@ def _case_with_vectors(tmp_path):
     base = _unit(rng.normal(size=content.DIM))
     ids = {}
     for name, noise in (("query", 0.0), ("near", 0.3), ("far", 0.9), ("other", None)):
-        ids[name] = c.db.upsert_file(f"/x/{name}.jpg", kind="image", thumb=f"{name}.jpg", md5=name)
+        ids[name] = c.db.upsert_file(f"/x/{name}.jpg", kind="image", thumb=f"{name}.jpg", md5=name,
+                                     width=400, height=300)
         v = _unit(rng.normal(size=content.DIM)) if noise is None else \
             _unit(base + noise * _unit(rng.normal(size=content.DIM)))
         with c.db.lock:
@@ -77,7 +78,8 @@ def test_find_similar_lists_copies_then_similar_content(case_with_vectors, monke
     from gleapp.web.app import create_app
     c, ids = case_with_vectors
     monkeypatch.setattr(content, "model_ready", lambda: True)
-    dup = c.db.upsert_file("/x/query_copy.jpg", kind="image", thumb="query.jpg", md5="query")
+    dup = c.db.upsert_file("/x/query_copy.jpg", kind="image", thumb="query.jpg", md5="query",
+                           width=400, height=300)
     c.db.conn.execute("UPDATE files SET stack_id = ? WHERE id IN (?, ?)", (ids["query"], ids["query"], dup))
     c.db.conn.commit()
     root = c.root
@@ -120,9 +122,27 @@ def test_which_pictures_are_described_and_in_what_order(tmp_path):
 
 
 def test_an_undescribed_duplicate_searches_with_its_group(case_with_vectors):
+    """A file that shares its group's description searches with it, and its own group
+    (here the described original) is listed first."""
     c, ids = case_with_vectors
     dup = c.db.upsert_file("/x/query_again.jpg", kind="image", thumb="query.jpg", md5="query")
     c.db.conn.execute("UPDATE files SET stack_id = ? WHERE id IN (?, ?)", (ids["query"], ids["query"], dup))
     c.db.conn.commit()
     hits = content.find_content(c, dup, min_similarity=0.5)
-    assert [h["id"] for h in hits] == [ids["near"], ids["far"]]
+    assert [h["id"] for h in hits] == [ids["query"], ids["near"], ids["far"]]
+
+
+def test_a_hit_brings_its_exact_duplicates_with_it(case_with_vectors):
+    """Exact duplicates share one description; when it is a hit, every copy is listed."""
+    c, ids = case_with_vectors
+    again = c.db.upsert_file("/x/near_again.jpg", kind="image", thumb="near.jpg", md5="near",
+                             width=400, height=300)
+    c.db.conn.execute("UPDATE files SET stack_id = ? WHERE id IN (?, ?)", (ids["near"], ids["near"], again))
+    c.db.conn.commit()
+    hits = content.find_content(c, ids["query"], min_similarity=0.5)
+    order = [h["id"] for h in hits]
+    assert order[:2] == [ids["near"], again] and ids["far"] in order
+    assert hits[0]["similarity"] == hits[1]["similarity"]
+    with c.db.lock:
+        todo = {r[0] for r in c.db.conn.execute(content._todo_sql())}  # pylint: disable=protected-access
+    assert ids["near"] in todo and again not in todo
