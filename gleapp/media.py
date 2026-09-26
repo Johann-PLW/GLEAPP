@@ -165,20 +165,39 @@ def extract_keyframes(
         total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
         if total <= 0 or fps <= 0:
             return out
-        picks = np.linspace(0, total - 1, num=min(count, int(total)), dtype=int)
-        for i, fno in enumerate(dict.fromkeys(picks.tolist())):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(fno))
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            ts = fno / fps
+        picks = list(dict.fromkeys(
+            np.linspace(0, total - 1, num=min(count, int(total)), dtype=int).tolist()))
+
+        def keep(i: int, fno: int, frame) -> None:
             pil = _frame_to_pil(frame)
             name = _thumb_name(str(path), f"#kf{i}")
-            dest = thumb_dir / name
             thumb = pil.copy()
             thumb.thumbnail(THUMB_SIZE, Image.LANCZOS)
-            thumb.save(dest, "JPEG", quality=82)
-            out.append((ts, name, pil))
+            thumb.save(thumb_dir / name, "JPEG", quality=82)
+            out.append((fno / fps, name, pil))
+
+        for i, fno in enumerate(picks):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(fno))
+            ok, frame = cap.read()
+            if ok:
+                keep(i, fno, frame)
+        if out:
+            return out
+        # Seeking by frame number read nothing. OpenCV cannot seek in a stream with
+        # no index, an MPEG transport stream (.ts, and every HLS segment) among
+        # them, although reading it in order works. Read it in order, once, and
+        # keep the frames that were asked for.
+        cap.release()
+        cap = cv2.VideoCapture(str(path))  # pylint: disable=no-member
+        wanted = {fno: i for i, fno in enumerate(picks)}
+        fno = 0
+        while wanted and fno <= picks[-1]:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if fno in wanted:
+                keep(wanted.pop(fno), fno, frame)
+            fno += 1
         return out
     finally:
         cap.release()

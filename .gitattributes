@@ -12,3 +12,4 @@
 *.pbf -text
 *.pmtiles -text
 *.mbtiles -text
+*.ts -text
