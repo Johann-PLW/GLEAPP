@@ -230,21 +230,31 @@ def _vocab(conn):
     return top, np.frombuffer(row[1], np.float32).reshape(TOP, LEAF, 128)
 
 
-def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None) -> int:
-    """Index every image with a thumbnail not yet indexed; returns how many. The
-    first build learns the case's visual vocabulary from a sample of its thumbnails;
-    later builds reuse it."""
+CHUNK = 256              # files a build handles between checks for a request to stop
+
+
+def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None,
+                stop=None) -> int:
+    """Index every picture and video with a thumbnail not yet indexed; returns how many.
+    The first build learns the case's visual vocabulary from a sample of its thumbnails;
+    later builds reuse it. Likely examiner material goes first, the system's and
+    applications' own artwork last. ``stop`` (a callable) is checked between chunks of
+    CHUNK files: what is written stays, and the next build picks up the rest."""
+    from .content import SYSTEM_PATH_SQL
     say = stage_cb or (lambda m: None)
+    stopped = stop or (lambda: False)
     conn = case.db.conn
     with case.db.lock:
         _ensure(conn)
-        done = {r[0] for r in conn.execute("SELECT file_id FROM sim_items")}
         # exact duplicates share one entry (the group's lowest id): the same bytes make
         # the same thumbnail, and Find similar lists a file's exact duplicates anyway
-        heads = {r[0] for r in conn.execute(
-            f"SELECT MIN(id) FROM files WHERE {_indexable_sql()} GROUP BY COALESCE(stack_id, id)")}
-        rows = [(r["id"], r["thumb"]) for r in case.db.iter_files(_indexable_sql())
-                if r["id"] in heads and r["id"] not in done]
+        rows = conn.execute(
+            f"SELECT id, thumb FROM files WHERE id IN (SELECT MIN(id) FROM files WHERE "
+            f"{_indexable_sql()} GROUP BY COALESCE(stack_id, id)) "
+            "AND id NOT IN (SELECT file_id FROM sim_items) "
+            f"ORDER BY {SYSTEM_PATH_SQL}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id"
+        ).fetchall()
+        rows = [(r[0], r[1]) for r in rows]
         vocab = _vocab(conn)
     if not rows:
         return 0
@@ -255,14 +265,16 @@ def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None) -
         g = _gray(thumbs / thumb)
         if g is None:
             return fid, None
-        _, desc = _sift(WORD_POINTS).detectAndCompute(g, None)
-        npts = len(_sift(CHECK_POINTS).detect(g, None))
-        return fid, (_fingerprints(g), desc, npts)
+        kps, desc = _sift(WORD_POINTS).detectAndCompute(g, None)
+        # the point count only decides "fewer than FEW_POINTS" (confirm by fingerprint
+        # instead); this pass's count answers that exactly, so no second pass is needed
+        return fid, (_fingerprints(g), desc, len(kps))
 
     if vocab is None:
         say("Learning the case's visual vocabulary…")
         rng = np.random.default_rng(0)
-        pick = [rows[i] for i in rng.choice(len(rows), min(len(rows), 6000), replace=False)]
+        by_id = sorted(rows)                # the sample must not depend on the build order
+        pick = [by_id[i] for i in rng.choice(len(by_id), min(len(by_id), 6000), replace=False)]
         parts = []
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
             for _, f in ex.map(features, pick):
@@ -276,21 +288,23 @@ def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None) -
                              (vocab[0].tobytes(), vocab[1].tobytes()))
                 conn.commit()
 
-    say(f"Indexing {len(rows):,} images for Find similar…")
-    total, n, batch = len(rows), 0, []
+    say(f"Indexing {len(rows):,} files for Find similar (copies)…")
+    total, n = len(rows), 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for fid, f in ex.map(features, rows):
-            n += 1
-            if f is not None:
-                fp, desc, npts = f
-                words = _words(desc, vocab).tobytes() if desc is not None and vocab else None
-                batch.append((fid, fp.tobytes(), words, npts))
-            if len(batch) >= 500 or n == total:
-                with case.db.lock:
-                    conn.executemany("INSERT OR REPLACE INTO sim_items VALUES (?,?,?,?)", batch)
-                    conn.commit()
-                batch = []
-            if progress and (n % 100 == 0 or n == total):
+        for k in range(0, total, CHUNK):
+            if stopped():
+                break
+            batch = []
+            for fid, f in ex.map(features, rows[k:k + CHUNK]):
+                n += 1
+                if f is not None:
+                    fp, desc, npts = f
+                    words = _words(desc, vocab).tobytes() if desc is not None and vocab else None
+                    batch.append((fid, fp.tobytes(), words, npts))
+            with case.db.lock:
+                conn.executemany("INSERT OR REPLACE INTO sim_items VALUES (?,?,?,?)", batch)
+                conn.commit()
+            if progress:
                 progress(n, total)
     _CACHE.clear()
     return n

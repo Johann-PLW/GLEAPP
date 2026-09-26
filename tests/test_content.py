@@ -111,7 +111,7 @@ def test_which_pictures_are_described_and_in_what_order(tmp_path):
             content._ensure(c.db.conn)  # pylint: disable=protected-access
         todo = [r[0] for r in c.db.conn.execute(
             f"SELECT id FROM files WHERE id IN ({content._todo_sql()}) "  # pylint: disable=protected-access
-            f"ORDER BY {content._SYSTEM_PATH}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id")]  # pylint: disable=protected-access
+            f"ORDER BY {content.SYSTEM_PATH_SQL}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id")]  # pylint: disable=protected-access
         assert todo == [big, photo, system]
         assert icon not in todo and dup not in todo
         assert content.status(c)["indexable"] == 3

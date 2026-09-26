@@ -117,7 +117,7 @@ def test_an_index_of_another_version_is_discarded(indexed):
     assert st["indexed"] == 0 and not st["vocab"]
 
 
-def test_the_route_uses_the_index_once_built(tmp_path):
+def test_opening_a_case_indexes_it_in_the_background(tmp_path):
     from gleapp.web.app import create_app
     c = open_case(tmp_path / "case", create=True, examiner="t")
     c.thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -129,17 +129,17 @@ def test_the_route_uses_the_index_once_built(tmp_path):
     c.db.conn.commit()
     root = c.root
     c.close()
-    client = create_app(str(root)).test_client()
+    import time
+    app = create_app(str(root))
+    client = app.test_client()
     try:
-        d = client.get(f"/api/similar/{sid}").get_json()
-        assert d["engine"] == "hash"
-        assert client.post("/api/simindex/build").get_json()["ok"]
-        import time
+        # opening the case starts the background indexer; nothing else is needed
         for _ in range(600):
-            if not client.get("/api/job").get_json()["running"]:
+            st = client.get("/api/simindex/status").get_json()
+            if st["indexed"] == 8:
                 break
             time.sleep(0.1)
-        assert client.get("/api/simindex/status").get_json()["indexed"] == 8
+        assert st["indexed"] == 8 and st["background"]["running"]
         d = client.get(f"/api/similar/{sid}").get_json()
         assert d["engine"] == "index" and mid in {f["id"] for f in d["files"]}
     finally:
@@ -198,3 +198,31 @@ def test_bit_counting_is_the_same_without_numpy_2(monkeypatch):
     fast = simindex._bits(x)  # pylint: disable=protected-access
     monkeypatch.delattr(np, "bitwise_count", raising=False)
     assert (simindex._bits(x) == fast).all()  # pylint: disable=protected-access
+
+
+def test_the_background_indexer_waits_for_a_job_then_finishes(tmp_path):
+    """While a job runs (an ingest, screening) the indexer only waits; after it ends
+    the case is indexed, and stop() lets go of the case before it closes."""
+    import time
+    from gleapp.web.indexer import BackgroundIndexer
+    c = open_case(tmp_path / "case", create=True, examiner="t")
+    c.thumb_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(5):
+        _add(c, f"s{n}", _scene(300 + n))
+    c.db.conn.commit()
+    state = {"case": c, "job": {"running": True}}
+    ix = BackgroundIndexer(state)
+    try:
+        ix.start()
+        time.sleep(1.0)
+        assert ix.status["paused"] and simindex.status(c)["indexed"] == 0
+        state["job"]["running"] = False
+        for _ in range(300):
+            if simindex.status(c)["indexed"] == 5:
+                break
+            time.sleep(0.1)
+        assert simindex.status(c)["indexed"] == 5
+    finally:
+        ix.stop()
+        assert not ix.status["running"]
+        c.close()

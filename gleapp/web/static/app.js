@@ -356,11 +356,13 @@ async function showSimilar(id) {
   renderFiles(d.files);
   renderPager();
   $("#simBanner").style.display = "flex";
+  const idx = state.simIndexing;
   $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "copy" : "copies"}`
     + (d.quick ? `, ${d.quick} unconfirmed quick ${d.quick === 1 ? "match" : "matches"}` : "")
     + (d.content_on ? `, then ${d.content} with similar content` : "")
     + (d.engine === "hash"
        ? " (the Find-similar indexes are not built for this case: Find similar → Build Find-similar indexes in the left pane)"
+       : idx ? ` (still indexing: copies ${idx.copies}, similar content ${idx.content}; results may grow)`
        : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer files not indexed yet)` : "");
   $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
@@ -2837,31 +2839,38 @@ function trackJob(infoSel, barSel, label, done) {
 }
 $("#simMin").addEventListener("input", () => { $("#simMinV").textContent = $("#simMin").value + "%"; });
 $("#simMin").addEventListener("change", () => { if (state.similarOf && similarOfId != null) showSimilar(similarOfId); });
+/* Find similar's indexes build in the background after processing (gleapp/web/
+   indexer.py); this section shows how far they are and polls while they run. */
+let _simPoll = null;
+state.simIndexing = null;
 async function refreshSimIndexInfo() {
   let st, ct;
   try { [st, ct] = await Promise.all([api("/api/simindex/status"), api("/api/content/status")]); }
   catch (e) { return; }
   if (!st || st.error || !ct || ct.error) return;
+  const bg = st.background || {};
   const todo = Math.max(0, st.indexable - st.indexed), ctodo = ct.model ? Math.max(0, ct.indexable - ct.indexed) : 0;
-  $("#simIndexInfo").textContent = !st.indexed
-    ? `Find similar's indexes are not built for this case (processed before this version): ${st.indexable.toLocaleString()} files.`
-    : `Copies: ${st.indexed.toLocaleString()} indexed` + (todo ? `, ${todo.toLocaleString()} to add.` : ".");
+  const pct = (a, b) => b ? Math.floor(100 * a / b) + "%" : "100%";
+  $("#simIndexInfo").textContent = `Copies: ${st.indexed.toLocaleString()} of ${st.indexable.toLocaleString()} indexed (${pct(st.indexed, st.indexable)}).`;
   $("#contentInfo").textContent = !ct.model ? "Similar content is not available: the model file is missing from this build."
-    : `Similar content: ${ct.indexed.toLocaleString()} indexed` + (ctodo ? `, ${ctodo.toLocaleString()} to add (icons and exact copies are skipped).` : ".");
-  const pending = todo + ctodo;
-  $("#btnSimIndex").textContent = !st.indexed ? "Build Find-similar indexes" : pending ? `Index ${pending.toLocaleString()} new files` : "Find-similar indexes are up to date";
-  $("#btnSimIndex").disabled = !!st.indexed && !pending;
+    : `Similar content: ${ct.indexed.toLocaleString()} of ${ct.indexable.toLocaleString()} indexed (${pct(ct.indexed, ct.indexable)}; icons and exact copies are skipped).`;
+  const working = bg.running && bg.stage && bg.stage !== "idle";
+  const note = bg.error ? `Indexing stopped: ${bg.error}`
+    : bg.paused ? "Indexing is paused while a job runs, and resumes after it."
+    : working ? `Indexing in the background (${bg.stage === "copies" ? "copies" : "similar content"}): Find similar already works on what is indexed.`
+    : (todo || ctodo) && !bg.running ? "Indexing is not running." : "";
+  $("#simBgInfo").textContent = note;
+  state.simIndexing = (todo || ctodo) ? { copies: pct(st.indexed, st.indexable), content: pct(ct.indexed, ct.indexable) } : null;
+  // the button only matters when the indexer is not running and something is left
+  $("#btnSimIndex").style.display = !bg.running && (todo || ctodo) ? "" : "none";
+  clearTimeout(_simPoll);
+  if (bg.running && (todo || ctodo || bg.paused)) _simPoll = setTimeout(refreshSimIndexInfo, 3000);
 }
 $("#btnSimIndex").onclick = async () => {
   const r = await api("/api/simindex/build", { method: "POST" });
-  if (r.error) return toast(r.message || "Could not start the indexes");
-  $("#btnSimIndex").disabled = true;
-  trackJob("#simIndexInfo", "#taskProg", "Find-similar indexes", async ok => {
-    $("#btnSimIndex").disabled = false;
-    if (!ok) return;
-    await refreshSimIndexInfo();
-    toast("Find similar is ready");
-  });
+  if (r.error) return toast(r.message || "Could not start indexing");
+  toast("Indexing in the background");
+  refreshSimIndexInfo();
 };
 $("#btnRetryErr").onclick = async () => {
   const r = await api("/api/reprocess-errors", { method: "POST" });

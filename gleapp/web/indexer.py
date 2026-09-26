@@ -1,0 +1,102 @@
+"""Find similar's indexes, built in the background while the examiner works.
+
+Processing used to build the copy and content indexes as its last stages, which added
+8 to 20 minutes to an ingest (measured on four real cases). Here they are built after
+processing instead, one thread per open case, at lower parallelism so the gallery stays
+responsive: likely examiner material first, the system's and applications' own artwork
+last. Find similar searches whatever is indexed so far. The indexer pauses while any
+job runs (an ingest, screening, a re-scan) and stops before the case closes; both
+builders write in chunks and pick up where they left off, so nothing is lost.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+import time
+import traceback
+
+IDLE_POLL = 10.0      # seconds between checks for new files when everything is indexed
+BUSY_POLL = 2.0       # seconds between checks while a job runs
+
+
+class BackgroundIndexer:
+    def __init__(self, state: dict) -> None:
+        self.state = state
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self.status = {"running": False, "stage": "", "done": 0, "total": 0,
+                       "paused": False, "error": None}
+
+    def start(self) -> None:
+        """Start indexing the open case, unless it is already being indexed."""
+        with self._lock:
+            case = self.state.get("case")
+            if case is None or (self._thread is not None and self._thread.is_alive()):
+                return
+            self._stop.clear()
+            self.status.update(running=True, stage="", done=0, total=0, paused=False, error=None)
+            self._thread = threading.Thread(target=self._run, args=(case,), daemon=True,
+                                             name="find-similar-indexer")
+            self._thread.start()
+
+    def stop(self, wait: bool = True) -> None:
+        """Ask the indexer to stop; with ``wait``, return once it has (it finishes the
+        chunk in hand, a few seconds at most)."""
+        self._stop.set()
+        t = self._thread
+        if wait and t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=300)
+
+    # ---------------------------------------------------------------------------------
+    def _should_yield(self, case) -> bool:
+        return (self._stop.is_set() or self.state.get("case") is not case
+                or self.state["job"]["running"])
+
+    def _run(self, case) -> None:
+        from .. import content, simindex
+        workers = max(2, (os.cpu_count() or 4) // 2)
+        progress = lambda d, t: self.status.update(done=d, total=t)
+        finished = {"copies": False, "content": False}   # a pass that ran to its end
+        try:
+            while not self._stop.is_set() and self.state.get("case") is case:
+                if self.state["job"]["running"]:
+                    self.status.update(paused=True)
+                    time.sleep(BUSY_POLL)
+                    continue
+                self.status.update(paused=False)
+                st = simindex.status(case)
+                if st["indexed"] < st["indexable"] and not finished["copies"]:
+                    self.status.update(stage="copies", done=0, total=st["indexable"] - st["indexed"])
+                    simindex.build_index(case, workers=workers, progress=progress,
+                                         stop=lambda: self._should_yield(case))
+                    finished["copies"] = not self._should_yield(case)
+                    continue
+                ct = content.status(case)
+                if ct["model"] and ct["indexed"] < ct["indexable"] and not finished["content"]:
+                    self.status.update(stage="content", done=0, total=ct["indexable"] - ct["indexed"])
+                    content.build_index(case, workers=workers, progress=progress,
+                                        stop=lambda: self._should_yield(case))
+                    finished["content"] = not self._should_yield(case)
+                    continue
+                # up to date (an unreadable thumbnail is not retried until new files
+                # arrive): idle, and look again for files a later job adds
+                self.status.update(stage="idle", done=0, total=0)
+                before = (st["indexable"], ct["indexable"])
+                for _ in range(int(IDLE_POLL / BUSY_POLL)):
+                    if self._stop.is_set() or self.state.get("case") is not case:
+                        return
+                    time.sleep(BUSY_POLL)
+                st, ct = simindex.status(case), content.status(case)
+                if (st["indexable"], ct["indexable"]) != before:
+                    finished = {"copies": False, "content": False}
+        except sqlite3.ProgrammingError:
+            pass                  # the case was closed under it (not through the app): stop
+        # pylint: disable-next=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001 - reported in the Find similar section
+            traceback.print_exc()
+            self.status.update(error=f"{type(exc).__name__}: {exc}"[:300])
+        finally:
+            self.status.update(running=False, paused=False, stage="")

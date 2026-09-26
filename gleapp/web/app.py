@@ -125,11 +125,15 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         "last_backup": 0.0,
     }
     app.config["STATE"] = state
+    from .indexer import BackgroundIndexer
+    indexer = BackgroundIndexer(state)     # Find similar's indexes, built while you work
+    state["indexer"] = indexer
 
     if case_dir and (Path(case_dir) / "case.gleapp").exists():
         state["case"] = open_case(case_dir)
         appconfig.push_recent(str(Path(case_dir).resolve()),
                               state["case"].db.get_meta("case_name"))
+        indexer.start()
 
     # ---- auto-snapshot daemon --------------------------------------
     def _auto_backup_loop() -> None:
@@ -327,6 +331,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         cur = state["case"]
         if cur is None:
             return
+        indexer.stop()                     # finishes its chunk, then lets go of the case
         try:
             if getattr(cur.db, "dirty", False):
                 snap = backup.snapshot(cur, auto=True)
@@ -361,6 +366,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         state["case"] = open_case(path)
         appconfig.push_recent(str(path.resolve()),
                               state["case"].db.get_meta("case_name"))
+        indexer.start()
         return jsonify({"ok": True, "case": state["case"].db.get_meta("case_name")})
 
     @app.post("/api/case/create")
@@ -386,6 +392,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         _close_current()
         state["last_backup"] = 0.0
         state["case"] = open_case(path, create=True, examiner=examiner)
+        indexer.start()
         if data.get("name"):
             state["case"].db.set_meta("case_name", str(data["name"]))
         if data.get("use_stash") is False:
@@ -488,7 +495,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             try:
                 from ..pipeline import process
                 st = process(case, where="error IS NOT NULL", force=True,
-                             screen=False, reason="retry-errors",
+                             screen=False, reason="retry-errors", similar=False,
                              progress=lambda d, t: j.update(done=d, total=t),
                              stage_cb=lambda m: j.update(message=m))
                 fixed = n - case.db.conn.execute(
@@ -535,7 +542,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 if added:
                     j.update(stage="process", done=0, total=added,
                              message=f"Processing {added:,} extracted file(s)…")
-                    process(case, where="md5 IS NULL", reason="expand-archives",
+                    process(case, where="md5 IS NULL", reason="expand-archives", similar=False,
                             progress=lambda d, t: j.update(done=d, total=t),
                             stage_cb=lambda m: j.update(message=m))
                 j.update(running=False, stage="done",
@@ -1315,38 +1322,16 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
     @app.get("/api/simindex/status")
     def simindex_status():
         from .. import simindex
-        return jsonify(simindex.status(C()))
+        return jsonify(dict(simindex.status(C()), background=dict(indexer.status)))
 
     @app.post("/api/simindex/build")
     def simindex_build():
-        """Build both Find-similar indexes, copies then content, as the shared
-        background job: what processing does for a new case, for one processed before."""
-        if state["case"] is None:
-            abort(409, description="no case open")
-        if state["job"]["running"]:
-            abort(409, description="a job is already running")
-        case = state["case"]
-        state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
-                        "message": "Indexing for Find similar…", "stats": None, "error": None}
-
-        def _job() -> None:
-            j = state["job"]
-            try:
-                from .. import content, simindex
-                n = simindex.build_index(case, progress=lambda d, t: j.update(done=d, total=t),
-                                         stage_cb=lambda m: j.update(message=m, done=0, total=0))
-                m = 0
-                if content.model_ready():
-                    j.update(message="Indexing content for Find similar…", done=0, total=0)
-                    m = content.build_index(case, progress=lambda d, t: j.update(done=d, total=t))
-                j.update(running=False, stage="done",
-                         message=f"Find similar is ready ({n:,} copies and {m:,} content entries added)",
-                         stats={"indexed": n, "content": m})
-            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-                j.update(running=False, stage="error", error=f"{type(exc).__name__}: {exc}")
-
-        threading.Thread(target=_job, daemon=True).start()
-        return jsonify({"ok": True})
+        """(Re)start building Find similar's indexes in the background - they start by
+        themselves when a case opens; this is for after an error or a stop."""
+        C()
+        indexer.stop()
+        indexer.start()
+        return jsonify({"ok": True, "background": dict(indexer.status)})
 
     @app.get("/api/faces/<int:file_id>")
     def faces_for_file(file_id: int):
@@ -1919,7 +1904,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 if total_new:
                     j.update(stage="process", done=0, total=total_new,
                              message=f"Processing {total_new:,} recovered file(s)…")
-                    process(case, where="md5 IS NULL", reason="carve-source",
+                    process(case, where="md5 IS NULL", reason="carve-source", similar=False,
                             progress=lambda d, t: j.update(done=d, total=t),
                             stage_cb=lambda m: j.update(message=m))
                 parts = []
@@ -2275,6 +2260,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         except Exception:  # noqa: BLE001
             pass
         # 2. close the live DB, swap the file in, reopen
+        indexer.stop()
         case.close()
         state["case"] = None
         try:
@@ -2286,6 +2272,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(500, description=f"could not replace the case file: {exc}")
         state["case"] = open_case(root)
         state["last_backup"] = 0.0
+        indexer.start()
         state["case"].db.audit_log(state["case"].examiner,
                                    "restore_snapshot", json.dumps({"name": name}))
         return jsonify({"ok": True, "restored": name})
@@ -2391,6 +2378,7 @@ def _run_job(state: dict, sources, opts: dict) -> None:
             phash_cluster_threshold=int(opts.get("cluster_threshold", 8)),
             progress=progress,
             stage_cb=lambda msg: job.update(message=msg),
+            similar=False,        # the background indexer builds them after, see indexer.py
         )
         job.update(running=False, stage="done", message="Done",
                    stats=stats.as_dict())

@@ -64,12 +64,13 @@ def _ensure(conn) -> None:
     conn.commit()
 
 
+CHUNK = 64               # files a build describes between checks for a request to stop
 MIN_SIDE = 128          # smaller pictures (icons, cursors, buttons) are not described
 _INDEXABLE = ("kind IN ('image', 'video') AND thumb IS NOT NULL "
               f"AND MAX(COALESCE(width, 0), COALESCE(height, 0)) >= {MIN_SIDE}")
 # Folders that hold the operating system's and applications' own artwork. Their images
 # are described last, so a search over the examiner's likely material works early.
-_SYSTEM_PATH = ("(LOWER(COALESCE(orig_path, path)) LIKE '%/windows/%' "
+SYSTEM_PATH_SQL = ("(LOWER(COALESCE(orig_path, path)) LIKE '%/windows/%' "
                 "OR LOWER(COALESCE(orig_path, path)) LIKE '%/program files%' "
                 "OR LOWER(COALESCE(orig_path, path)) LIKE '%/programdata/%' "
                 "OR LOWER(COALESCE(orig_path, path)) LIKE '%/system/library/%' "
@@ -117,9 +118,10 @@ def _vector(tokens: np.ndarray) -> np.ndarray:
     return v / (np.linalg.norm(v) + 1e-12)
 
 
-def build_index(case, *, workers: int = 6, progress=None) -> int:
-    """Describe every image and video thumbnail not yet indexed. Resumable: a stopped run
-    keeps what it wrote and the next picks up the rest."""
+def build_index(case, *, workers: int = 6, progress=None, stop=None) -> int:
+    """Describe every image and video thumbnail not yet indexed. Resumable: ``stop`` (a
+    callable) is checked between chunks of CHUNK files; what is written stays and the
+    next run picks up the rest."""
     import cv2
     if not model_ready():
         raise ValueError("the content model is missing from this build")
@@ -128,7 +130,7 @@ def build_index(case, *, workers: int = 6, progress=None) -> int:
         rows = case.db.conn.execute(
             f"SELECT id, thumb FROM files WHERE id IN ({_todo_sql()}) "
             "AND id NOT IN (SELECT file_id FROM content_vecs) "
-            f"ORDER BY {_SYSTEM_PATH}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id"
+            f"ORDER BY {SYSTEM_PATH_SQL}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id"
             ).fetchall()
     total = len(rows)
     local = threading.local()
@@ -144,18 +146,21 @@ def build_index(case, *, workers: int = 6, progress=None) -> int:
             return r[0], None
         return r[0], v.astype(np.float16).tobytes()
 
-    done, batch = 0, []
+    stopped = stop or (lambda: False)
+    done = 0
     with ThreadPoolExecutor(max(1, workers)) as ex:
-        for fid, blob in ex.map(one, rows):
-            done += 1
-            if blob is not None:
-                batch.append((fid, blob))
-            if len(batch) >= 200 or done == total:
-                with case.db.lock:
-                    case.db.conn.executemany("INSERT OR REPLACE INTO content_vecs VALUES (?, ?)", batch)
-                    case.db.conn.commit()
-                batch = []
-            if progress and (done % 25 == 0 or done == total):
+        for k in range(0, total, CHUNK):
+            if stopped():
+                break
+            batch = []
+            for fid, blob in ex.map(one, rows[k:k + CHUNK]):
+                done += 1
+                if blob is not None:
+                    batch.append((fid, blob))
+            with case.db.lock:
+                case.db.conn.executemany("INSERT OR REPLACE INTO content_vecs VALUES (?, ?)", batch)
+                case.db.conn.commit()
+            if progress:
                 progress(done, total)
     _CACHE.clear()
     return done
