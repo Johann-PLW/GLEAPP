@@ -17,7 +17,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import quote
 
-from . import archive, basemaps, categories, flags, imaging, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
+from . import archive, basemaps, categories, exocache, flags, imaging, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
 from .case import Case
 
 # overview map size - shared so the clickable overlay in _overview_html always
@@ -32,7 +32,7 @@ _CSV_FIELDS = [
     "category", "category_label", "triage", "flags_label",
     "hashset_hit", "hashset_cat", "hashset_kind", "hash_matches",
     "stack_id", "vstack_id", "cluster_id", "notes",
-    "media_id", "orig_name", "orig_path", "mime", "origin", "recorded_times",
+    "media_id", "orig_name", "orig_path", "mime", "origin", "recorded_times", "cache_info",
     "vic_record_media_id", "vic_series", "vic_flags", "vic_tags", "vic_exif",
 ]
 
@@ -136,6 +136,8 @@ def export_csv(case: Case, dest: str | Path, where: str = "", *,
             # times the file has. Rendered as text, the way the report renders
             # them, because no instant can be derived from them.
             d["recorded_times"] = _recorded(d)
+            # a file joined from an app's ExoPlayer cache: where it came from, in words
+            d["cache_info"] = exocache.describe(d)
             # The file's own Project VIC values where a VIC import gave it some,
             # else those of the Project VIC hash-set record it matched, as text.
             vv = vicdetails.view(d)
@@ -345,6 +347,7 @@ _FIELD_DEFS: dict[str, tuple[str, "callable", bool]] = {
     "mtime":      ("FS written",    lambda d: _fmt_ts(d.get("mtime")), False),
     "atime":      ("FS accessed",   lambda d: _fmt_ts(d.get("atime")), False),
     "recorded_times": (RECORDED_LABEL, _recorded, False),
+    "cache_info": ("App cache",     exocache.describe, False),
     "ingested_at": ("Ingested",     lambda d: _fmt_ts(d.get("ingested_at")), False),
     "md5":        ("MD5",           lambda d: d.get("md5") or "", True),
     "sha1":       ("SHA-1",         lambda d: d.get("sha1") or "", True),

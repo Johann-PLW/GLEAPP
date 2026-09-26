@@ -167,9 +167,25 @@ which, per source, along with the archive's own hash when a UFED `.ufd` sidecar 
 beside it.
 
 Deleting the case folder deletes every copy the case made, and the source zip is never
-written to. An extraction surfaces app streaming caches, ExoPlayer `.exo` fragments and
-the like, which are not standalone videos; the pipeline reports them with its existing
-messages rather than silently dropping them.
+written to.
+
+## ExoPlayer cache pieces are decided by name and joined, never sniffed
+
+An Android app's ExoPlayer cache splits each video into `<id>.<position>.<timestamp>.v3.exo`
+pieces (older caches: `<key>.<pos>.<ts>.v2.exo`) with the key in a separate index. Every
+ingest path (folder, zip, tar, walk, nested archive) keeps those files by NAME as
+container rows (`ingest.is_exoplayer_cache_name`), because a piece's bytes are the middle
+of a video, and the first piece of an MP4 opens with a video header and used to register
+as a truncated video. `gleapp/exocache.py` then joins each item from position 0 to the
+first gap and records what it did in `files.cache_info`; the format is sourced there,
+from androidx/media 1.11.1. Nested expansion must not queue these rows as archives.
+
+Measured 2026-09-26 on four registered images: russell_pixel6a_a13 (zip) joined 234 of
+594 items in 3 s of a 68 s ingest, 152 decoding; pixel3_a11 (tar) 59 of 96; galaxys10_a10
+(zip, Instagram's v2 names) 100 of 104, 61 decoding; sharon_a14 8 of 402. The items not
+joined are not image or video (Snapchat's pieces carry no recognisable header, and
+audio, playlists and manifests), and every joined file that does not decode is a DASH
+segment cached as its own item, which the existing fragmented-MP4 messages describe.
 
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 

@@ -44,7 +44,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 
-from . import (__version__, archive, basemaps, categories, hashstore, stash,
+from . import (__version__, archive, basemaps, categories, exocache, hashstore, stash,
                staticmap, timeutil, vicdetails)
 from .case import Case
 # The two helpers that decide what a report may say about where a file lived.
@@ -639,7 +639,8 @@ def _artifact_media_files(writer: "_Writer", rows: list[dict], media: dict[int, 
     headers = [
         ("Modified Timestamp", "datetime"), ("Created Timestamp", "datetime"),
         ("Accessed Timestamp", "datetime"), RECORDED_LABEL, "Capture Time",
-        "File Name", "Path", "Also Under", "Source", "How Recovered", ("Media", "media"),
+        "File Name", "Path", "Also Under", "Source", "How Recovered", "App Cache",
+        ("Media", "media"),
         "Kind", "Category", "Flags", "Reviewed By", "Examiner Notes",
         ("Size", "integer"), "Dimensions", "Duration", "Camera",
         "MD5", "SHA1", "SHA256", "Perceptual Hash",
@@ -658,6 +659,7 @@ def _artifact_media_files(writer: "_Writer", rows: list[dict], media: dict[int, 
             "\n".join(row.get("alt_list") or []),
             row.get("source") or "",
             _origin_label(row),
+            exocache.describe(row),
             writer.reference(media.get(row["id"]), name, row.get("disp_name") or ""),
             row.get("kind") or "", row.get("category_label") or "", row.get("flags") or "",
             row.get("reviewed_by") or "", row.get("notes") or "",
@@ -1463,7 +1465,15 @@ _MEDIA_NOTES = (
     "holds the id of the group the file is in, so files sharing one are in the same "
     "group, and the Duplicates artifacts describe the groups themselves. Triage is a "
     "free-text bucket an examiner may set and is their own record. Error carries what "
-    "went wrong reading a file, where anything did."
+    "went wrong reading a file, where anything did. App Cache is filled only for a file "
+    "GLEAPP joined from the pieces an Android app's ExoPlayer media cache split it "
+    "into: the app folder the cache sat in, the cache key the index recorded (usually "
+    "the address the app fetched the media from), how many pieces and bytes were "
+    "joined against the length the index recorded, and whether the join is complete, "
+    "partial, or stops at a gap. The pieces are joined in order from the start of the "
+    "item until the first gap, and pieces after a gap are not joined; the pieces "
+    "themselves stay in the case as containers. The last-written-or-read time is the "
+    "one ExoPlayer put in the piece's name, from the device's clock."
 )
 
 

@@ -77,7 +77,8 @@ from pathlib import Path, PurePosixPath
 
 from . import storage_views
 from .ingest import (ARCHIVE_EXTS, IMAGE_EXTS, VIDEO_EXTS, _kind_from_magic,
-                     is_appledouble, is_appledouble_name, is_search_index_name)
+                     is_appledouble, is_appledouble_name, is_exoplayer_cache_name,
+                     is_search_index_name)
 from .vendor import ewfprobe, mediacarve, qnxprobe
 
 _SLUG = re.compile(r"[^A-Za-z0-9._-]+")
@@ -1104,6 +1105,9 @@ def _ingest_zip(case, src, zip_path: Path, *, count: int, progress) -> int:
                 kind = "archive"
             else:
                 kind = "other"
+            # ExoPlayer cache files are decided by name, see gleapp/exocache.py
+            if is_exoplayer_cache_name(name):
+                kind = "archive"
             # A macOS sidecar carries its sibling's whole name, so its extension
             # names a picture it does not hold. Only "._" names are read for it.
             if kind != "other" and is_appledouble_name(name):
@@ -1267,6 +1271,9 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                     kind = "archive"
                 else:
                     kind = "other"
+                # ExoPlayer cache files are decided by name, see gleapp/exocache.py
+                if is_exoplayer_cache_name(path):
+                    kind = "archive"
                 if kind == "other" or is_appledouble_name(path):
                     try:
                         head = _walk_head(walker, node, fsize)
@@ -1518,6 +1525,9 @@ def _ingest_tar(case, src, tar_path: Path, fmt: str, *, count: int, progress) ->
                 kind = "archive"
             else:
                 kind = "other"
+            # ExoPlayer cache files are decided by name, see gleapp/exocache.py
+            if is_exoplayer_cache_name(name):
+                kind = "archive"
             if kind == "other" or is_appledouble_name(name):
                 fin = tf.extractfile(member)
                 head = fin.read(16) if fin is not None else b""

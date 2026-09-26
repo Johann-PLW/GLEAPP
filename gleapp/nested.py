@@ -31,7 +31,8 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator
 
 from . import archive, thumbcache
-from .ingest import ARCHIVE_EXTS, _kind_from_magic, classify, is_appledouble, is_search_index_name
+from .ingest import (ARCHIVE_EXTS, _kind_from_magic, classify, is_appledouble,
+                     is_exoplayer_cache_name, is_search_index_name)
 
 # A single member larger than this is skipped rather than written into the case.
 MAX_MEMBER_BYTES = 2 * 1024 ** 3
@@ -227,6 +228,8 @@ def _members(path: Path, fmt: str) -> Iterator[_Member]:
 def _member_kind(name: str, data: bytes) -> tuple[str, str]:
     """``(kind, ext)`` for an extracted member."""
     ext = PurePosixPath(name).suffix.lower()
+    if is_exoplayer_cache_name(name):
+        return "archive", ext         # gleapp/exocache.py joins these; they are not media
     kind = classify(ext)
     if kind == "other" or (kind != "other" and is_appledouble(name, data[:16])):
         kind = _kind_from_magic(data[:16])
@@ -304,7 +307,7 @@ def _expand_one(case, row, *, include_other: bool, tally: dict) -> list[int]:
                 )
                 written += 1
                 tally["added"] += 1
-                if kind == "archive":
+                if kind == "archive" and not is_exoplayer_cache_name(nm):
                     new_archives.append(fid)
             if is_expansion_error(row["error"] if "error" in row.keys() else None):
                 # it would not open on an earlier pass and has opened now
@@ -349,9 +352,12 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
     have_children = {
         r["container_id"] for r in case.db.iter_files(
             "container_id IS NOT NULL", ())}
+    # an ExoPlayer cache file is kept as a container but is not one to open:
+    # gleapp/exocache.py joins it with the other pieces of its item
     queue = [
         r for r in case.db.iter_files("kind = 'archive'", ())
-        if force or r["id"] not in have_children
+        if (force or r["id"] not in have_children)
+        and not is_exoplayer_cache_name(r["orig_path"] or r["rel_path"] or r["path"])
     ]
     tally = {k: 0 for k in ("added", "encrypted", "too_big", "failed",
                             "skipped_other", "unsupported", "failed_archives")}

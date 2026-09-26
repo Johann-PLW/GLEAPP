@@ -23,7 +23,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import archive, dedupe, detect, hashdb, imaging, lzc, nested, winsearch  # noqa: F401  (imaging: decoder setup)
+from . import archive, dedupe, detect, exocache, hashdb, imaging, lzc, nested, winsearch  # noqa: F401  (imaging: decoder setup)
 from .case import Case, Source
 from .hashing import crypto_hashes, perceptual_hashes
 from .ingest import scan, sniff_kind
@@ -122,6 +122,14 @@ def ingest_sources(case: Case, sources: list[Source], *, progress=None,
         added = nested.expand_containers(
             case, progress=(lambda k: progress(n + k)) if progress else None,
             include_other=any(getattr(s, "include_other", False) for s in sources))
+
+    # An app's ExoPlayer cache splits each video into pieces kept as containers
+    # above; join each item's pieces into one file (gleapp/exocache.py). A cache
+    # sits in the extraction itself, not in a nested archive, so this runs whether
+    # or not the archives were opened.
+    added += exocache.assemble(
+        case, progress=(lambda k: progress(n + added + k)) if progress else None,
+        include_other=any(getattr(s, "include_other", False) for s in sources))
 
     # A cached thumbnail extracted just above has no name of its own; if this
     # source also carried a Windows Search index, try to name it. Best-effort:

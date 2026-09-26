@@ -114,7 +114,7 @@ is blocked until then.</p>
   <tr><td><code>cache/</code></td><td>on-demand copies for the viewer (bounded, oldest evicted)</td></tr>
   <tr><td><code>tmp/</code></td><td>on-demand copies for processing, removed after use</td></tr>
   <tr><td><code>staged/</code></td><td>archive members copied into the case, when <em>Copy media out of extraction archives</em> is on</td></tr>
-  <tr><td><code>extracted/</code></td><td>media unpacked from container files: archives (<code>.zip</code> / <code>.tar</code> / <code>.gz</code>) found in a source, and Snapchat <code>LZC</code> bundles</td></tr>
+  <tr><td><code>extracted/</code></td><td>media unpacked from container files: archives (<code>.zip</code> / <code>.tar</code> / <code>.gz</code>) found in a source, Snapchat <code>LZC</code> bundles, and videos joined from ExoPlayer caches</td></tr>
   <tr><td><code>reports/</code></td><td>exported reports: CSV/JSON, MD5 lists, KMZ, Project VIC exports, LAVA projects</td></tr>
   <tr><td><code>backups/</code></td><td>timestamped snapshot copies of <code>case.gleapp</code></td></tr>
 </table>
@@ -315,7 +315,7 @@ number key, context menu, details pane) applies to the whole selection.</p>
 <p>A field appears only when the file has a value for it.</p>
 <table>
   <tr><th>Group</th><th>Fields</th></tr>
-  <tr><td><strong>Identity</strong></td><td>Source, Type, Original name, File path, Also under, Stored at, MIME</td></tr>
+  <tr><td><strong>Identity</strong></td><td>Source, Type, Original name, File path, Also under, App cache, Stored at, MIME</td></tr>
   <tr><td><strong>File</strong></td><td>Size, Dimensions, Duration, Camera</td></tr>
   <tr><td><strong>Dates</strong></td><td>Captured (EXIF, camera local), FS created, FS written, FS accessed, Recorded (as stored, no zone). See &sect;3.</td></tr>
   <tr><td><strong>Project&nbsp;VIC</strong></td><td>MediaID, record MediaID, series, tags, flags. <strong>VIC Exif, as recorded</strong> opens a collapsed list of the Exif the VIC record carries, shown as text. It is not the file's own metadata.</td></tr>
@@ -971,6 +971,8 @@ gleapp stash --clear</code></pre>
   <li><strong>Snapchat <code>LZC</code> bundles</strong>: Zstandard containers;
   the embedded image or video is extracted to <code>extracted/</code> and shown.</li>
   <li><strong>Archives found inside a source</strong>: see the next section.</li>
+  <li><strong>ExoPlayer media caches</strong>: the pieces an Android app's video cache
+  splits a video into are joined back into one file; see below.</li>
 </ul>
 
 <h3>Archives found inside a source</h3>
@@ -994,6 +996,40 @@ Archives nested inside archives are followed.</p>
   <li>Unticked, or on a case that was ingested earlier, use <strong>Expand archives</strong> in the
   sidebar (&sect;16).</li>
 </ul>
+
+<h3>ExoPlayer media caches (Android)</h3>
+<p>Many Android apps play video through ExoPlayer, Google's media library, and keep
+what they stream in its cache. One video is not one file there: it is split into
+pieces named <code>&lt;id&gt;.&lt;position&gt;.&lt;timestamp&gt;.v3.exo</code>, spread over
+subfolders <code>0</code> to <code>9</code> of the cache folder, and the address each video
+came from is kept in a separate index, <code>cached_content_index.exi</code> in the cache
+folder or a table in the app's <code>exoplayer_internal.db</code>. Older caches
+(<code>.v2.exo</code>, <code>.v1.exo</code>, which Meta's apps still write) put that key in
+the piece's own name instead.</p>
+<ul>
+  <li><strong>The pieces and the index files are kept as containers</strong>, whatever
+  their bytes look like, so they stay out of the gallery and are listed under
+  <em>archive (container)</em>.</li>
+  <li><strong>Each item's pieces are joined in order, from the start of the item, until
+  the first gap</strong>, into one file under <code>extracted/exoplayer/</code>, processed
+  like any other video and linked to its first piece.</li>
+  <li>The details pane, report, CSV/JSON export and LAVA carry an <em>App cache</em>
+  line: the app folder, the key the index recorded (usually the address the app
+  fetched it from), the pieces and bytes joined against the length the index
+  recorded, and whether it is <strong>complete</strong>, <strong>partial</strong>,
+  <strong>stops at a gap</strong>, or has no length recorded. The last-written-or-read
+  time is the one ExoPlayer put in the piece's name, from the device's clock. Search
+  finds a video by its key.</li>
+  <li>Pieces after a gap are not joined, and an item with no piece at position 0 is
+  not joined: nothing it holds can open. An encrypted index names nothing; the pieces
+  are still joined.</li>
+  <li>A joined item that is neither an image nor a video (audio, a playlist, a
+  manifest, unrecognised bytes) is kept only when the source includes other files.</li>
+  <li>Video streamed in segments (HLS, DASH) is cached one segment per item, so a
+  joined segment is only as long as the segment.</li>
+</ul>
+<p>A case ingested before this version did not keep the pieces: re-ingest the source.
+<strong>Expand archives</strong> also runs the join on a case that already holds them.</p>
 
 <h3>macOS sidecars (<code>._</code> files)</h3>
 <p>macOS sidecars are recognized and left out.</p>
@@ -1026,7 +1062,7 @@ metadata:</p>
   <tr><td><em>Truncated PNG / JPEG - file header only, no image data</em></td><td>A valid signature and a few header bytes, then nothing.</td></tr>
   <tr><td><em>Truncated MP4</em></td><td>The file ends inside one of its MP4 boxes, which the message names: the box declares more bytes than the file has left, so the rest of the file is missing.</td></tr>
   <tr><td><em>Proprietary app-asset container</em></td><td>An app's own texture/filter format (e.g. AR make-up filters), not a standard image.</td></tr>
-  <tr><td><em>Snapchat streamed-video fragment</em> / <em>fragmented-MP4 init segment</em> / <em>MP4 media data with no header</em></td><td>A segmented download split across many files; no single file is a playable clip. Reassembling them is an upstream task.</td></tr>
+  <tr><td><em>Snapchat streamed-video fragment</em> / <em>fragmented-MP4 init segment</em> / <em>MP4 media data with no header</em></td><td>A segmented download split across many files; no single file is a playable clip. GLEAPP joins ExoPlayer cache pieces itself (see above); other segmented caches are not joined.</td></tr>
   <tr><td><em>Malformed HEIC/HEIF - declared and decoded image sizes disagree</em></td><td>The file is malformed: the image size it declares and the size it decodes to differ.</td></tr>
   <tr><td><em>Audio-frame fragment</em> / <em>gzip-compressed web-cache data</em></td><td>Not an image or video at all, despite the extension.</td></tr>
 </table>

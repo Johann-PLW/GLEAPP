@@ -173,10 +173,13 @@ CREATE TABLE IF NOT EXISTS files (
     alt_paths     TEXT,                   -- JSON: the other storage views this file was also under
     container_id  INTEGER,                -- files.id of the archive this file was extracted from
                                           -- (a .zip/.tar/.gz found inside a source); NULL otherwise
-    recorded_times TEXT                   -- JSON: readings the filesystem stores with no zone on
+    recorded_times TEXT,                  -- JSON: readings the filesystem stores with no zone on
                                           -- them, as stored. FAT and exFAT keep a wall clock and
                                           -- no zone, so mtime above is null for them and this
                                           -- carries the reading as text instead. Never an instant.
+    cache_info    TEXT                    -- JSON: for a file joined from an app's ExoPlayer cache,
+                                          -- the cache it came from, its key, and whether the join
+                                          -- is complete. See gleapp/exocache.py.
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_md5      ON files(md5);
@@ -378,7 +381,7 @@ class CaseDB:
             ("volume_base", "INTEGER"), ("recorded_times", "TEXT"),
             ("container_id", "INTEGER"), ("hashset_vic", "TEXT"),
             ("hashset_sources", "TEXT"), ("hashset_mask", "INTEGER"),
-            ("grp_head", "INTEGER NOT NULL DEFAULT 1"),
+            ("grp_head", "INTEGER NOT NULL DEFAULT 1"), ("cache_info", "TEXT"),
         ):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} {decl}")
