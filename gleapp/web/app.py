@@ -133,7 +133,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         state["case"] = open_case(case_dir)
         appconfig.push_recent(str(Path(case_dir).resolve()),
                               state["case"].db.get_meta("case_name"))
-        indexer.start()
 
     # ---- auto-snapshot daemon --------------------------------------
     def _auto_backup_loop() -> None:
@@ -343,6 +342,17 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     state["close_current"] = _close_current
 
+    def _index_added_files(case) -> None:
+        """After a job added files (archives expanded, carving, retried files), index them
+        when the case already has Find-similar indexes; a case without them waits for the
+        examiner to start them (Find similar section)."""
+        from .. import content, simindex
+        try:
+            if simindex.status(case)["indexed"] or content.status(case)["indexed"]:
+                indexer.start()
+        except sqlite3.Error:
+            pass
+
     @app.post("/api/case/close")
     def case_close():
         """Snapshot + close the current case and return to the launcher."""
@@ -366,7 +376,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         state["case"] = open_case(path)
         appconfig.push_recent(str(path.resolve()),
                               state["case"].db.get_meta("case_name"))
-        indexer.start()
         return jsonify({"ok": True, "case": state["case"].db.get_meta("case_name")})
 
     @app.post("/api/case/create")
@@ -392,7 +401,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         _close_current()
         state["last_backup"] = 0.0
         state["case"] = open_case(path, create=True, examiner=examiner)
-        indexer.start()
         if data.get("name"):
             state["case"].db.set_meta("case_name", str(data["name"]))
         if data.get("use_stash") is False:
@@ -501,6 +509,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 fixed = n - case.db.conn.execute(
                     "SELECT COUNT(*) n FROM files WHERE error IS NOT NULL"
                 ).fetchone()["n"]
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=f"Recovered {fixed} of {n}",
                          stats={**st.as_dict(), "recovered": fixed})
@@ -545,6 +554,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     process(case, where="md5 IS NULL", reason="expand-archives", similar=False,
                             progress=lambda d, t: j.update(done=d, total=t),
                             stage_cb=lambda m: j.update(message=m))
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=(f"{added:,} file(s) recovered from archives"
                                   if added else "No new files in the archives"),
@@ -1336,8 +1346,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.post("/api/simindex/build")
     def simindex_build():
-        """(Re)start building Find similar's indexes in the background - they start by
-        themselves when a case opens; this is for after an error or a stop."""
+        """Build Find similar's indexes in the background. An ingest starts this by
+        itself; for a case that was not indexed on ingest (processed by an older
+        version, or indexing stopped when it closed), the examiner starts it here."""
         C()
         indexer.stop()
         indexer.start()
@@ -1922,6 +1933,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     parts.append(f"{recovered:,} recovered from deleted records")
                 if added:
                     parts.append(f"{added:,} carved")
+                _index_added_files(case)
                 j.update(running=False, stage="done",
                          message=("; ".join(parts) if parts else "Nothing new was recovered"),
                          stats={"recovered": recovered, "carved": added})
@@ -2282,7 +2294,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(500, description=f"could not replace the case file: {exc}")
         state["case"] = open_case(root)
         state["last_backup"] = 0.0
-        indexer.start()
         state["case"].db.audit_log(state["case"].examiner,
                                    "restore_snapshot", json.dumps({"name": name}))
         return jsonify({"ok": True, "restored": name})
@@ -2390,6 +2401,8 @@ def _run_job(state: dict, sources, opts: dict) -> None:
             stage_cb=lambda msg: job.update(message=msg),
             similar=False,        # the background indexer builds them after, see indexer.py
         )
+        if state.get("indexer") is not None:
+            state["indexer"].start()          # Find similar's indexes, in the background
         job.update(running=False, stage="done", message="Done",
                    stats=stats.as_dict())
     except Exception as exc:  # noqa: BLE001

@@ -590,12 +590,9 @@
     <details class="fsec" data-sec="similar">
       <summary>Find similar <span class="fdot"></span></summary>
       <div class="fbody">
-        <div class="fnote">Right-click a picture or video &rarr; <b>Find similar</b> lists its copies, then
-          other photos with similar content. Its indexes build in the background after processing.</div>
-        <button class="btn sm block" id="btnSimIndex" title="Right-click → Find similar uses two indexes: copies of a picture (resized, cropped, mirrored, rotated, captioned, bordered or inside a screenshot) and similar content (other photos of the same person, place or object). They build in the background whenever a case is open; this restarts them if they stopped.">Resume indexing</button>
+        <div class="fnote">Right-click a picture or video &rarr; <b>Find similar</b>.</div>
         <div id="simIndexInfo" class="fnote"></div>
-        <div id="contentInfo" class="fnote"></div>
-        <div id="simBgInfo" class="fnote"></div>
+        <button class="btn sm block" id="btnSimIndex" style="display:none" title="Builds the two indexes Find similar uses: matches of a picture (resized, cropped, mirrored, rotated, captioned, framed or in a screenshot) and similar content (other photos of the same person, place or object). Runs in the background; the gallery stays usable. An ingest does this by itself.">Build indexes</button>
       </div>
     </details>
 
@@ -678,7 +675,7 @@
     <div class="banner" id="simBanner" style="display:none">
       <span>Showing <b id="simId"></b></span>
       <span id="simCtl" style="display:none;align-items:center;gap:6px;margin-left:12px" title="How alike in content a file must be to be listed under similar content">
-        similar content from <input type="range" id="simMin" min="50" max="95" value="70" style="width:110px">
+        similar from <input type="range" id="simMin" min="50" max="95" value="70" style="width:110px">
         <b id="simMinV">70%</b></span>
       <button class="btn" id="simBack">Back to all</button>
     </div>

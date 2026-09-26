@@ -370,13 +370,11 @@ function showSimilarResult(id, d) {
   $("#simBanner").style.display = "flex";
   const idx = state.simIndexing;
   $("#simId").textContent = `#${id}: ${d.copies} ${d.copies === 1 ? "match" : "matches"}`
-    + (d.quick ? `, ${d.quick} unconfirmed quick ${d.quick === 1 ? "match" : "matches"}` : "")
-    + (d.content_on ? `, then ${d.content} with similar content` : "")
-    + (d.engine === "hash"
-       ? " (the Find-similar indexes are not built for this case: Find similar → Build Find-similar indexes in the left pane)"
-       : idx ? ` (still indexing: copies ${idx.copies}, similar content ${idx.content}; results may grow)`
-       : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer files not indexed yet)` : "");
-  if (d.more) $("#simId").textContent += " (searching the video's key frames too…)";
+    + (d.quick ? `, ${d.quick} unconfirmed` : "")
+    + (d.content_on ? `, ${d.content} similar` : "")
+    + (d.engine === "hash" ? " (not indexed: see Find similar in the left pane)"
+       : idx ? " (still indexing)" : "");
+  if (d.more) $("#simId").textContent += " (checking key frames…)";
   $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
 }
@@ -426,7 +424,7 @@ function tileEl(f) {
     : f.match === "copy"
     ? `<span class="b" title="${f.exact ? "an identical file" : f.points ? f.points + " points line up with the searched picture" : "matched by its whole-picture fingerprint"}">${f.exact ? "identical" : f.points ? "match · " + f.points + " pts" : "match"}</span>`
     : f.match === "hash"
-    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the Find-similar indexes (Find similar section, left pane) for real copy matching">quick match?</span>`
+    ? `<span class="b" title="the old quick check (whole-picture hash): not confirmed, often wrong; build the indexes (Find similar, left pane) for real matching">quick match?</span>`
     : f.match === "content"
     ? `<span class="b" title="similar content: how alike the two pictures are in what they show">≈ ${f.similarity}%</span>`
     : (f.distance != null || f.similarity != null) ? `<span class="b">${f.similarity}%</span>` : "";
@@ -2854,7 +2852,7 @@ $("#simMin").addEventListener("input", () => { $("#simMinV").textContent = $("#s
 $("#simMin").addEventListener("change", () => { if (state.similarOf && similarOfId != null) showSimilar(similarOfId); });
 /* Find similar's indexes build in the background after processing (gleapp/web/
    indexer.py); this section shows how far they are and polls while they run. */
-let _simPoll = null;
+let _simPoll = null, _simBarShown = false;
 state.simIndexing = null;
 async function refreshSimIndexInfo() {
   let st, ct;
@@ -2864,20 +2862,38 @@ async function refreshSimIndexInfo() {
   const bg = st.background || {};
   const todo = Math.max(0, st.indexable - st.indexed), ctodo = ct.model ? Math.max(0, ct.indexable - ct.indexed) : 0;
   const pct = (a, b) => b ? Math.floor(100 * a / b) + "%" : "100%";
-  $("#simIndexInfo").textContent = `Copies: ${st.indexed.toLocaleString()} of ${st.indexable.toLocaleString()} indexed (${pct(st.indexed, st.indexable)}).`;
-  $("#contentInfo").textContent = !ct.model ? "Similar content is not available: the model file is missing from this build."
-    : `Similar content: ${ct.indexed.toLocaleString()} of ${ct.indexable.toLocaleString()} indexed (${pct(ct.indexed, ct.indexable)}; icons and exact copies are skipped).`;
   const working = bg.running && bg.stage && bg.stage !== "idle";
-  const note = bg.error ? `Indexing stopped: ${bg.error}`
-    : bg.paused ? "Indexing is paused while a job runs, and resumes after it."
-    : working ? `Indexing in the background (${bg.stage === "copies" ? "copies" : "similar content"}): Find similar already works on what is indexed.`
-    : (todo || ctodo) && !bg.running ? "Indexing is not running." : "";
-  $("#simBgInfo").textContent = note;
+  // one short status line; the details live in the button's tooltip and the help
+  $("#simIndexInfo").textContent = bg.error ? `Indexing stopped: ${bg.error}`
+    : !(todo || ctodo) ? "Ready."
+    : bg.paused ? "Indexing paused while a job runs."
+    : working ? `Indexing… matches ${pct(st.indexed, st.indexable)}, content ${pct(ct.indexed, ct.indexable)}`
+    : st.indexed || ct.indexed ? `Partly indexed (matches ${pct(st.indexed, st.indexable)}, content ${pct(ct.indexed, ct.indexable)}).`
+    : "Not indexed yet.";
   state.simIndexing = (todo || ctodo) ? { copies: pct(st.indexed, st.indexable), content: pct(ct.indexed, ct.indexable) } : null;
-  // the button only matters when the indexer is not running and something is left
   $("#btnSimIndex").style.display = !bg.running && (todo || ctodo) ? "" : "none";
+  // the shared progress bar at the bottom of the pane, like every other background task;
+  // left alone while a job runs (the indexer is paused then, and the job owns the bar)
+  const bar = $("#taskProg");
+  if (working && !bg.paused && (todo || ctodo)) {
+    const copiesStage = bg.stage === "copies";
+    const done = copiesStage ? st.indexed : ct.indexed, total = copiesStage ? st.indexable : ct.indexable;
+    const p = total ? Math.floor(100 * done / total) : 0;
+    bar.classList.remove("err", "indeterminate");
+    bar.style.display = "block";
+    bar.querySelector("i").style.width = p + "%";
+    bar.querySelector(".jbtxt").textContent = `Find similar: indexing ${copiesStage ? "matches" : "content"}`;
+    bar.querySelector(".jbpct").textContent = `${p}% · ${done.toLocaleString()}/${total.toLocaleString()}`;
+    _simBarShown = true;
+  } else if (_simBarShown && !bg.paused) {
+    bar.style.display = "none";
+    _simBarShown = false;
+  } else if (bg.paused) {
+    _simBarShown = false;
+  }
   clearTimeout(_simPoll);
-  if (bg.running && (todo || ctodo || bg.paused)) _simPoll = setTimeout(refreshSimIndexInfo, 3000);
+  // quickly while indexing or paused, slowly otherwise, to notice files a later job adds
+  if (bg.running) _simPoll = setTimeout(refreshSimIndexInfo, (todo || ctodo || bg.paused) ? 1500 : 10000);
 }
 $("#btnSimIndex").onclick = async () => {
   const r = await api("/api/simindex/build", { method: "POST" });

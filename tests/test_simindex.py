@@ -117,7 +117,9 @@ def test_an_index_of_another_version_is_discarded(indexed):
     assert st["indexed"] == 0 and not st["vocab"]
 
 
-def test_opening_a_case_indexes_it_in_the_background(tmp_path):
+def test_opening_a_case_does_not_index_it_the_button_does(tmp_path):
+    """A case that was not indexed on ingest waits for the examiner to start it."""
+    import time
     from gleapp.web.app import create_app
     c = open_case(tmp_path / "case", create=True, examiner="t")
     c.thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -129,22 +131,46 @@ def test_opening_a_case_indexes_it_in_the_background(tmp_path):
     c.db.conn.commit()
     root = c.root
     c.close()
-    import time
-    app = create_app(str(root))
-    client = app.test_client()
+    client = create_app(str(root)).test_client()
     try:
-        # opening the case starts the background indexer; nothing else is needed
+        time.sleep(1.0)
+        st = client.get("/api/simindex/status").get_json()
+        assert st["indexed"] == 0 and not st["background"]["running"]
+        assert client.get(f"/api/similar/{sid}").get_json()["engine"] == "hash"
+        assert client.post("/api/simindex/build").get_json()["ok"]
         for _ in range(600):
             st = client.get("/api/simindex/status").get_json()
             if st["indexed"] == 8:
                 break
             time.sleep(0.1)
-        assert st["indexed"] == 8 and st["background"]["running"]
+        assert st["indexed"] == 8
         d = client.get(f"/api/similar/{sid}").get_json()
         assert d["engine"] == "index" and mid in {f["id"] for f in d["files"]}
     finally:
         client.post("/api/case/close")
 
+
+def test_an_ingest_indexes_the_case_in_the_background(tmp_path):
+    """Ingesting through the app starts the indexer after processing, by itself."""
+    import time
+    from gleapp.web.app import create_app
+    ev = tmp_path / "evidence"
+    ev.mkdir()
+    for n in range(4):
+        _scene(400 + n).save(ev / f"p{n}.jpg", quality=90)
+    client = create_app(None).test_client()
+    try:
+        assert client.post("/api/case/create", json={"path": str(tmp_path / "case"), "examiner": "t"}).get_json().get("ok", True)
+        client.post("/api/case/ingest", json={"sources": [{"name": "ev", "path": str(ev)}],
+                                               "options": {"screen": False}})
+        for _ in range(900):
+            st = client.get("/api/simindex/status").get_json()
+            if not client.get("/api/job").get_json()["running"] and st["indexable"] and st["indexed"] == st["indexable"]:
+                break
+            time.sleep(0.1)
+        assert st["indexable"] == 4 and st["indexed"] == 4
+    finally:
+        client.post("/api/case/close")
 
 def test_a_video_is_searched_by_its_frames_and_found_by_them(indexed):
     """A video's thumbnail is indexed like a picture, and a video search also checks
