@@ -2844,7 +2844,7 @@ async function refreshContentInfo() {
   $("#btnContentIndex").style.display = st.model ? "" : "none";
   $("#contentInfo").textContent = !st.model
     ? "Similar content (other photos of the same person, place or object) needs the DINOv2-small model file, imported once. See Help."
-    : !st.indexed ? `Content index not built: ${st.indexable.toLocaleString()} images and videos (about 25 a second).`
+    : !st.indexed ? `Content index not built: ${st.indexable.toLocaleString()} images and videos (about 25 a second; icons and exact copies are skipped).`
     : `Content index: ${st.indexed.toLocaleString()}` + (todo ? `, ${todo.toLocaleString()} newer not indexed.` : ".");
   $("#btnContentIndex").textContent = !st.indexed ? "Build content index" : todo ? `Index ${todo.toLocaleString()} new files` : "Content index is up to date";
   $("#btnContentIndex").disabled = !!st.indexed && !todo;

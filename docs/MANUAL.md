@@ -501,8 +501,10 @@ from grouping because their perceptual hashes are meaningless. "Find similar"
 
 ### Find similar: copies of a picture
 
-With the **Find-similar index** built (**Duplicates → Build Find-similar index**),
-right-click → **Find similar** on an image lists its copies: the same picture
+Processing builds the **Find-similar index** as its last stage, so right-click →
+**Find similar** works as soon as a case is processed; a case processed by an older
+version builds it once with **Duplicates → Build Find-similar index**. Find similar on
+an image then lists its copies: the same picture
 resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
 watermarked or pasted into a screenshot. Each result's badge says how it was
 confirmed: **N pts** is the number of points that line up with the searched
@@ -542,9 +544,16 @@ folder, and never goes online.
   (88,532,934 bytes)
 * SHA-256: `f22797eabf810a75e41de68d378541ebea372122b25c4ce3ef25ff618250c20a`
 
-Then **Build content index**. It reads the thumbnails, not the evidence; it can be
-stopped and picks up where it left off. It is slow: about 25 images a second on an
-8-core laptop, so about 40 minutes for 57,000 images.
+Once the model is imported, processing builds the content index too, after the copy
+index; for a case processed before, **Build content index** does it once. It reads the
+thumbnails, not the evidence, and can be stopped and picks up where it left off. Each
+picture is described once however many exact copies of it the case holds, pictures
+under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
+applications' own artwork comes last, so a search over your material works early. The
+model runs at about 25 images a second on an 8-core laptop; on a Windows laptop case of
+57,406 images this left 4,975 to describe, which took 4 minutes 16 seconds (all of them
+would have taken about 40 minutes), and on two phone cases it left 15,346 of 27,188 and
+19,888 of 33,109.
 
 Measured on a real laptop case, 93 images in 9 hand-labeled groups among 5,000 other
 images of the case: the other members of each group came first for the chair (all 10

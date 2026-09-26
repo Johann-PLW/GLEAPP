@@ -587,6 +587,7 @@ def process(
     progress=None,
     stage_cb=None,
     reason: str = "",   # why this run happened, for the audit log - see PROCESS_REASONS
+    similar: bool = True,
 ) -> RunStats:
     stats = RunStats()
 
@@ -698,6 +699,17 @@ def process(
         case.db.refresh_group_heads()
     except sqlite3.Error:
         traceback.print_exc()   # the gallery recomputes it on demand anyway
+
+    # Find similar's two indexes, built now so a right-click works as soon as processing
+    # ends. Both add only what is not indexed yet; the content one needs the model file,
+    # and without it the gallery offers the import later.
+    if similar:
+        from . import content, simindex
+        run_stage("similar_copies", "Indexing for Find similar (copies)…",
+                  lambda: simindex.build_index(case, progress=progress))
+        if content.model_ready():
+            run_stage("similar_content", "Indexing for Find similar (content)…",
+                      lambda: content.build_index(case, progress=progress))
 
     # screening ran inline with processing (screen=True) - record it so the UI
     # doesn't keep offering "Run screening" for a collection that's already done

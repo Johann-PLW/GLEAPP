@@ -94,7 +94,30 @@ def _ensure(conn) -> None:
     conn.commit()
 
 
-_INDEXABLE = "kind IN ('image', 'video') AND thumb IS NOT NULL"
+MIN_SIDE = 128          # smaller pictures (icons, cursors, buttons) are not described
+_INDEXABLE = ("kind IN ('image', 'video') AND thumb IS NOT NULL "
+              f"AND MAX(COALESCE(width, 0), COALESCE(height, 0)) >= {MIN_SIDE}")
+# Folders that hold the operating system's and applications' own artwork. Their images
+# are described last, so a search over the examiner's likely material works early.
+_SYSTEM_PATH = ("(LOWER(COALESCE(orig_path, path)) LIKE '%/windows/%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%/program files%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%/programdata/%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%/system/library/%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%/applications/%.app/%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%\\windows\\%' "
+                "OR LOWER(COALESCE(orig_path, path)) LIKE '%\\program files%')")
+
+
+def _todo_sql() -> str:
+    """One row per picture still to describe: exact duplicates share one description
+    (the group's lowest id), icons under MIN_SIDE are skipped, and the examiner's likely
+    material comes before the system's and applications' own artwork, larger first.
+
+    Measured on four real cases: skipping duplicates and icons left 4,975 of 57,406 images
+    on a Windows laptop (about 40 minutes of model time down to about 3.5), 7,270 of 24,320
+    on another laptop, 15,346 of 27,188 and 19,888 of 33,109 on two phones."""
+    return (f"SELECT MIN(id) AS id FROM files WHERE {_INDEXABLE} "
+            "GROUP BY COALESCE(stack_id, id)")
 
 
 def status(case) -> dict:
@@ -102,7 +125,7 @@ def status(case) -> dict:
         _ensure(case.db.conn)
         q = lambda sql: case.db.conn.execute(sql).fetchone()[0]
         return {"model": model_ready(), "indexed": q("SELECT COUNT(*) FROM content_vecs"),
-                "indexable": q(f"SELECT COUNT(*) FROM files WHERE {_INDEXABLE}")}
+                "indexable": q(f"SELECT COUNT(*) FROM ({_todo_sql()})")}
 
 
 # ---- vectors ----------------------------------------------------------------------------
@@ -133,8 +156,10 @@ def build_index(case, *, workers: int = 6, progress=None) -> int:
     with case.db.lock:
         _ensure(case.db.conn)
         rows = case.db.conn.execute(
-            f"SELECT id, thumb FROM files WHERE {_INDEXABLE} "
-            "AND id NOT IN (SELECT file_id FROM content_vecs) ORDER BY id").fetchall()
+            f"SELECT id, thumb FROM files WHERE id IN ({_todo_sql()}) "
+            "AND id NOT IN (SELECT file_id FROM content_vecs) "
+            f"ORDER BY {_SYSTEM_PATH}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id"
+            ).fetchall()
     total = len(rows)
     local = threading.local()
 
@@ -189,7 +214,17 @@ def find_content(case, file_id: int, *, min_similarity: float = DEFAULT_MIN,
         ids, mat = _matrix(case)
     at = np.searchsorted(ids, file_id)
     if at >= len(ids) or ids[at] != file_id:
-        return []
+        # an exact duplicate that was not described itself uses its group's description
+        row = case.db.get_file(file_id)
+        others = [] if row is None or row["stack_id"] is None else [
+            r[0] for r in case.db.conn.execute(
+                "SELECT id FROM files WHERE stack_id = ? ORDER BY id", (row["stack_id"],))]
+        found = [np.searchsorted(ids, o) for o in others]
+        found = [k for k, o in zip(found, others) if k < len(ids) and ids[k] == o]
+        if not found:
+            return []
+        at = found[0]
+        exclude = set(exclude) | set(others)     # the group itself is listed as copies
     sims = mat @ mat[at]
     skip = set(exclude) | {file_id}
     out = []

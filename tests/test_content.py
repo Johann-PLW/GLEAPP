@@ -92,3 +92,36 @@ def test_find_similar_lists_copies_then_similar_content(case_with_vectors, monke
         assert [f["id"] for f in tighter["files"] if f["match"] == "content"] == [ids["near"]]
     finally:
         client.post("/api/case/close")
+
+
+def test_which_pictures_are_described_and_in_what_order(tmp_path):
+    """One per exact-duplicate group, none under MIN_SIDE, system artwork last."""
+    c = open_case(tmp_path / "case", create=True, examiner="t")
+    try:
+        up = lambda p, w, **kw: c.db.upsert_file(p, kind="image", thumb="t.jpg", width=w, height=w, **kw)
+        photo = up("/data/DCIM/a.jpg", 400)
+        dup = up("/data/Backup/a.jpg", 400)
+        icon = up("/data/icons/i.png", 32)
+        system = up("/Basic data partition/Windows/Web/wall.jpg", 1920)
+        big = up("/data/DCIM/b.jpg", 3000)
+        c.db.conn.execute("UPDATE files SET stack_id = ? WHERE id IN (?, ?)", (photo, photo, dup))
+        c.db.conn.commit()
+        with c.db.lock:
+            content._ensure(c.db.conn)  # pylint: disable=protected-access
+        todo = [r[0] for r in c.db.conn.execute(
+            f"SELECT id FROM files WHERE id IN ({content._todo_sql()}) "  # pylint: disable=protected-access
+            f"ORDER BY {content._SYSTEM_PATH}, MAX(COALESCE(width, 0), COALESCE(height, 0)) DESC, id")]  # pylint: disable=protected-access
+        assert todo == [big, photo, system]
+        assert icon not in todo and dup not in todo
+        assert content.status(c)["indexable"] == 3
+    finally:
+        c.close()
+
+
+def test_an_undescribed_duplicate_searches_with_its_group(case_with_vectors):
+    c, ids = case_with_vectors
+    dup = c.db.upsert_file("/x/query_again.jpg", kind="image", thumb="query.jpg", md5="query")
+    c.db.conn.execute("UPDATE files SET stack_id = ? WHERE id IN (?, ?)", (ids["query"], ids["query"], dup))
+    c.db.conn.commit()
+    hits = content.find_content(c, dup, min_similarity=0.5)
+    assert [h["id"] for h in hits] == [ids["near"], ids["far"]]

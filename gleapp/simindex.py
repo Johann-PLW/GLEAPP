@@ -83,7 +83,8 @@ def status(case: Case) -> dict:
         _ensure(case.db.conn)
         q = lambda sql: case.db.conn.execute(sql).fetchone()[0]
         return {"indexed": q("SELECT COUNT(*) FROM sim_items"),
-                "indexable": q(f"SELECT COUNT(*) FROM files WHERE {_indexable_sql()}"),
+                "indexable": q(f"SELECT COUNT(DISTINCT COALESCE(stack_id, id)) FROM files "
+                               f"WHERE {_indexable_sql()}"),
                 "vocab": bool(q("SELECT COUNT(*) FROM sim_vocab"))}
 
 
@@ -219,8 +220,12 @@ def build_index(case: Case, *, workers: int = 6, progress=None, stage_cb=None) -
     with case.db.lock:
         _ensure(conn)
         done = {r[0] for r in conn.execute("SELECT file_id FROM sim_items")}
+        # exact duplicates share one entry (the group's lowest id): the same bytes make
+        # the same thumbnail, and Find similar lists a file's exact duplicates anyway
+        heads = {r[0] for r in conn.execute(
+            f"SELECT MIN(id) FROM files WHERE {_indexable_sql()} GROUP BY COALESCE(stack_id, id)")}
         rows = [(r["id"], r["thumb"]) for r in case.db.iter_files(_indexable_sql())
-                if r["id"] not in done]
+                if r["id"] in heads and r["id"] not in done]
         vocab = _vocab(conn)
     if not rows:
         return 0
