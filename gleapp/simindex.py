@@ -399,7 +399,7 @@ def _passes(r: tuple) -> bool:
 SAME_FRAME = 20          # key frames this close (bits of 256) to one already searched are skipped
 
 
-def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
+def find_copies(case: Case, file_id: int, *, limit: int = 300, first_frame_only: bool = False) -> list[dict]:
     """Copies of ``file_id``, strongest first; the file itself first. Each result
     carries ``points`` (aligned points; None when confirmed by fingerprint) and
     ``similarity``, a display figure: how much of the picture the match covers. A video
@@ -419,7 +419,7 @@ def find_copies(case: Case, file_id: int, *, limit: int = 300) -> list[dict]:
     if len(ids) == 0:
         return out
     frames = [target["thumb"]]
-    if target["kind"] == "video":
+    if target["kind"] == "video" and not first_frame_only:
         frames += [k["thumb"] for k in case.db.keyframes_for(file_id) if k["thumb"]]
     # stage 1 for every distinct frame; which frames shortlisted which candidate
     by_cand: dict[int, list] = {}

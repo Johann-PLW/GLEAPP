@@ -1281,15 +1281,19 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         target = case.db.get_file(file_id)
         if target is None:
             abort(404)
+        # a video is answered in two steps: ?quick=1 searches its thumbnail only (about
+        # half a second), and the page then asks again for all its key frames, which is
+        # the full answer; a picture has one frame, so both are the same
+        quick = request.args.get("quick") == "1" and target["kind"] == "video"
         with indexer.searching():             # the background indexer stands aside
-            return _similar(case, target, file_id, thr, pct)
+            return _similar(case, target, file_id, thr, pct, quick)
 
-    def _similar(case, target, file_id, thr, pct):
+    def _similar(case, target, file_id, thr, pct, quick=False):
         from .. import content, simindex
         st = simindex.status(case)
         engine = "hash"
         if st["vocab"] and st["indexed"]:
-            copies = simindex.find_copies(case, file_id, limit=300)
+            copies = simindex.find_copies(case, file_id, limit=300, first_frame_only=quick)
             engine = "index"
         else:
             # no copy index yet: the old perceptual-hash check, which is not reliable
@@ -1313,6 +1317,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
         return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
+                        "more": bool(quick and engine == "index"),
                         "unindexed": max(0, st["indexable"] - st["indexed"]),
                         "copies": sum(1 for h in copies if h.get("match") == "copy"),
                         "quick": sum(1 for h in copies if h.get("match") == "hash"),

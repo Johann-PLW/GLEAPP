@@ -226,3 +226,33 @@ def test_the_background_indexer_waits_for_a_job_then_finishes(tmp_path):
         ix.stop()
         assert not ix.status["running"]
         c.close()
+
+
+def test_a_video_is_answered_in_two_steps_with_the_same_full_answer(indexed):
+    """?quick=1 searches the video's thumbnail only and says more is coming; the full
+    answer adds what its key frames find."""
+    from gleapp.web.app import create_app
+    c, _ = indexed
+    frame = _scene(91)
+    vid = c.db.upsert_file("/evidence/clip2.mp4", kind="video", thumb="clip2_poster.jpg", md5="clip2")
+    poster = _scene(92)
+    poster.thumbnail((320, 320))
+    poster.save(c.thumb_dir / "clip2_poster.jpg", quality=90)
+    t = frame.copy()
+    t.thumbnail((320, 320))
+    t.save(c.thumb_dir / "clip2_kf.jpg", quality=90)
+    c.db.add_keyframe(vid, 2.0, "clip2_kf.jpg", None)
+    still = _add(c, "still_from_clip2", frame.resize((600, 433)))
+    c.db.conn.commit()
+    simindex.build_index(c, workers=2)
+    client = create_app(str(c.root)).test_client()
+    try:
+        quick = client.get(f"/api/similar/{vid}?quick=1").get_json()
+        full = client.get(f"/api/similar/{vid}").get_json()
+        assert quick["more"] and not full["more"]
+        assert still not in {f["id"] for f in quick["files"]}
+        assert still in {f["id"] for f in full["files"]}
+        pic = client.get(f"/api/similar/{still}?quick=1").get_json()
+        assert not pic["more"]                     # a picture is answered in one step
+    finally:
+        client.post("/api/case/close")

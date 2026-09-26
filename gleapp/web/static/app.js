@@ -346,11 +346,23 @@ function gotoPage(n) {
 let similarOfId = null;
 async function showSimilar(id) {
   const seq = ++loadSeq;
-  const d = await api(`/api/similar/${id}?threshold=14&min=${+$("#simMin").value || 70}`);
+  const q = `/api/similar/${id}?threshold=14&min=${+$("#simMin").value || 70}`;
+  // a video comes back in two steps: its thumbnail's results at once, then the full
+  // answer with every key frame; a picture comes back in one
+  const d = await api(q + "&quick=1");
   if (seq !== loadSeq) return;
   if (d.error) return toast(d.message || "Find similar failed");
   rememberPlace(id);
   similarOfId = id;
+  showSimilarResult(id, d);
+  if (!d.more) return;
+  const full = await api(q);
+  if (seq !== loadSeq || full.error) return;      // the examiner moved on, or it failed
+  const keep = { t: $("#grid").scrollTop, m: $("#main").scrollTop };
+  showSimilarResult(id, full);
+  $("#grid").scrollTop = keep.t; $("#main").scrollTop = keep.m;
+}
+function showSimilarResult(id, d) {
   state.similarOf = id;
   state.files = d.files;
   renderFiles(d.files);
@@ -364,6 +376,7 @@ async function showSimilar(id) {
        ? " (the Find-similar indexes are not built for this case: Find similar → Build Find-similar indexes in the left pane)"
        : idx ? ` (still indexing: copies ${idx.copies}, similar content ${idx.content}; results may grow)`
        : d.unindexed ? ` (${d.unindexed.toLocaleString()} newer files not indexed yet)` : "");
+  if (d.more) $("#simId").textContent += " (searching the video's key frames too…)";
   $("#simCtl").style.display = d.content_on ? "inline-flex" : "none";
   updateStat();
 }
