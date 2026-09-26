@@ -69,7 +69,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, NamedTuple
 from urllib.parse import urljoin
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 # ---- names ------------------------------------------------------------------
 
@@ -137,18 +137,23 @@ def parse_piece_name(name: str) -> PieceName | None:
 
 
 def cache_root(logical: str) -> str:
-    """The cache folder a file belongs to: a v3 piece sits in ``<cache>/<0-9>/``; the
-    index, the uid file and older pieces sit in ``<cache>`` itself."""
+    """The cache folder a file belongs to. A v3 piece sits in ``<cache>/<0-9>/``; the
+    index, the uid file and ExoPlayer's own older pieces sit in ``<cache>`` itself.
+    A piece of any version in a folder named only by digits belongs to the folder
+    above it: Instagram writes v2 pieces in subfolders 0 to 28 of its videocache
+    folder, one item's pieces in several of them. On the Android images tested, all
+    1,461 older pieces in a digit-named folder were Instagram's, and no v3 piece sat
+    in a folder named by more than one digit."""
     logical = str(logical).replace("\\", "/")
     parent = PurePosixPath(logical).parent
-    if PIECE_V3.match(basename(logical)) and re.fullmatch(r"\d", parent.name):
+    if is_piece_name(logical) and re.fullmatch(r"\d+", parent.name):
         parent = parent.parent
     return str(parent)
 
 
 def app_folder(root: str) -> str | None:
     """The Android package whose folder holds the cache, read from the path."""
-    m = re.search(r"(?:^|/)(?:data/data|data/user(?:_de)?/\d+|Android/data)/([^/]+)/",
+    m = re.search(r"(?:^|/)(?:data/data|data/user(?:_de)?/\d+|Android/data|userdata/data)/([^/]+)/",
                   str(root).replace("\\", "/") + "/")
     return m.group(1) if m else None
 
@@ -519,6 +524,54 @@ def file_handlers(path) -> list[str]:
     except (OSError, struct.error):
         pass
     return []
+
+
+# Box types that can open an ISO-BMFF file (ISO/IEC 14496-12 top-level boxes).
+_FIRST_BOXES = {b"ftyp", b"styp", b"moov", b"moof", b"mdat", b"free", b"skip", b"wide",
+                b"sidx", b"pdin", b"meta", b"uuid", b"emsg", b"prft"}
+
+
+def mp4_layout(path) -> dict | None:
+    """The top-level shape of an ISO-BMFF (MP4) file, read from its box headers only:
+    ``moov`` (a movie header is present), ``mvex`` (that header declares fragments, as
+    a DASH initialization segment does), ``moof`` (a fragment follows) and ``cut`` (a
+    top-level box runs past the end of the file, so the file stops inside it). None
+    when the file does not open with a top-level box type.
+
+    A ``moov`` with ``mvex`` and no ``moof`` is an initialization segment on its own:
+    it describes a track and carries no samples, so nothing in it can play."""
+    out = {"moov": False, "mvex": False, "moof": False, "cut": False}
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, 2)
+            pos = 0
+            while pos + 8 <= size:
+                fh.seek(pos)
+                head = fh.read(16)
+                box, typ = struct.unpack(">I4s", head[:8])
+                hdr = 8
+                if box == 1 and len(head) == 16:
+                    box, hdr = struct.unpack(">Q", head[8:16])[0], 16
+                elif box == 0:
+                    box = size - pos
+                if pos == 0 and typ not in _FIRST_BOXES:
+                    return None
+                if box < hdr:
+                    return {**out, "cut": True}
+                if typ == b"moov":
+                    out["moov"] = True
+                    if box <= MAX_MOOV_BYTES:
+                        fh.seek(pos + hdr)
+                        body = fh.read(box - hdr)
+                        out["mvex"] = any(t == b"mvex" for t, _s, _e in _scan_boxes(body, 0, len(body)))
+                elif typ == b"moof":
+                    out["moof"] = True
+                if pos + box > size:
+                    out["cut"] = True
+                pos += box
+    except (OSError, struct.error):
+        return None
+    return out
 
 
 def is_audio_stream(stream: dict) -> bool:
