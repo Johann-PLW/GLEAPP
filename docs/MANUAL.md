@@ -1702,8 +1702,11 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
   segments; qnxprobe imports it to open an `.E01`.
 - **[mediacarve](https://github.com/abrignoni/mediacarve)** scans unallocated
   (or whole-disk) space for image/video signatures when a carve is requested.
+- **[exoprobe](https://github.com/abrignoni/exoprobe)** reads the media caches
+  Android apps keep through ExoPlayer, joins each cached item's pieces and each
+  DASH stream's segments, and puts a video and its audio into one MP4.
 
-All three are MIT licensed, © Alexis Brignoni. GLEAPP's Android storage-view
+All four are MIT licensed, © Alexis Brignoni. GLEAPP's Android storage-view
 table (`gleapp/storage_views.py`), which knows that credential-encrypted,
 device-encrypted and shared storage never collapse together, is ported from
 **ALEAPP**'s `scripts/artifacts/storagePathViews.py` (also Alexis Brignoni,

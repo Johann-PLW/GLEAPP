@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from gleapp import exocache
+from gleapp.vendor import exoprobe
 from gleapp.case import Source, open_case
 from gleapp.pipeline import ingest_sources, process
 
@@ -108,7 +109,7 @@ def test_a_stream_is_its_init_and_media_segments_in_the_manifests_order(tmp_path
         assert got["video"] == row["orig_name"] and "not kept on its own" in track["label"]
         assert (got["video_segments"], track["segments"]) == ("3 of 3", "4 of 4")
         assert "lang" not in track                        # the fixture's manifest names none
-        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
+        assert exoprobe.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
     finally:
         case.close()
 
@@ -212,7 +213,7 @@ def test_two_audio_languages_both_go_in_the_first_as_the_default(tmp_path):
         (av,) = _combined(case)
         info = json.loads(av["cache_info"])
         assert [(t["lang"], t["segments"]) for t in info["audio_tracks"]] == [("en", "4 of 4"), ("es", "4 of 4")]
-        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun", "soun"]
+        assert exoprobe.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun", "soun"]
         text = exocache.describe(dict(av))
         assert "2 audio track(s)" in text
         assert "audio track 1: " in text and "language en (as the manifest gives it)" in text
@@ -230,7 +231,7 @@ def test_representations_reads_the_language_where_exoplayer_does():
            b'</Representation></AdaptationSet>'
            b'<AdaptationSet><Representation id="c"><BaseURL>c.mp4</BaseURL></Representation>'
            b'</AdaptationSet></Period></MPD>')
-    got = {r["id"]: r["lang"] for r in exocache.representations(mpd, BASE + "m.mpd")}
+    got = {r["id"]: r["lang"] for r in exoprobe.representations(mpd, BASE + "m.mpd")}
     assert got == {"a": "de", "b": "fr", "c": None}
 
 
@@ -272,15 +273,15 @@ def test_whole_file_streams_are_paired_by_their_manifest(tmp_path):
             # the manifest pairs them, so the video is also combined with its audio
             (av,) = _combined(case)
             assert json.loads(av["cache_info"])["video"] == rows["v"]["orig_name"]
-            assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
+            assert exoprobe.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
         finally:
             case.close()
 
 
 def test_track_handlers_reads_the_init_segment():
-    assert exocache.track_handlers((FIX / "init-0.mp4").read_bytes()) == ["vide"]
-    assert exocache.track_handlers((FIX / "init-1.mp4").read_bytes()) == ["soun"]
-    assert exocache.track_handlers(b"not a box") == []
+    assert exoprobe.track_handlers((FIX / "init-0.mp4").read_bytes()) == ["vide"]
+    assert exoprobe.track_handlers((FIX / "init-1.mp4").read_bytes()) == ["soun"]
+    assert exoprobe.track_handlers(b"not a box") == []
 
 
 def test_describe_a_stream(tmp_path):
@@ -359,7 +360,7 @@ def test_an_incomplete_whole_file_audio_is_left_out_and_the_rest_combined(tmp_pa
         (av,) = _combined(case)
         info = json.loads(av["cache_info"])
         assert [(t["lang"], t["bandwidth"]) for t in info["audio_tracks"]] == [("en", "32000")]
-        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
+        assert exoprobe.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
         (log,) = [r for r in case.db.iter_audit() if r["action"] == "rejoin-exoplayer-cache"]
         assert "1 audio left out" in log["detail"]
     finally:

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+
+from .vendor import exoprobe
 
 IMAGE_EXTS = {
     ".jpg", ".jpeg", ".jpe", ".png", ".gif", ".bmp", ".tif", ".tiff",
@@ -77,29 +78,12 @@ def is_search_index_name(name: str) -> bool:
     return name.replace("\\", "/").rsplit("/", 1)[-1].lower() in _SEARCH_INDEX_NAMES
 
 
-# ExoPlayer's media cache (see gleapp/exocache.py for the layout and its source). A
-# piece holds the middle of a video, so its bytes cannot say what it is, and the
-# first piece of an MP4 opens with a video header: these are decided by name and
-# kept as containers, whatever their content or extension would say.
-EXO_PIECE_V3 = re.compile(r"^(\d+)\.(\d+)\.(-?\d+)\.v3\.exo$")
-EXO_PIECE_V12 = re.compile(r"^(.+)\.(\d+)\.(-?\d+)\.v([12])\.exo$", re.DOTALL)
-EXO_UID = re.compile(r"^[0-9a-f]{1,16}\.uid$")
-EXO_INDEX_NAME = "cached_content_index.exi"
-EXO_DB_NAME = "exoplayer_internal.db"
-
-
-def is_exoplayer_piece_name(name: str) -> bool:
-    b = name.replace("\\", "/").rsplit("/", 1)[-1]
-    return bool(EXO_PIECE_V3.match(b) or EXO_PIECE_V12.match(b))
-
-
-def is_exoplayer_cache_name(name: str) -> bool:
-    """True for a file an ExoPlayer cache writes: a piece, the index file or its
-    backup, a ``.uid`` file, or the default index database and its journal."""
-    b = name.replace("\\", "/").rsplit("/", 1)[-1]
-    return (is_exoplayer_piece_name(b) or b in (EXO_INDEX_NAME, EXO_INDEX_NAME + ".bak")
-            or b in (EXO_DB_NAME, EXO_DB_NAME + "-wal", EXO_DB_NAME + "-journal")
-            or bool(EXO_UID.match(b)))
+# ExoPlayer's media cache (see gleapp/exocache.py, and the vendored exoprobe for the
+# layout and its source). A piece holds the middle of a video, so its bytes cannot say
+# what it is, and the first piece of an MP4 opens with a video header: these are
+# decided by name and kept as containers, whatever their content or extension would say.
+is_exoplayer_piece_name = exoprobe.is_piece_name
+is_exoplayer_cache_name = exoprobe.is_cache_name
 
 
 def is_appledouble(name: str, head: bytes) -> bool:

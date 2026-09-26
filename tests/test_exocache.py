@@ -13,6 +13,7 @@ import zipfile
 import pytest
 
 from gleapp import exocache, nested
+from gleapp.vendor import exoprobe
 from gleapp.case import Source, open_case
 from gleapp.ingest import is_exoplayer_cache_name
 from gleapp.pipeline import ingest_sources
@@ -271,9 +272,9 @@ def test_parse_index_file_refuses_a_file_that_does_not_end_where_it_should():
 
 
 def test_unescape_key_follows_util_unescapefilename():
-    assert exocache.unescape_key("a%3ab%2fc%25") == "a:b/c%"
-    assert exocache.unescape_key("plain") == "plain"
-    assert exocache.unescape_key("bad%zz") is None
+    assert exoprobe.unescape_key("a%3ab%2fc%25") == "a:b/c%"
+    assert exoprobe.unescape_key("plain") == "plain"
+    assert exoprobe.unescape_key("bad%zz") is None
 
 
 def test_describe_says_what_was_joined(tmp_path):

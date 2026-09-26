@@ -48,6 +48,7 @@ LICENCES = {
     "gleapp/vendor/LICENSE-qnxprobe": {"MIT"},
     "gleapp/vendor/LICENSE-ewfprobe": {"MIT"},
     "gleapp/vendor/LICENSE-mediacarve": {"MIT"},
+    "gleapp/vendor/LICENSE-exoprobe": {"MIT"},
     # Apache 1.1 with Impacket's names in it; Fedora's python-impacket package labels
     # the same text Apache-1.1.
     "gleapp/vendor/LICENSE-impacket": {"Apache-1.1"},
