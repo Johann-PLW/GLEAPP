@@ -132,6 +132,23 @@ jobs:
             /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" dist/GLEAPP.app/Contents/Info.plist
           fi
 
+      # Windows only. --selfcheck imports the window's backend; this opens the window
+      # itself from the marked build, the way a user starts it: pythonnet loading .NET,
+      # the WebView2 control, and Flask serving the launcher into it, then closes it
+      # (GLEAPP_DESKTOP_SMOKE, see gleapp/desktop.py). The runner image ships Edge but
+      # not the WebView2 runtime. An error here opens the windowed build's traceback
+      # dialog and waits, so the step's timeout is what fails it.
+      - name: Windows, open the desktop window from the marked build
+        if: runner.os == 'Windows'
+        timeout-minutes: 6
+        shell: bash
+        env:
+          GLEAPP_DESKTOP_SMOKE: "1"
+        run: |
+          choco install webview2-runtime --no-progress -y
+          dist/GLEAPP/GLEAPP.exe
+          echo "window opened, loaded and closed"
+
       - name: Phase 2, the disk image (macOS only)
         if: runner.os == 'macOS'
         shell: bash

@@ -23,6 +23,11 @@ if __name__ == "__main__":
         from gleapp import __version__
         print(f"GLEAPP {__version__}")
         sys.exit(0)
+    # Before anything loads pythonnet: a portable build extracted from a downloaded zip
+    # carries the internet mark on every DLL, and .NET Framework refuses to load them.
+    # Workers never load .NET, so they skip the folder walk. See gleapp/_zone_marks.py.
+    from gleapp._zone_marks import clear_frozen_bundle
+    clear_frozen_bundle()
     # --selfcheck imports what the desktop shell imports, the native stack included,
     # and exits without opening a window. --version answers above this line and
     # --texworker only reaches Pillow, so neither of them loads cv2: the macOS build of
@@ -43,7 +48,7 @@ if __name__ == "__main__":
         for name in names:
             try:
                 importlib.import_module(name)
-            except Exception:  # noqa: BLE001
+            except Exception:  # pylint: disable=broad-exception-caught
                 traceback.print_exc()
                 print(f"selfcheck failed importing {name}", file=sys.stderr)
                 sys.exit(1)

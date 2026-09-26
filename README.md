@@ -68,6 +68,13 @@ Right-click the app, choose Open, then confirm.
 On Windows, SmartScreen says "Windows protected your PC".
 Choose More info, then Run anyway.
 
+If the portable build stops at start with "Failed to resolve Python.Runtime.Loader.Initialize",
+Windows has marked the extracted files as downloaded from the internet and .NET will not load
+them. Builds after v2026.5.1 clear that mark themselves. On v2026.5.1 or earlier, or when the
+folder is read-only, delete the extracted folder, right-click the zip, choose Properties, tick
+Unblock, click OK, and extract it again. Or unblock the extracted folder in PowerShell:
+`Get-ChildItem -Recurse <folder> | Unblock-File`.
+
 Signing is not wired up yet. Running from source, below, needs no warning cleared.
 
 Every release carries a `SHA256SUMS.txt`. To check what you downloaded:
