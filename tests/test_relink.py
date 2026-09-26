@@ -1,6 +1,7 @@
 """Relinking a folder source (a folder ingest or a Project VIC import) that moved."""
 
 import shutil
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -100,3 +101,50 @@ def test_relink_folder_endpoint_runs_as_a_job(tmp_path):
         time.sleep(0.05)
     assert job["stage"] == "done", job
     assert client.get("/api/context").get_json()["folder_sources"][0]["status"] == "ok"
+
+
+def _record_paths_as(case, ev, make):
+    """Rewrite each file's recorded path as another machine would have written it."""
+    with case.db.lock:
+        for r in list(case.db.conn.execute("SELECT id, path FROM files")):
+            rel = Path(r["path"]).relative_to(ev).as_posix()
+            case.db.conn.execute("UPDATE files SET path = ? WHERE id = ?", (make(rel), r["id"]))
+        case.db.conn.commit()
+
+
+@pytest.mark.parametrize("make, root", [
+    # a case made on Windows, reattached here: on macOS and Linux os.path reads each
+    # of these as one file name, which is what refused a real Project VIC relink
+    (lambda rel: "C:\\Users\\h\\Cases\\VIC Files\\" + rel.replace("/", "\\"),
+     "C:\\Users\\h\\Cases\\VIC Files"),
+    (lambda rel: "\\\\server\\share\\VIC Files\\" + rel.replace("/", "\\"),
+     "\\\\server\\share\\VIC Files"),
+    # and the other way round: a case made on macOS
+    (lambda rel: "/Users/h/Cases/VIC Files/" + rel, None),
+])
+def test_a_case_made_on_another_system_is_relinked_here(tmp_path, make, root):
+    case, ev = _folder_case(tmp_path)
+    try:
+        _record_paths_as(case, ev, make)
+        status = relink.folder_status(case)
+        assert status[0]["status"] == "missing"
+        if root is not None:
+            assert status[0]["root"] == root
+
+        r = relink.relink_folder(case, "ev", ev)
+        assert r["files"] == 3
+        assert _paths(case) == sorted(str(ev / p) for p in ("a.png", "b.png", "sub/c.png"))
+        assert relink.folder_status(case)[0]["status"] == "ok"
+    finally:
+        case.close()
+
+
+def test_a_windows_recorded_case_still_refuses_a_folder_missing_a_file(tmp_path):
+    case, ev = _folder_case(tmp_path)
+    try:
+        _record_paths_as(case, ev, lambda rel: "D:\\VIC\\" + rel.replace("/", "\\"))
+        (ev / "sub" / "c.png").unlink()
+        with pytest.raises(ValueError, match=r"missing: sub\\c\.png"):
+            relink.relink_folder(case, "ev", ev)
+    finally:
+        case.close()

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 from pathlib import Path
 
@@ -36,15 +37,32 @@ def _source_rows(case, name: str) -> list:
         if r["path"] and not str(r["path"]).lower().startswith(inside)]
 
 
+def _is_windows_path(p: str) -> bool:
+    """A drive path (``C:\\...``) or a UNC path (``\\\\server\\share``)."""
+    return (len(p) > 2 and p[0].isalpha() and p[1] == ":" and p[2] in "\\/") \
+        or p.startswith("\\\\")
+
+
+def _flavour(paths: list[str]):
+    """The path module the recorded paths were written in. A case made on Windows
+    records ``C:\\...`` paths, and on macOS or Linux ``os.path`` reads each of them as
+    one file name with no folders in it, so they are handled with ``ntpath`` wherever
+    the case is opened."""
+    return ntpath if paths and all(_is_windows_path(p) for p in paths) else os.path
+
+
 def _root(paths: list[str]) -> str | None:
     """The folder every path sits under, or None if they share none (two drives)."""
     if not paths:
         return None
+    mod = _flavour(paths)
     try:
-        root = os.path.commonpath(paths)
+        root = mod.commonpath(paths)
     except ValueError:
         return None
-    return str(Path(root).parent) if len(paths) == 1 or root in paths else root
+    if not root:
+        return None
+    return mod.dirname(root) if len(paths) == 1 or root in paths else root
 
 
 def folder_status(case) -> list[dict]:
@@ -92,12 +110,14 @@ def relink_folder(case, name: str, new_root, progress=None) -> dict:
     if old_root is None:
         raise ValueError(f"the files of {name!r} do not share one folder")
 
+    mod = _flavour([r["path"] for r in rows])
     moves, problems = [], []
     for i, r in enumerate(rows):
         if progress and i % 200 == 0:
             progress(i, len(rows))
-        rel = os.path.relpath(r["path"], old_root)
-        new = new_root / rel
+        rel = mod.relpath(r["path"], old_root)
+        # split in the recorded flavour, rejoin in this machine's
+        new = new_root.joinpath(*rel.split(mod.sep))
         if not new.is_file():
             problems.append(f"missing: {rel}")
         elif r["size"] is not None and new.stat().st_size != r["size"]:
