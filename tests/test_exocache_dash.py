@@ -97,8 +97,16 @@ def test_a_stream_is_its_init_and_media_segments_in_the_manifests_order(tmp_path
         assert info["key"] == BASE + "stream.mpd"
         assert info["representation"]["codecs"] == "avc1.64000a"
         assert "other_track" not in info                  # the audio is not in the case
-        # the segments the stream holds are not registered again on their own
-        assert len(case.db.iter_files("cache_info IS NOT NULL", ())) == 1
+        # the segments the stream holds are not registered again on their own; the
+        # only other row is the video combined with its audio
+        rows = case.db.iter_files("cache_info IS NOT NULL", ())
+        assert len(rows) == 2
+        (av,) = [r for r in rows if json.loads(r["cache_info"]).get("combined")]
+        got = json.loads(av["cache_info"])
+        assert (av["kind"], got["layout"]) == ("video", "fragmented")
+        assert got["video"] == row["orig_name"] and "not kept on its own" in got["audio"]
+        assert (got["video_segments"], got["audio_segments"]) == ("3 of 3", "4 of 4")
+        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
     finally:
         case.close()
 
@@ -159,6 +167,44 @@ def test_the_joined_stream_plays(tmp_path):
         case.close()
 
 
+def _combined(case):
+    return [r for r in case.db.iter_files("cache_info IS NOT NULL", ())
+            if json.loads(r["cache_info"]).get("combined")]
+
+
+def test_the_combined_file_plays_with_both_tracks(tmp_path):
+    case = _ingest(tmp_path, _fixture(), include_other=True)
+    try:
+        (av,) = _combined(case)
+        assert json.loads(av["cache_info"])["audio"] == _streams(case)["audio"]["orig_name"]
+        process(case, workers=1, keyframes=2, screen=False)
+        row = case.db.get_file(av["id"])
+        assert row["thumb"] and not row["error"]
+        assert row["duration"] == pytest.approx(3.0, abs=0.2)
+    finally:
+        case.close()
+
+
+def test_two_audio_streams_are_not_guessed_between(tmp_path):
+    """A second, different audio stream (a second language, say): which one belongs
+    with the video would be a guess, so neither is combined with it."""
+    mpd = (FIX / "stream.mpd").read_text()
+    start = mpd.index('<AdaptationSet id="1"')
+    block = mpd[start:mpd.index("</AdaptationSet>", start) + len("</AdaptationSet>")]
+    other = (block.replace('AdaptationSet id="1"', 'AdaptationSet id="2"')
+             .replace('Representation id="1"', 'Representation id="9"')
+             .replace("init-1.mp4", "init-9.mp4").replace("seg-1-", "seg-9-"))
+    extra = {"stream.mpd": mpd.replace("</Period>", other + "</Period>").encode()}
+    for n in AUDIO:
+        extra[n.replace("init-1", "init-9").replace("seg-1-", "seg-9-")] = (FIX / n).read_bytes()
+    case = _ingest(tmp_path, _fixture(extra=extra))
+    try:
+        assert not _combined(case)
+        assert set(_streams(case)) == {"video"}
+    finally:
+        case.close()
+
+
 def test_a_second_pass_adds_nothing(tmp_path):
     case = _ingest(tmp_path, _fixture(), include_other=True)
     try:
@@ -194,6 +240,10 @@ def test_whole_file_streams_are_paired_by_their_manifest(tmp_path):
                 assert listed == [rows["a"]["orig_name"]]
             else:
                 assert set(rows) == {"v"} and listed == []
+            # the manifest pairs them, so the video is also combined with its audio
+            (av,) = _combined(case)
+            assert json.loads(av["cache_info"])["video"] == rows["v"]["orig_name"]
+            assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
         finally:
             case.close()
 
@@ -211,5 +261,45 @@ def test_describe_a_stream(tmp_path):
         assert "DASH stream" in text and "com.example.maps" in text
         assert "2 of 3 listed media segments joined" in text and "partial" in text
         assert "160x120" in text and BASE + "stream.mpd" in text
+    finally:
+        case.close()
+
+
+def test_describe_a_combined_file(tmp_path):
+    case = _ingest(tmp_path, _fixture())
+    try:
+        (av,) = _combined(case)
+        text = exocache.describe(dict(av))
+        assert "DASH video and audio" in text and "no sample re-encoded" in text
+        assert "video segments 3 of 3, audio segments 4 of 4" in text
+    finally:
+        case.close()
+
+
+def test_a_whole_file_video_cut_short_is_not_combined(tmp_path):
+    """Reddit's whole-file streams can be cached only in part; combining one that
+    stops at a gap would add a second broken file, so it is left alone."""
+    video = b"".join((FIX / n).read_bytes() for n in VIDEO)
+    audio = b"".join((FIX / n).read_bytes() for n in AUDIO)
+    mpd = (b'<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+           b'<AdaptationSet><Representation id="v" mimeType="video/mp4"><BaseURL>v.mp4</BaseURL>'
+           b'<SegmentBase indexRange="0-1"/></Representation></AdaptationSet><AdaptationSet>'
+           b'<Representation id="a" mimeType="audio/mp4"><BaseURL>a.mp4</BaseURL>'
+           b'<SegmentBase indexRange="0-1"/></Representation></AdaptationSet></Period></MPD>')
+    src = tmp_path / "ext"
+    files = {"stream.mpd": mpd, "v.mp4": video, "a.mp4": audio}
+    cache = _cache(files)
+    # the index records the video's full length, but only its init segment and first
+    # media segment are cached: a clean fragment boundary, which would mux, and short
+    cut = len((FIX / VIDEO[0]).read_bytes()) + len((FIX / VIDEO[1]).read_bytes())
+    vpiece = next(k for k, v in cache.items() if v == video)
+    cache[vpiece] = video[:cut]
+    for name, data in cache.items():
+        (src / name).parent.mkdir(parents=True, exist_ok=True)
+        (src / name).write_bytes(data)
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    try:
+        ingest_sources(case, [Source(name="ext", path=str(src))])
+        assert not _combined(case)
     finally:
         case.close()

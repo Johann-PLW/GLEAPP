@@ -217,6 +217,15 @@ from its init segment's `hdlr`, not from a manifest attribute, and processing le
 audio (`exocache.is_audio_item`): its brand is a video one, so the byte sniff would
 otherwise call it a video with no frames.
 
+A video and its audio from one manifest are also put in one file by `gleapp/mp4mux.py`,
+which rewrites the track boxes and copies every sample unchanged, for both fragmented
+and progressive MP4. Its oracle is ffmpeg's per-frame MD5 of each stream, which must
+equal the separate inputs'. That test runs only where ffmpeg is installed, so the tests
+that always run check the output's own boxes instead (both tracks declared, every input
+`mdat` present unchanged, every rewritten chunk offset pointing at the bytes it pointed at).
+Only a manifest with exactly one cached audio stream is combined: with two, the pairing
+would be a guess.
+
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 
 A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered segments
