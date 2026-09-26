@@ -284,7 +284,7 @@ def test_describe_says_what_was_joined(tmp_path):
         text = exocache.describe(dict(row))
         assert "com.example.player" in text and "https://cdn.example.net/v/2.mp4" in text
         assert "1 of 2 pieces joined" in text and "stops at a gap at byte 1,000" in text
-        assert "last written or read 2023-11-14 22:13:20 UTC" in text
+        assert "time in the piece names 2023-11-14 22:13:20 UTC" in text
         assert exocache.describe({"cache_info": None}) == ""
     finally:
         case.close()

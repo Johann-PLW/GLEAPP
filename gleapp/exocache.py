@@ -563,10 +563,13 @@ def describe(d) -> str:
     """``cache_info`` as one line a person reads. Empty for any other file.
 
     The HTML report, the CSV and JSON exports and the LAVA export all take this
-    wording, so it cannot drift between them. The last-touched time is the
-    device's clock (``System.currentTimeMillis()`` when ExoPlayer wrote the piece
-    or, where the app asks for it, read it again; ``SimpleCache.startFile`` and
-    ``touchSpan``), shown in UTC.
+    wording, so it cannot drift between them. The time is the latest one in the
+    names of the pieces used, the device's clock shown in UTC
+    (``System.currentTimeMillis()``): when ExoPlayer wrote the piece, or read it
+    again where the app's evictor asks for touches and the cache keeps no file
+    index. A cache with an ``ExoPlayerCacheFileMetadata`` table records later reads
+    there and leaves the name alone (``SimpleCache.startFile`` and ``touchSpan``),
+    so the name's time is not a statement about the last read.
     """
     raw = d.get("cache_info") if hasattr(d, "get") else None
     if not raw:
@@ -651,5 +654,5 @@ def _with_touch(parts: list, i: dict) -> str:
     if isinstance(ms, int) and ms > 0:
         with contextlib.suppress(OverflowError, OSError, ValueError):
             t = datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc)
-            parts.append(f"last written or read {t:%Y-%m-%d %H:%M:%S} UTC (device clock)")
+            parts.append(f"time in the piece names {t:%Y-%m-%d %H:%M:%S} UTC (device clock)")
     return "; ".join(p for p in parts if p)
