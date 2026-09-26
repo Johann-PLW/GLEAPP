@@ -225,7 +225,9 @@ def _process_one_at(thumb_dir, row, local: str, *, force: bool, keyframes: int,
         # A Project VIC import (or an app image cache) can hand us an
         # extension-less file with a vague MIME (image/unknown) as kind=other.
         # Content-sniff it by magic bytes so real images/videos still render.
-        if kind == "other":
+        # A joined ExoPlayer audio stream starts like any fragmented MP4 and would
+        # be called a video here; its cache_info records what its tracks are.
+        if kind == "other" and not exocache.is_audio_item(row):
             sniffed = sniff_kind(decode_path)
             if sniffed in ("image", "video"):
                 kind = sniffed

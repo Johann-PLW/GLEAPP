@@ -54,7 +54,9 @@ import shutil
 import sqlite3
 import struct
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
+from urllib.parse import urljoin
 from typing import Callable
 
 from . import archive
@@ -378,6 +380,278 @@ def _state(joined: int, length, gap) -> str:
     return "stops at a gap" if gap is not None else "length not recorded"
 
 
+# ---- DASH ------------------------------------------------------------------
+# A DASH player fetches a stream as an initialization segment and a list of media
+# segments, and ExoPlayer caches each one as its own item, keyed (DashUtil
+# .resolveCacheKey) by the representation's cache key when the app sets one and
+# otherwise by the segment's address resolved against the representation's first
+# BaseURL. The manifest (MPD) the app played from is cached beside them under its
+# own address, so it says which items make up which stream and in what order. That
+# is the only thing a stream is joined from: a key that merely looks similar, such as
+# a segment address differing in a signature, is never used to guess membership.
+
+MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+
+
+def _L(e) -> str:
+    return e.tag.rsplit("}", 1)[-1]
+
+
+def _kids(e, name: str) -> list:
+    return [c for c in e if _L(c) == name]
+
+
+def _base_url(e, parent: str) -> str:
+    b = _kids(e, "BaseURL")
+    return urljoin(parent, b[0].text.strip()) if b and b[0].text and b[0].text.strip() else parent
+
+
+def representations(manifest: bytes, manifest_url: str) -> list[dict]:
+    """The streams a DASH manifest lists: for each, its attributes and either the
+    resolved addresses of its initialization and media segments, in order
+    (``init``, ``media``), or the one address the whole stream is fetched from by
+    byte range (``single``), which ExoPlayer caches as one item.
+
+    A representation described by a SegmentTemplate is not returned; none was found
+    in the Android test images. BaseURL is resolved at every level, the way ``DashManifestParser`` does,
+    with RFC 3986 resolution (``UriUtil.resolve``; ``urljoin`` here).
+    """
+    root = ET.fromstring(manifest)
+    out = []
+    b0 = _base_url(root, manifest_url)
+    for period in _kids(root, "Period"):
+        b1 = _base_url(period, b0)
+        for aset in _kids(period, "AdaptationSet"):
+            b2 = _base_url(aset, b1)
+            for rep in _kids(aset, "Representation"):
+                b3 = _base_url(rep, b2)
+                about = {"id": rep.get("id")}
+                for name, attr in (("bandwidth", "bandwidth"), ("mime", "mimeType"),
+                                   ("codecs", "codecs"), ("width", "width"), ("height", "height")):
+                    about[name] = rep.get(attr) or aset.get(attr)   # a Representation inherits
+                if _kids(rep, "SegmentTemplate") or _kids(aset, "SegmentTemplate"):
+                    continue
+                sl = _kids(rep, "SegmentList") or _kids(aset, "SegmentList")
+                inits = [x.get("sourceURL") for s in sl[:1]
+                         for x in _kids(s, "Initialization") if x.get("sourceURL")]
+                media = [urljoin(b3, u.get("media")) for s in sl[:1]
+                         for u in _kids(s, "SegmentURL") if u.get("media")]
+                if inits and media:
+                    out.append({**about, "init": urljoin(b3, inits[0]), "media": media})
+                else:
+                    # one address fetched by byte range (SegmentBase, or ranges in a
+                    # SegmentList): ExoPlayer caches that as one item under the address
+                    out.append({**about, "single": b3})
+    return out
+
+
+def _complete(rec) -> bool:
+    """A joined item with no gap and no shortfall against the length the index recorded."""
+    j, length = rec["j"], rec["entry"].get("length")
+    return j["gap"] is None and (length is None or j["bytes"] >= length)
+
+
+def _dash_streams(joined: dict) -> tuple[list[dict], dict]:
+    """For every cached manifest, the streams whose initialization segment and first
+    media segment are both cached and complete, with the media segments that follow
+    in the manifest's order up to the first one missing or incomplete. One stream per
+    initialization segment: where several manifests list it, the longest run wins.
+
+    Also returns, for each cached item that is a whole stream by itself (one address
+    fetched by byte range), the manifest that lists it and the other cached streams
+    that manifest lists, so a silent video can say where its audio is."""
+    by_key = {rec["key"]: ident for ident, rec in joined.items() if rec["key"]}
+    best: dict = {}
+    pairs: dict = {}
+    for ident, rec in joined.items():
+        key = rec["key"] or ""
+        if not re.match(r"https?://", key) or rec["j"]["bytes"] > MAX_MANIFEST_BYTES:
+            continue
+        with open(rec["tmp"], "rb") as fh:
+            data = fh.read(MAX_MANIFEST_BYTES)
+        if b"<MPD" not in data[:1024]:
+            continue
+        try:
+            reps = representations(data, key)
+        except ET.ParseError:
+            continue
+        singles = [(by_key[r["single"]], r) for r in reps
+                   if "single" in r and r["single"] in by_key]
+        for ident_s, r in singles:
+            pairs.setdefault(ident_s, {"manifest": ident, "manifest_key": key, "rep": r,
+                                       "with": [o for o, _ in singles if o != ident_s]})
+        for r in reps:
+            if "single" in r:
+                continue
+            init = by_key.get(r["init"])
+            if init is None or not _complete(joined[init]):
+                continue
+            segs = []
+            for u in r["media"]:
+                s = by_key.get(u)
+                if s is None or not _complete(joined[s]):
+                    break
+                segs.append(s)
+            if segs and (init not in best or len(segs) > len(best[init]["segs"])):
+                with open(joined[init]["tmp"], "rb") as fh:
+                    handlers = track_handlers(fh.read(MAX_MANIFEST_BYTES))
+                best[init] = {"manifest": ident, "manifest_key": key, "rep": r, "init": init,
+                              "segs": segs, "listed": len(r["media"]), "handlers": handlers}
+    return list(best.values()), pairs
+
+
+def _boxes(b: bytes, start: int, end: int):
+    """``(type, payload start, box end)`` for each ISO-BMFF box in ``b[start:end]``."""
+    i = start
+    while i + 8 <= end:
+        size, typ = struct.unpack(">I4s", b[i:i + 8])
+        hdr = 8
+        if size == 1 and i + 16 <= end:
+            size, hdr = struct.unpack(">Q", b[i + 8:i + 16])[0], 16
+        elif size == 0:
+            size = end - i
+        if size < hdr:
+            return
+        yield typ, i + hdr, min(i + size, end)
+        i += size
+
+
+def track_handlers(init: bytes) -> list[str]:
+    """The handler type of each track an initialization segment declares
+    (``moov/trak/mdia/hdlr``, ISO/IEC 14496-12): ``vide`` for video, ``soun`` for
+    audio. The segment's own statement of what it carries, where a manifest's
+    contentType is optional and often absent."""
+    out = []
+    for typ, s0, e0 in _boxes(init, 0, len(init)):
+        if typ != b"moov":
+            continue
+        for t1, s1, e1 in _boxes(init, s0, e0):
+            if t1 != b"trak":
+                continue
+            for t2, s2, e2 in _boxes(init, s1, e1):
+                if t2 != b"mdia":
+                    continue
+                for t3, s3, e3 in _boxes(init, s2, e2):
+                    if t3 == b"hdlr" and s3 + 12 <= e3:
+                        out.append(init[s3 + 8:s3 + 12].decode("latin-1"))
+    return out
+
+
+MAX_MOOV_BYTES = 16 * 1024 * 1024
+
+
+def file_handlers(path) -> list[str]:
+    """``track_handlers`` for a whole file: finds ``moov`` by stepping over the
+    top-level boxes, since a file written progressively keeps it after ``mdat``."""
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, 2)
+            pos = 0
+            while pos + 8 <= size:
+                fh.seek(pos)
+                head = fh.read(16)
+                box, typ = struct.unpack(">I4s", head[:8])
+                hdr = 8
+                if box == 1 and len(head) == 16:
+                    box, hdr = struct.unpack(">Q", head[8:16])[0], 16
+                elif box == 0:
+                    box = size - pos
+                if box < hdr:
+                    return []
+                if typ == b"moov":
+                    if box > MAX_MOOV_BYTES:
+                        return []
+                    fh.seek(pos)
+                    return track_handlers(fh.read(box))
+                pos += box
+    except OSError:
+        pass
+    return []
+
+
+def _is_audio(st: dict) -> bool:
+    return st["handlers"] == ["soun"]
+
+
+def is_audio_item(row) -> bool:
+    """True for a joined item recorded as audio only. Processing re-checks an
+    'other' row by its first bytes and would call an audio stream a video."""
+    raw = row["cache_info"] if "cache_info" in row.keys() else None
+    if not raw:
+        return False
+    try:
+        return json.loads(raw).get("track") == "audio"
+    except (TypeError, ValueError):
+        return False
+
+
+def _stream_label(st: dict) -> str:
+    rid = re.sub(r"[^A-Za-z0-9_-]", "", str(st["rep"].get("id") or ""))[:24] or "stream"
+    return f"exoplayer_dash_{st['init']}_{rid}{'.m4a' if _is_audio(st) else '.mp4'}"
+
+
+def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: dict) -> None:
+    """Write one stream's initialization segment and media segments, in order, into one
+    file and register it. Fragmented MP4 is built to be read that way: DASH defines a
+    representation as its initialization segment followed by its media segments."""
+    r = st["rep"]
+    kind, ext = ("other", ".m4a") if _is_audio(st) else ("video", ".mp4")
+    parts = [st["init"], *st["segs"]]
+    h = hashlib.sha1(f"{c.source}\0{c.root}\0dash\0{st['init']}".encode(
+        "utf-8", "surrogatepass")).hexdigest()
+    dest = Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}{ext}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with open(dest, "wb") as out:
+        for ident in parts:
+            with open(joined[ident]["tmp"], "rb") as fh:
+                shutil.copyfileobj(fh, out, 1 << 20)
+            total += joined[ident]["j"]["bytes"]
+    label = _stream_label(st)
+    used = [row for ident in parts for row in joined[ident]["j"]["used"]]
+    mtimes = [row["mtime"] for row in used if row["mtime"] is not None]
+    other = next((o for o in registered if o is not st and o["manifest"] == st["manifest"]
+                  and _is_audio(o) != _is_audio(st)), None)
+    info = {
+        "format": f"ExoPlayer cache ({c.version}), DASH stream",
+        "dash": True,
+        "app_folder": _app_folder(c.root),
+        "cache_folder": c.root,
+        "key": st["manifest_key"],
+        "key_from": f"DASH manifest, cache item {st['manifest']}",
+        "representation": {k: r[k] for k in ("id", "bandwidth", "mime", "codecs", "width", "height")
+                           if r.get(k)},
+        "track": "audio" if _is_audio(st) else "video",
+        "cache_ids": parts,
+        "segments_joined": len(st["segs"]),
+        "segments_listed": st["listed"],
+        "bytes_joined": total,
+        "state": "complete" if len(st["segs"]) == st["listed"] else "partial",
+        "last_touched_ms": max(p[1] for ident in parts for p in joined[ident]["pieces"]),
+        "member_first_ids": [joined[ident]["first"]["id"] for ident in parts],
+    }
+    if other is not None:
+        info["other_track"] = _stream_label(other)
+    case.db.upsert_file(
+        str(dest),
+        rel_path=f"{c.root}/{label}",
+        orig_path=f"{c.root}/{label}",
+        orig_name=label,
+        source=c.source,
+        kind=kind,
+        ext=ext,
+        size=total,
+        mtime=max(mtimes) if mtimes else None,
+        ctime=None,
+        atime=None,
+        origin=joined[st["init"]]["first"]["origin"],
+        container_id=joined[st["init"]]["first"]["id"],
+        cache_info=json.dumps(info),
+    )
+    tally["dash_streams"] += 1
+    tally["added"] += 1
+
+
 def assemble(case, *, progress: Callable[[int], None] | None = None,
              include_other: bool = False, force: bool = False) -> int:
     """Rejoin every ExoPlayer cache item in the case. Returns the rows added.
@@ -398,9 +672,15 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
     tables = _db_tables(case, recs, got["dbs"], sidecars)
     have_children = {r["container_id"] for r in case.db.iter_files("container_id IS NOT NULL", ())}
     tally = {"added": 0, "items": 0, "no_start": 0, "skipped_other": 0, "failed": 0,
-             "complete": 0}
+             "complete": 0, "dash_streams": 0, "in_dash_streams": 0}
+    # the first pieces an earlier pass already put inside a DASH stream's file
+    in_streams: set[int] = set()
+    for r in case.db.iter_files("cache_info IS NOT NULL", ()):
+        with contextlib.suppress(TypeError, ValueError):
+            in_streams.update(json.loads(r["cache_info"]).get("member_first_ids") or ())
     for c in got["caches"]:
         how, entries = _index_for(case, recs, c, tables)
+        joined: dict = {}
         for ident, pieces in c.items.items():
             tally["items"] += 1
             starts = [p for p in pieces if p[0] == 0]
@@ -408,7 +688,7 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 tally["no_start"] += 1
                 continue
             first = sorted(starts, key=lambda p: -p[1])[0][2]
-            if first["id"] in have_children and not force:
+            if (first["id"] in have_children or first["id"] in in_streams) and not force:
                 continue
             entry = entries.get(ident, {}) if isinstance(ident, int) else {}
             key = entry.get("key") if isinstance(ident, int) else ident
@@ -422,19 +702,44 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 with contextlib.suppress(OSError):
                     tmp.unlink()
                 continue
-            with open(tmp, "rb") as fh:
-                head = fh.read(3 * 188)
-            kind, ext = _kind_ext(head)
+            joined[ident] = {"tmp": tmp, "j": j, "entry": entry, "key": key,
+                             "first": first, "pieces": pieces, "h": h}
+        streams, pairs = _dash_streams(joined)
+        consumed = {i for st in streams for i in [st["init"], *st["segs"]]}
+        # an audio stream is kept on the same terms as any other non-media item
+        registered = [st for st in streams if include_other or not _is_audio(st)]
+        tally["skipped_other"] += len(streams) - len(registered)
+        for st in registered:
+            _register_stream(case, c, joined, st, registered, tally)
+        # decide every item's kind first, so a pairing names only files the case keeps
+        kept: dict = {}
+        for ident, rec in joined.items():
+            if ident in consumed:
+                tally["in_dash_streams"] += 1
+                with contextlib.suppress(OSError):
+                    rec["tmp"].unlink()
+                continue
+            with open(rec["tmp"], "rb") as fh:
+                kind, ext = _kind_ext(fh.read(3 * 188))
+            # an MP4 whose only track is sound is audio, whatever its brand says
+            rec["audio"] = ext == ".mp4" and file_handlers(rec["tmp"]) == ["soun"]
+            if rec["audio"]:
+                kind, ext = "other", ".m4a"
             if kind not in ("image", "video") and not include_other:
                 tally["skipped_other"] += 1
-                tmp.unlink()
+                rec["tmp"].unlink()
                 continue
+            label = f"exoplayer_{ident if isinstance(ident, int) else rec['h'][:12]}{ext}"
+            kept[ident] = (kind, ext, label)
+        for ident, (kind, ext, label) in kept.items():
+            rec = joined[ident]
+            tmp, j, entry, key, first, pieces, h = (
+                rec["tmp"], rec["j"], rec["entry"], rec["key"], rec["first"], rec["pieces"], rec["h"])
             dest = tmp.with_name(h + ext)
             tmp.replace(dest)
             length = entry.get("length")
             state = _state(j["bytes"], length, j["gap"])
             tally["complete"] += state == "complete"
-            label = f"exoplayer_{ident if isinstance(ident, int) else h[:12]}{ext}"
             info = {
                 "format": f"ExoPlayer cache ({c.version})",
                 "app_folder": _app_folder(c.root),
@@ -452,8 +757,16 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 "last_touched_ms": max(p[1] for p in pieces
                                        if p[2]["id"] in {r["id"] for r in j["used"]}),
             }
+            if rec.get("audio"):
+                info["track"] = "audio"
             if entry.get("redirected_to"):
                 info["redirected_to"] = entry["redirected_to"]
+            if ident in pairs:
+                pr = pairs[ident]
+                info["manifest_key"] = pr["manifest_key"]
+                info["representation"] = {k: v for k, v in pr["rep"].items()
+                                          if k in ("id", "bandwidth", "mime", "codecs", "width", "height") and v}
+                info["listed_with"] = [kept[o][2] for o in pr["with"] if o in kept]
             used = j["used"]
             mtimes = [r["mtime"] for r in used if r["mtime"] is not None]
             case.db.upsert_file(
@@ -492,8 +805,6 @@ def describe(d) -> str:
     or, where the app asks for it, read it again; ``SimpleCache.startFile`` and
     ``touchSpan``), shown in UTC.
     """
-    import datetime
-
     raw = d.get("cache_info") if hasattr(d, "get") else None
     if not raw:
         return ""
@@ -510,6 +821,21 @@ def describe(d) -> str:
         parts.append(f"no key ({i.get('key_from')})")
     if i.get("redirected_to"):
         parts.append(f"redirected to {i['redirected_to']}")
+    if i.get("dash"):
+        r = i.get("representation") or {}
+        what = ", ".join(str(v) for v in (
+            r.get("mime"), r.get("codecs"),
+            f"{r['width']}x{r['height']}" if r.get("width") and r.get("height") else None,
+            f"{int(r['bandwidth']):,} bit/s" if str(r.get("bandwidth") or "").isdigit() else None)
+            if v)
+        parts.append(f"stream {r.get('id')}" + (f" ({what})" if what else ""))
+        parts.append(f"initialization segment and {i.get('segments_joined')} of "
+                     f"{i.get('segments_listed')} listed media segments joined in the manifest's "
+                     f"order, {i.get('bytes_joined', 0):,} bytes")
+        parts.append(i.get("state") or "")
+        if i.get("other_track"):
+            parts.append(f"the other track of this stream is in {i['other_track']}")
+        return _with_touch(parts, i)
     joined = f"{i.get('pieces_joined')} of {i.get('pieces_total')} pieces joined, " \
              f"{i.get('bytes_joined', 0):,} bytes"
     if i.get("length_recorded") is not None:
@@ -521,6 +847,18 @@ def describe(d) -> str:
     if i.get("pieces_left_out"):
         state += f", {i['pieces_left_out']} later piece(s) not joined"
     parts.append(state)
+    if i.get("manifest_key"):
+        r = i.get("representation") or {}
+        parts.append(f"listed as stream {r.get('id')} in the DASH manifest {i['manifest_key']}")
+        if i.get("listed_with"):
+            parts.append("the same manifest's other cached stream(s): " + ", ".join(i["listed_with"]))
+    return _with_touch(parts, i)
+
+
+def _with_touch(parts: list, i: dict) -> str:
+    """Close a description with the last-touched time from the piece names."""
+    import datetime
+
     ms = i.get("last_touched_ms")
     if isinstance(ms, int) and ms > 0:
         with contextlib.suppress(OverflowError, OSError, ValueError):

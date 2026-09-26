@@ -13,3 +13,5 @@
 *.pmtiles -text
 *.mbtiles -text
 *.ts -text
+*.mp4 -text
+*.m4s -text
