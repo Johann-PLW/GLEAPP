@@ -104,8 +104,10 @@ def test_a_stream_is_its_init_and_media_segments_in_the_manifests_order(tmp_path
         (av,) = [r for r in rows if json.loads(r["cache_info"]).get("combined")]
         got = json.loads(av["cache_info"])
         assert (av["kind"], got["layout"]) == ("video", "fragmented")
-        assert got["video"] == row["orig_name"] and "not kept on its own" in got["audio"]
-        assert (got["video_segments"], got["audio_segments"]) == ("3 of 3", "4 of 4")
+        (track,) = got["audio_tracks"]
+        assert got["video"] == row["orig_name"] and "not kept on its own" in track["label"]
+        assert (got["video_segments"], track["segments"]) == ("3 of 3", "4 of 4")
+        assert "lang" not in track                        # the fixture's manifest names none
         assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
     finally:
         case.close()
@@ -176,7 +178,8 @@ def test_the_combined_file_plays_with_both_tracks(tmp_path):
     case = _ingest(tmp_path, _fixture(), include_other=True)
     try:
         (av,) = _combined(case)
-        assert json.loads(av["cache_info"])["audio"] == _streams(case)["audio"]["orig_name"]
+        (track,) = json.loads(av["cache_info"])["audio_tracks"]
+        assert track["label"] == _streams(case)["audio"]["orig_name"]
         process(case, workers=1, keyframes=2, screen=False)
         row = case.db.get_file(av["id"])
         assert row["thumb"] and not row["error"]
@@ -185,24 +188,50 @@ def test_the_combined_file_plays_with_both_tracks(tmp_path):
         case.close()
 
 
-def test_two_audio_streams_are_not_guessed_between(tmp_path):
-    """A second, different audio stream (a second language, say): which one belongs
-    with the video would be a guess, so neither is combined with it."""
+def _two_languages():
+    """The fixture's manifest with its audio in English and a second, Spanish audio
+    stream (the same bytes under other addresses)."""
     mpd = (FIX / "stream.mpd").read_text()
     start = mpd.index('<AdaptationSet id="1"')
     block = mpd[start:mpd.index("</AdaptationSet>", start) + len("</AdaptationSet>")]
-    other = (block.replace('AdaptationSet id="1"', 'AdaptationSet id="2"')
+    other = (block.replace('AdaptationSet id="1"', 'AdaptationSet id="2" lang="es"')
              .replace('Representation id="1"', 'Representation id="9"')
              .replace("init-1.mp4", "init-9.mp4").replace("seg-1-", "seg-9-"))
+    mpd = mpd.replace('AdaptationSet id="1"', 'AdaptationSet id="1" lang="en"')
     extra = {"stream.mpd": mpd.replace("</Period>", other + "</Period>").encode()}
     for n in AUDIO:
         extra[n.replace("init-1", "init-9").replace("seg-1-", "seg-9-")] = (FIX / n).read_bytes()
-    case = _ingest(tmp_path, _fixture(extra=extra))
+    return extra
+
+
+def test_two_audio_languages_both_go_in_the_first_as_the_default(tmp_path):
+    """Which language belongs with the video would be a guess, so both are put in as
+    alternative tracks, in the manifest's order, each with the language it declares."""
+    case = _ingest(tmp_path, _fixture(extra=_two_languages()))
     try:
-        assert not _combined(case)
+        (av,) = _combined(case)
+        info = json.loads(av["cache_info"])
+        assert [(t["lang"], t["segments"]) for t in info["audio_tracks"]] == [("en", "4 of 4"), ("es", "4 of 4")]
+        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun", "soun"]
+        text = exocache.describe(dict(av))
+        assert "2 audio track(s)" in text
+        assert "audio track 1: " in text and "language en (as the manifest gives it)" in text
+        assert "the track a player starts on" in text and "an alternative" in text
         assert set(_streams(case)) == {"video"}
     finally:
         case.close()
+
+
+def test_representations_reads_the_language_where_exoplayer_does():
+    mpd = (b'<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+           b'<AdaptationSet lang="de"><Representation id="a" lang="xx"><BaseURL>a.mp4</BaseURL>'
+           b'</Representation></AdaptationSet>'
+           b'<AdaptationSet><ContentComponent lang="fr"/><Representation id="b"><BaseURL>b.mp4</BaseURL>'
+           b'</Representation></AdaptationSet>'
+           b'<AdaptationSet><Representation id="c"><BaseURL>c.mp4</BaseURL></Representation>'
+           b'</AdaptationSet></Period></MPD>')
+    got = {r["id"]: r["lang"] for r in exocache.representations(mpd, BASE + "m.mpd")}
+    assert got == {"a": "de", "b": "fr", "c": None}
 
 
 def test_a_second_pass_adds_nothing(tmp_path):
@@ -271,7 +300,9 @@ def test_describe_a_combined_file(tmp_path):
         (av,) = _combined(case)
         text = exocache.describe(dict(av))
         assert "DASH video and audio" in text and "no sample re-encoded" in text
-        assert "video segments 3 of 3, audio segments 4 of 4" in text
+        assert "video segments 3 of 3" in text and "1 audio track(s)" in text
+        assert "audio track 1: " in text and "segments 4 of 4" in text and "32,000 bit/s" in text
+        assert "no language in the manifest" in text and "alternative" not in text
     finally:
         case.close()
 
@@ -301,5 +332,35 @@ def test_a_whole_file_video_cut_short_is_not_combined(tmp_path):
     try:
         ingest_sources(case, [Source(name="ext", path=str(src))])
         assert not _combined(case)
+    finally:
+        case.close()
+
+
+def test_an_incomplete_whole_file_audio_is_left_out_and_the_rest_combined(tmp_path):
+    video = b"".join((FIX / n).read_bytes() for n in VIDEO)
+    audio = b"".join((FIX / n).read_bytes() for n in AUDIO)
+    mpd = (b'<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+           b'<AdaptationSet><Representation id="v" mimeType="video/mp4"><BaseURL>v.mp4</BaseURL>'
+           b'<SegmentBase indexRange="0-1"/></Representation></AdaptationSet>'
+           b'<AdaptationSet lang="en"><Representation id="a" mimeType="audio/mp4" bandwidth="32000">'
+           b'<BaseURL>a.mp4</BaseURL><SegmentBase indexRange="0-1"/></Representation></AdaptationSet>'
+           b'<AdaptationSet lang="es"><Representation id="b" mimeType="audio/mp4"><BaseURL>b.mp4</BaseURL>'
+           b'<SegmentBase indexRange="0-1"/></Representation></AdaptationSet></Period></MPD>')
+    src = tmp_path / "ext"
+    cache = _cache({"stream.mpd": mpd, "v.mp4": video, "a.mp4": audio, "b.mp4": audio + b"x"})
+    bpiece = next(k for k, v in cache.items() if v == audio + b"x")
+    cache[bpiece] = audio[:len((FIX / AUDIO[0]).read_bytes()) + len((FIX / AUDIO[1]).read_bytes())]
+    for name, data in cache.items():
+        (src / name).parent.mkdir(parents=True, exist_ok=True)
+        (src / name).write_bytes(data)
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    try:
+        ingest_sources(case, [Source(name="ext", path=str(src))])
+        (av,) = _combined(case)
+        info = json.loads(av["cache_info"])
+        assert [(t["lang"], t["bandwidth"]) for t in info["audio_tracks"]] == [("en", "32000")]
+        assert exocache.track_handlers(Path(av["path"]).read_bytes()) == ["vide", "soun"]
+        (log,) = [r for r in case.db.iter_audit() if r["action"] == "rejoin-exoplayer-cache"]
+        assert "1 audio left out" in log["detail"]
     finally:
         case.close()

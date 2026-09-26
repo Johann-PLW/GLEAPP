@@ -72,8 +72,21 @@ def _chunk_offsets(b):
     return out
 
 
+def _tkhds(b):
+    """Per track, in order: (enabled flag, track id, alternate group) from its tkhd."""
+    out = []
+    for s, h, _e in _find_all(b, b"tkhd"):
+        p = b[s + h:]
+        v1 = p[0] == 1
+        tid = struct.unpack(">I", p[20:24] if v1 else p[12:16])[0]
+        g = 36 + 10 if v1 else 24 + 10
+        out.append((p[3] & 1, tid, struct.unpack(">h", p[g:g + 2])[0]))
+    return out
+
+
 def _framemd5(path, sel):
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", f"0:{sel}:0",
+    sel = sel if ":" in sel else f"{sel}:0"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", f"0:{sel}",
                         "-f", "framemd5", "-"], capture_output=True, text=True, check=False)
     return [ln.rsplit(",", 1)[-1].strip() for ln in r.stdout.splitlines() if ln and not ln.startswith("#")]
 
@@ -162,3 +175,85 @@ def test_an_absolute_base_data_offset_follows_its_fragment():
     out = mp4mux._renumber(moof, 7, new_start=300, old_start=4000)   # pylint: disable=protected-access
     base = out.index(b"tfhd") + 4 + 8
     assert struct.unpack(">Q", out[base:base + 8])[0] == 5000 - 4000 + 300
+
+
+def _inputs(tmp_path, layout):
+    if layout == "fragmented":
+        return _cat(tmp_path, DASH_V, "v.mp4"), _cat(tmp_path, DASH_A, "a.mp4")
+    return FIX / "mux" / "video.mp4", FIX / "mux" / "audio.m4a"
+
+
+@pytest.mark.parametrize("layout", ["fragmented", "progressive"])
+def test_one_audio_track_keeps_its_own_flags(tmp_path, layout):
+    v, a = _inputs(tmp_path, layout)
+    out = tmp_path / "av.mp4"
+    mp4mux.mux(v, a, out)
+    before = [(f, g) for f, _t, g in _tkhds(v.read_bytes()) + _tkhds(a.read_bytes())]
+    assert [(f, g) for f, _t, g in _tkhds(out.read_bytes())] == before
+
+
+@pytest.mark.parametrize("layout", ["fragmented", "progressive"])
+def test_several_audio_tracks_are_alternatives_and_only_the_first_is_enabled(tmp_path, layout):
+    """The way ffmpeg marks two audio languages: alternate group 1 on both, only the
+    first enabled, so a player starts on it and offers the other."""
+    v, a = _inputs(tmp_path, layout)
+    a2 = tmp_path / ("a2" + a.suffix)
+    a2.write_bytes(a.read_bytes())
+    out = tmp_path / "av.mp4"
+    got = mp4mux.mux(v, [a, a2], out)
+    data = out.read_bytes()
+    assert track_handlers(data) == ["vide", "soun", "soun"]
+    tk = _tkhds(data)
+    assert [(f, g) for f, _t, g in tk] == [(1, 0), (1, 1), (0, 1)]
+    ids = [t for _f, t, _g in tk]
+    assert len(set(ids)) == 3 and ids == [got["video_track"], *got["audio_tracks"]]
+    if layout == "progressive":
+        new, ab = _chunk_offsets(data), a.read_bytes()
+        for now in new[1:]:
+            for o, n in zip(_chunk_offsets(ab)[0], now):
+                assert data[n:n + 64] == ab[o:o + 64]
+        assert new[1] != new[2]              # each audio track points at its own copy
+    else:
+        seen = set()
+        for t, s, h, e in _boxes(data):
+            if t == b"moof":
+                for s3, h3, _e3 in _find_all(data, b"tfhd", s + h, e, into=(b"traf",)):
+                    seen.add(struct.unpack(">I", data[s3 + h3 + 4:s3 + h3 + 8])[0])
+        assert seen == set(ids)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg as an independent reader")
+@pytest.mark.parametrize("layout", ["fragmented", "progressive"])
+def test_ffmpeg_reads_every_audio_track(tmp_path, layout):
+    v, a = _inputs(tmp_path, layout)
+    a2 = tmp_path / ("a2" + a.suffix)
+    a2.write_bytes(a.read_bytes())
+    out = tmp_path / "av.mp4"
+    mp4mux.mux(v, [a, a2], out)
+    want = _framemd5(a, "a")
+    assert want and _framemd5(out, "a:0") == want and _framemd5(out, "a:1") == want
+    assert _framemd5(out, "v") == _framemd5(v, "v")
+
+
+def test_no_audio_is_refused(tmp_path):
+    v, _a = _inputs(tmp_path, "progressive")
+    with pytest.raises(mp4mux.MuxError, match="no audio"):
+        mp4mux.mux(v, [], tmp_path / "x.mp4")
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_tkhd_group_and_enabled_flag_land_in_their_own_fields(version):
+    """ISO/IEC 14496-12 8.3.2: after the duration come reserved[2], layer, then
+    alternate_group. ffmpeg's inputs already carry group 1 on audio, so this starts
+    from 0 with a layer that must survive."""
+    head = bytes([version]) + b"\x00\x00\x03"
+    if version == 1:
+        body = bytes(16) + struct.pack(">I", 5) + bytes(4) + struct.pack(">Q", 3000)
+    else:
+        body = bytes(8) + struct.pack(">I", 5) + bytes(4) + struct.pack(">I", 3000)
+    tkhd = head + body + bytes(8) + struct.pack(">hh", 7, 0) + bytes(40)
+    got = mp4mux._tkhd(tkhd, 3, 1000, 1000, group=1, enabled=False)   # pylint: disable=protected-access
+    at = len(head + body) + 8
+    assert struct.unpack(">hh", got[at:at + 4]) == (7, 1)
+    assert got[3] == 0x02 and len(got) == len(tkhd)
+    assert mp4mux._tkhd(tkhd, 3, 1000, 1000)[at:at + 4] == tkhd[at:at + 4]   # pylint: disable=protected-access

@@ -138,8 +138,17 @@ def _rescale(v: int, src: int, dst: int) -> int:
     return v if src == dst or src == 0 else v * dst // src
 
 
-def _tkhd(p: bytes, track_id: int, src_ts: int, dst_ts: int) -> bytes:
+def _tkhd(p: bytes, track_id: int, src_ts: int, dst_ts: int,
+          group: int | None = None, enabled: bool | None = None) -> bytes:
+    """``tkhd`` renumbered, its duration moved to ``dst_ts``, and optionally put in
+    alternate ``group`` and marked enabled or not (flag 0x1)."""
     p = bytearray(p)
+    if enabled is not None:
+        flags = int.from_bytes(p[1:4], "big")
+        p[1:4] = ((flags | 0x1) if enabled else (flags & ~0x1)).to_bytes(3, "big")
+    if group is not None:
+        g = (36 if p[0] == 1 else 24) + 8 + 2          # after duration, reserved[2] and layer
+        p[g:g + 2] = struct.pack(">h", group)
     if p[0] == 1:
         p[20:24] = struct.pack(">I", track_id)
         (d,) = struct.unpack(">Q", p[28:36])
@@ -192,12 +201,13 @@ def _co64(typ: bytes, p: bytes, shift: int) -> tuple[bytes, bytes]:
     return b"co64", bytes(4) + struct.pack(">I", n) + b"".join(struct.pack(">Q", o + shift) for o in offs)
 
 
-def _trak(m: _Movie, track_id: int, dst_ts: int, offset_shift: int | None = None) -> bytes:
+def _trak(m: _Movie, track_id: int, dst_ts: int, offset_shift: int | None = None,
+          group: int | None = None, enabled: bool | None = None) -> bytes:
     """``m``'s track, renumbered to ``track_id``, its movie-timescale durations moved
     to ``dst_ts``, and with ``offset_shift`` its chunk offsets moved as a ``co64``."""
     def fix(typ: bytes, p: bytes):
         if typ == b"tkhd":
-            return _tkhd(p, track_id, m.timescale, dst_ts)
+            return _tkhd(p, track_id, m.timescale, dst_ts, group, enabled)
         if typ == b"elst":
             return _elst(p, m.timescale, dst_ts)
         if offset_shift is not None and typ in (b"stco", b"co64"):
@@ -270,24 +280,46 @@ def _renumber(chunk: bytes, seq: int, new_start: int, old_start: int) -> bytes:
     return out + chunk[moof[3]:]
 
 
-def mux(video: str | Path, audio: str | Path, dest: str | Path) -> dict:
-    """Write ``video``'s track and ``audio``'s track into ``dest``. Returns what was
-    done: the layout, the two track ids in the output, the fragments or the bytes
-    carried. Raises :class:`MuxError` when the pair cannot be combined."""
+def mux(video: str | Path, audio, dest: str | Path) -> dict:
+    """Write ``video``'s track and the track of each file in ``audio`` (one path or a
+    list) into ``dest``. Returns what was done: the layout, the track ids in the
+    output, the fragments or the bytes carried. Raises :class:`MuxError` when the
+    inputs cannot be combined.
+
+    Several audio tracks are alternatives, one language each: they are put in one
+    alternate group and only the first is enabled, so a player starts on it and
+    offers the others, the way ffmpeg marks them (checked with ffmpeg 9.0.1: two audio
+    tracks, alternate group 1 on both, track flags 0x3 then 0x2, and ffprobe then
+    shows the first as the default).
+    """
+    paths = [audio] if isinstance(audio, (str, Path)) else list(audio)
+    if not paths:
+        raise MuxError("no audio input")
     v = _Movie(Path(video).read_bytes())
-    a = _Movie(Path(audio).read_bytes())
-    if v.handler != b"vide" or a.handler != b"soun":
+    auds = [_Movie(Path(a).read_bytes()) for a in paths]
+    if v.handler != b"vide" or any(a.handler != b"soun" for a in auds):
         raise MuxError("the first input must be video and the second audio")
-    if v.fragmented != a.fragmented:
+    if any(a.fragmented != v.fragmented for a in auds):
         raise MuxError("one input is fragmented and the other is not")
-    vid, aid = v.track_id, v.track_id + 1 if a.track_id == v.track_id else a.track_id
-    next_id = max(vid, aid) + 1
+    vid = v.track_id
+    ids, used = [], {vid}
+    for a in auds:
+        tid = a.track_id if a.track_id not in used else max(used) + 1
+        used.add(tid)
+        ids.append(tid)
+    next_id = max(used) + 1
+    group = 1 if len(auds) > 1 else None
+
+    def atrak(k: int, shift: int | None = None) -> bytes:
+        return _trak(auds[k], ids[k], v.timescale, shift, group,
+                     (k == 0) if group else None)
+
     ftyp = _top(v.data, b"ftyp")
     head = v.data[ftyp[1]:ftyp[3]] if ftyp else b""
     dest = Path(dest)
     if v.fragmented:
         trex = []
-        for m, tid in ((v, vid), (a, aid)):
+        for m, tid in [(v, vid), *zip(auds, ids)]:
             box = _path(m.data, m.moov, b"mvex", b"trex")
             if box is None:
                 raise MuxError("an mvex with no trex")
@@ -298,10 +330,11 @@ def mux(video: str | Path, audio: str | Path, dest: str | Path) -> dict:
         extra = b"".join(v.data[x[1]:x[3]] for x in _boxes(v.data, v.moov[1] + v.moov[2], v.moov[3])
                          if x[0] not in (b"mvhd", b"trak", b"mvex"))
         moov = _box(b"moov", _mvhd(v, next_id) + _trak(v, vid, v.timescale)
-                    + _trak(a, aid, v.timescale) + mvex + extra)
-        frags = sorted([(t, 0, c, s) for t, c, s in _fragments(v, vid)]
-                       + [(t, 1, c, s) for t, c, s in _fragments(a, aid)],
-                       key=lambda f: (f[0], f[1]))
+                    + b"".join(atrak(k) for k in range(len(auds))) + mvex + extra)
+        frags = [(t, 0, c, s) for t, c, s in _fragments(v, vid)]
+        for k, (a, tid) in enumerate(zip(auds, ids), 1):
+            frags += [(t, k, c, s) for t, c, s in _fragments(a, tid)]
+        frags.sort(key=lambda f: (f[0], f[1]))
         if not frags:
             raise MuxError("no fragments")
         pos = len(head) + len(moov)
@@ -312,30 +345,30 @@ def mux(video: str | Path, audio: str | Path, dest: str | Path) -> dict:
                 chunk = _renumber(chunk, seq, pos, old)
                 out.write(chunk)
                 pos += len(chunk)
-        return {"layout": "fragmented", "video_track": vid, "audio_track": aid,
+        return {"layout": "fragmented", "video_track": vid, "audio_tracks": ids,
                 "fragments": len(frags), "bytes": pos}
     # progressive: sizes first, since the offsets depend on where the mdat starts
     extra = b"".join(v.data[x[1]:x[3]] for x in _boxes(v.data, v.moov[1] + v.moov[2], v.moov[3])
                      if x[0] not in (b"mvhd", b"trak"))
-    duration = max(_duration(v, v.timescale), _duration(a, v.timescale))
+    duration = max([_duration(v, v.timescale)] + [_duration(a, v.timescale) for a in auds])
 
-    def build(vshift: int, ashift: int) -> bytes:
-        return _box(b"moov", _mvhd(v, next_id, duration) + _trak(v, vid, v.timescale, vshift)
-                    + _trak(a, aid, v.timescale, ashift) + extra)
+    def build(shifts: list[int]) -> bytes:
+        return _box(b"moov", _mvhd(v, next_id, duration) + _trak(v, vid, v.timescale, shifts[0])
+                    + b"".join(atrak(k, shifts[k + 1]) for k in range(len(auds))) + extra)
 
-    size = len(build(0, 0))
-    vstart = len(head) + size + 16                      # a 64-bit mdat header
-    astart = vstart + len(v.data)
-    moov = build(vstart, astart)
+    size = len(build([0] * (len(auds) + 1)))
+    starts, at = [], len(head) + size + 16              # a 64-bit mdat header
+    for m in [v, *auds]:
+        starts.append(at)
+        at += len(m.data)
+    moov = build(starts)
     if len(moov) != size:
         raise MuxError("the header changed size")
     with open(dest, "wb") as out:
         out.write(head)
         out.write(moov)
-        out.write(struct.pack(">I4sQ", 1, b"mdat", 16 + len(v.data) + len(a.data)))
-        with open(video, "rb") as fh:
-            shutil.copyfileobj(fh, out, 1 << 20)
-        with open(audio, "rb") as fh:
-            shutil.copyfileobj(fh, out, 1 << 20)
-    return {"layout": "progressive", "video_track": vid, "audio_track": aid,
-            "bytes": astart + len(a.data)}
+        out.write(struct.pack(">I4sQ", 1, b"mdat", 16 + sum(len(m.data) for m in [v, *auds])))
+        for src in [video, *paths]:
+            with open(src, "rb") as fh:
+                shutil.copyfileobj(fh, out, 1 << 20)
+    return {"layout": "progressive", "video_track": vid, "audio_tracks": ids, "bytes": at}

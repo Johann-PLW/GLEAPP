@@ -223,8 +223,15 @@ and progressive MP4. Its oracle is ffmpeg's per-frame MD5 of each stream, which 
 equal the separate inputs'. That test runs only where ffmpeg is installed, so the tests
 that always run check the output's own boxes instead (both tracks declared, every input
 `mdat` present unchanged, every rewritten chunk offset pointing at the bytes it pointed at).
-Only a manifest with exactly one cached audio stream is combined: with two, the pairing
-would be a guess.
+Every cached audio stream a manifest lists goes in, in the manifest's order, because
+picking one would be a guess. Several audio tracks get alternate_group 1 and only the
+first keeps tkhd flag 0x1 (enabled), the marking ffmpeg 9.0.1 writes for two languages and
+the one ffprobe reads as `default`. A single audio track's tkhd is left as the input had
+it (ffmpeg's own audio already carries group 1). The manifest's `lang` is read where
+`DashManifestParser.parseAdaptationSet` reads it (the AdaptationSet, then a
+ContentComponent; androidx/media 1.11.1 lines 473 and 505) and recorded as written; the
+file's `mdhd` language is never rewritten, since mapping an RFC 5646 tag to ISO 639-2
+would be a table GLEAPP does not own.
 
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 

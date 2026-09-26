@@ -1034,16 +1034,24 @@ or an archive found inside a source:
 - **Video and sound are separate DASH streams, and are also put together.** Each
   stream is joined into its own file, so the video alone is silent; the sound is
   kept on its own when the source includes other files, and each names the other.
-  Where the manifest lists exactly one cached audio stream beside a video, GLEAPP
-  also writes one file holding both tracks, named `exoplayer_av_...mp4`, whatever
+  Where the manifest lists a cached audio stream beside a video, GLEAPP also writes
+  one file holding the video and its sound, named `exoplayer_av_...mp4`, whatever
   the source's other-files setting. Nothing is re-encoded: the tracks' descriptions
   are rewritten into one header and every sample's bytes are copied unchanged, so
   the picture and sound are exactly what was cached. When the manifest lists two
   or more cached audio streams (two languages, say), which belongs with the video
-  would be a guess, so none is combined. A stream stored as one file fetched in
-  ranges (Reddit's `DASH_720.mp4` beside `DASH_audio.mp4`, for example) is already
-  whole; *App cache* names the manifest that lists it and the other cached streams
-  it lists, and the same one-audio rule combines it with its sound. The silent
+  would be a guess, so every one goes in as its own audio track, in the manifest's
+  order. They are marked the way ffmpeg marks alternative languages: one alternate
+  group, only the first track enabled, so a player that honours the marking starts
+  on the first and offers the others. *App cache* lists each audio track with the
+  language the manifest declares for it (as written there, for example `en`), its
+  bitrate and how many of its segments were joined; the track's own language field
+  inside the file is copied from the cached stream unchanged. A stream stored as one
+  file fetched in ranges (Reddit's `DASH_720.mp4` beside `DASH_audio.mp4`, for
+  example) is already whole; *App cache* names the manifest that lists it and the
+  other cached streams it lists, and it is combined with the audio the same way. A
+  whole-file video or audio cut short at a gap is not combined, since it has no
+  playable end; an audio left out that way is counted in the audit log. The silent
   video stays in the case as what was actually cached.
 - An MP4 whose only track is sound is kept as audio, not as a video with no frames.
 - HLS video is cached one segment per item, so a joined HLS segment is only as

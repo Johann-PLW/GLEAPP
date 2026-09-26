@@ -412,6 +412,10 @@ def representations(manifest: bytes, manifest_url: str) -> list[dict]:
     (``init``, ``media``), or the one address the whole stream is fetched from by
     byte range (``single``), which ExoPlayer caches as one item.
 
+    ``lang`` is the AdaptationSet's, or its ContentComponent's, which are the two
+    places ``DashManifestParser.parseAdaptationSet`` reads it (androidx/media
+    1.11.1, lines 473 and 505); it is reported as written, never translated.
+
     A representation described by a SegmentTemplate is not returned; none was found
     in the Android test images. BaseURL is resolved at every level, the way ``DashManifestParser`` does,
     with RFC 3986 resolution (``UriUtil.resolve``; ``urljoin`` here).
@@ -423,9 +427,11 @@ def representations(manifest: bytes, manifest_url: str) -> list[dict]:
         b1 = _base_url(period, b0)
         for aset in _kids(period, "AdaptationSet"):
             b2 = _base_url(aset, b1)
+            lang = aset.get("lang") or next((cc.get("lang") for cc in _kids(aset, "ContentComponent")
+                                             if cc.get("lang")), None)
             for rep in _kids(aset, "Representation"):
                 b3 = _base_url(rep, b2)
-                about = {"id": rep.get("id")}
+                about = {"id": rep.get("id"), "lang": lang, "order": len(out)}
                 for name, attr in (("bandwidth", "bandwidth"), ("mime", "mimeType"),
                                    ("codecs", "codecs"), ("width", "width"), ("height", "height")):
                     about[name] = rep.get(attr) or aset.get(attr)   # a Representation inherits
@@ -663,10 +669,20 @@ def _write_stream(joined: dict, st: dict, dest: Path) -> int:
     return total
 
 
-def _combine(case, c, video: Path, audio: Path, *, seed: str, label: str, info: dict,
+def _track(rep: dict, label: str, segments: str | None = None) -> dict:
+    """What the App cache line says about one audio track of a combined file."""
+    t = {"label": label, "lang": rep.get("lang"), "bandwidth": rep.get("bandwidth")}
+    if segments:
+        t["segments"] = segments
+    return {k: v for k, v in t.items() if v}
+
+
+def _combine(case, c, video: Path, audio: list, *, seed: str, label: str, info: dict,
              first, mtime, tally: dict) -> None:
-    """Put a video and its audio in one file (``gleapp/mp4mux.py``) and register it.
-    Nothing is written when the pair cannot be combined; the audit log counts it."""
+    """Put a video and its audio tracks in one file (``gleapp/mp4mux.py``) and register
+    it; the first audio track is the one a player starts on and the others are
+    alternatives. Nothing is written when they cannot be combined; the audit log
+    counts it."""
     h = hashlib.sha1(f"{c.source}\0{c.root}\0av\0{seed}".encode(
         "utf-8", "surrogatepass")).hexdigest()
     dest = Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}.mp4"
@@ -709,7 +725,7 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
     have_children = {r["container_id"] for r in case.db.iter_files("container_id IS NOT NULL", ())}
     tally = {"added": 0, "items": 0, "no_start": 0, "skipped_other": 0, "failed": 0,
              "complete": 0, "dash_streams": 0, "in_dash_streams": 0, "combined": 0,
-             "not_combined": 0}
+             "not_combined": 0, "audio_left_out": 0}
     # the first pieces an earlier pass already put inside a DASH stream's file
     in_streams: set[int] = set()
     for r in case.db.iter_files("cache_info IS NOT NULL", ()):
@@ -759,22 +775,25 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
         for st in streams:
             if _is_audio(st):
                 continue
-            sound = [o for o in streams if o["manifest"] == st["manifest"] and _is_audio(o)]
-            if len(sound) != 1:
-                continue                   # none, or a choice between languages: no guess
-            a = sound[0]
-            parts = [st["init"], *st["segs"], a["init"], *a["segs"]]
-            _combine(case, c, files[id(st)], files[id(a)], seed=f"dash\0{st['init']}",
+            # every cached audio stream of the same manifest, in the manifest's order:
+            # a second language (or bitrate) goes in as an alternative track, not a guess
+            sound = sorted((o for o in streams if o["manifest"] == st["manifest"] and _is_audio(o)),
+                           key=lambda o: o["rep"].get("order", 0))
+            if not sound:
+                continue
+            parts = [st["init"], *st["segs"]] + [i for a in sound for i in [a["init"], *a["segs"]]]
+            _combine(case, c, files[id(st)], [files[id(a)] for a in sound], seed=f"dash\0{st['init']}",
                      label=f"exoplayer_av_{st['init']}.mp4",
                      info={"format": f"ExoPlayer cache ({c.version}), DASH video and audio",
                            "app_folder": _app_folder(c.root), "cache_folder": c.root,
                            "key": st["manifest_key"],
                            "key_from": f"DASH manifest, cache item {st['manifest']}",
                            "video": _stream_label(st),
-                           "audio": _stream_label(a) if a in registered else
-                           f"audio stream {a['rep'].get('id')} (not kept on its own)",
                            "video_segments": f"{len(st['segs'])} of {st['listed']}",
-                           "audio_segments": f"{len(a['segs'])} of {a['listed']}",
+                           "audio_tracks": [_track(a["rep"], _stream_label(a) if a in registered else
+                                                   f"audio stream {a['rep'].get('id')} (not kept on its own)",
+                                                   f"{len(a['segs'])} of {a['listed']}")
+                                            for a in sound],
                            "last_touched_ms": max(q[1] for i in parts for q in joined[i]["pieces"]),
                            "member_first_ids": [joined[i]["first"]["id"] for i in parts]},
                      first=joined[st["init"]]["first"], mtime=None, tally=tally)
@@ -860,29 +879,33 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
             tally["added"] += 1
             if progress and tally["added"] % 50 == 0:
                 progress(tally["added"])
-        # a whole-file video whose manifest lists exactly one cached whole-file audio
+        # a whole-file video with the cached whole-file audio its manifest lists
         for ident, (kind, _ext, label) in kept.items():
             if kind != "video" or ident not in pairs:
                 continue
             sound = [o for o in pairs[ident]["with"] if joined[o].get("audio")]
-            if len(sound) != 1:
+            if not sound:
                 continue
-            a = sound[0]
             # a file cut short at a gap carries no playable end; a combined copy of it
-            # would only be a second broken file
-            if not (_complete(joined[ident]) and _complete(joined[a])):
+            # would only be a second broken file, so an incomplete audio is left out
+            # and an incomplete video is not combined at all
+            whole = [o for o in sound if _complete(joined[o])]
+            if not _complete(joined[ident]) or not whole:
                 tally["not_combined"] += 1
                 continue
-            afile = joined[a].get("file") or joined[a]["tmp"]
-            _combine(case, c, joined[ident]["file"], afile, seed=f"single\0{ident}",
+            tally["audio_left_out"] += len(sound) - len(whole)
+            _combine(case, c, joined[ident]["file"],
+                     [joined[o].get("file") or joined[o]["tmp"] for o in whole], seed=f"single\0{ident}",
                      label=f"exoplayer_av_{ident if isinstance(ident, int) else joined[ident]['h'][:12]}.mp4",
                      info={"format": f"ExoPlayer cache ({c.version}), DASH video and audio",
                            "app_folder": _app_folder(c.root), "cache_folder": c.root,
                            "key": pairs[ident]["manifest_key"],
                            "key_from": f"DASH manifest, cache item {pairs[ident]['manifest']}",
                            "video": label,
-                           "audio": kept[a][2] if a in kept else f"cache item {a} (not kept on its own)",
-                           "last_touched_ms": max(q[1] for i in (ident, a) for q in joined[i]["pieces"])},
+                           "audio_tracks": [_track(pairs[o]["rep"], kept[o][2] if o in kept else
+                                                   f"cache item {o} (not kept on its own)")
+                                            for o in whole],
+                           "last_touched_ms": max(q[1] for i in (ident, *whole) for q in joined[i]["pieces"])},
                      first=joined[ident]["first"], mtime=None, tally=tally)
         for ident, rec in joined.items():
             if ident not in kept and ident not in consumed:
@@ -922,10 +945,28 @@ def describe(d) -> str:
     if i.get("redirected_to"):
         parts.append(f"redirected to {i['redirected_to']}")
     if i.get("combined"):
-        parts.append(f"video {i.get('video')} and audio {i.get('audio')} put in one file, "
-                     "no sample re-encoded")
-        if i.get("video_segments"):
-            parts.append(f"video segments {i['video_segments']}, audio segments {i['audio_segments']}")
+        tracks = i.get("audio_tracks")
+        if tracks is None:                 # written before audio tracks were listed
+            parts.append(f"video {i.get('video')} and audio {i.get('audio')} put in one file, "
+                         "no sample re-encoded")
+            if i.get("video_segments"):
+                parts.append(f"video segments {i['video_segments']}, audio segments {i['audio_segments']}")
+        else:
+            parts.append(f"video {i.get('video')} and {len(tracks)} audio track(s) put in one file, "
+                         "no sample re-encoded")
+            if i.get("video_segments"):
+                parts.append(f"video segments {i['video_segments']}")
+            for n, t in enumerate(tracks, 1):
+                bits = [f"language {t['lang']} (as the manifest gives it)" if t.get("lang") else
+                        "no language in the manifest"]
+                if str(t.get("bandwidth") or "").isdigit():
+                    bits.append(f"{int(t['bandwidth']):,} bit/s")
+                if t.get("segments"):
+                    bits.append(f"segments {t['segments']}")
+                role = "the track a player starts on" if n == 1 and len(tracks) > 1 else \
+                    "an alternative" if n > 1 else ""
+                parts.append(f"audio track {n}: {t.get('label')}, " + ", ".join(bits)
+                             + (f", {role}" if role else ""))
         parts.append(f"{i.get('bytes_joined', 0):,} bytes")
         return _with_touch(parts, i)
     if i.get("dash"):
