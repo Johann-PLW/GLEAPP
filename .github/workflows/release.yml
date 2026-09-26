@@ -140,7 +140,10 @@ jobs:
           WEBPID=$!
           served=""
           for _ in $(seq 1 60); do
-            if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q GLEAPP; then served=1; break; fi
+            # Read the page whole before testing it: under pipefail, grep -q exiting at the
+            # first match can cut curl off mid-write and fail the pipeline.
+            page="$(curl -fsS --max-time 2 "http://127.0.0.1:$PORT/" 2>/dev/null || true)"
+            case "$page" in *GLEAPP*) served=1; break ;; esac
             sleep 1
           done
           kill "$WEBPID" 2>/dev/null || true
