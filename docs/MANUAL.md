@@ -501,11 +501,14 @@ from grouping because their perceptual hashes are meaningless. "Find similar"
 
 ### Find similar: copies of a picture
 
-Right-click → **Find similar** uses the case's two Find-similar indexes. Processing
-builds them as its last stages, so Find similar works as soon as a case is processed,
-and files added later are indexed as they are processed. A case processed before these
-indexes existed builds them once with the button in the left pane's **Find similar**
-section, which also shows how much each index holds. Find similar on an image then lists its copies: the same picture
+Right-click → **Find similar** uses the case's two Find-similar indexes. They build in
+the background whenever a case is open, after processing rather than as part of it, so
+they add no time to an ingest: likely examiner material first, the system's and
+applications' own artwork last. Find similar works on whatever is indexed so far (its
+banner says when indexing is still under way), indexing pauses while a job runs and
+picks up files the job added, and a case processed before these indexes existed is
+indexed the first time it is opened. The left pane's **Find similar** section shows
+each index's progress. From the command line, processing builds them at its end. Find similar on an image then lists its copies: the same picture
 resized, recompressed, cropped, mirrored, rotated, recolored, captioned, framed,
 watermarked or pasted into a screenshot. Each result's badge says how it was
 confirmed: **N pts** is the number of points that line up with the searched
@@ -536,8 +539,8 @@ after the copies, ranked, each with a **≈ N%** badge; the **similar content fr
 slider in the banner sets how alike a file must be to be listed (70% by default).
 
 This uses an image-understanding model, **DINOv2-small** (Meta AI, Apache-2.0), which
-ships with GLEAPP and runs on the computer: nothing goes online. Processing and that
-button build the content index after the copy index. It reads the
+ships with GLEAPP and runs on the computer: nothing goes online. The content index is
+built after the copy index. It reads the
 thumbnails, not the evidence, and can be stopped and picks up where it left off. Each
 picture is described once however many exact copies of it the case holds, pictures
 under 128 pixels (icons, cursors, buttons) are skipped, and the operating system's and
