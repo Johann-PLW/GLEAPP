@@ -19,3 +19,6 @@ vt.json
 # property of the environment a build was made in, not of the source
 NOTICES.txt
 gleapp/web/static/NOTICES.txt
+
+# Finder metadata, written into every folder macOS opens
+.DS_Store
