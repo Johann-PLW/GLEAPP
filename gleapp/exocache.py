@@ -59,7 +59,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urljoin
 from typing import Callable
 
-from . import archive
+from . import archive, mp4mux
 from .ingest import EXO_DB_NAME as DB_NAME
 from .ingest import EXO_INDEX_NAME as INDEX_NAME
 from .ingest import EXO_PIECE_V3 as PIECE_V3
@@ -597,16 +597,8 @@ def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: d
     r = st["rep"]
     kind, ext = ("other", ".m4a") if _is_audio(st) else ("video", ".mp4")
     parts = [st["init"], *st["segs"]]
-    h = hashlib.sha1(f"{c.source}\0{c.root}\0dash\0{st['init']}".encode(
-        "utf-8", "surrogatepass")).hexdigest()
-    dest = Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}{ext}"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    total = 0
-    with open(dest, "wb") as out:
-        for ident in parts:
-            with open(joined[ident]["tmp"], "rb") as fh:
-                shutil.copyfileobj(fh, out, 1 << 20)
-            total += joined[ident]["j"]["bytes"]
+    dest = _stream_path(case, c, st, ext)
+    total = _write_stream(joined, st, dest)
     label = _stream_label(st)
     used = [row for ident in parts for row in joined[ident]["j"]["used"]]
     mtimes = [row["mtime"] for row in used if row["mtime"] is not None]
@@ -650,6 +642,50 @@ def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: d
     )
     tally["dash_streams"] += 1
     tally["added"] += 1
+    return dest
+
+
+def _stream_path(case, c, st: dict, ext: str) -> Path:
+    h = hashlib.sha1(f"{c.source}\0{c.root}\0dash\0{st['init']}".encode(
+        "utf-8", "surrogatepass")).hexdigest()
+    return Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}{ext}"
+
+
+def _write_stream(joined: dict, st: dict, dest: Path) -> int:
+    """The initialization segment and media segments, in order, into ``dest``."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with open(dest, "wb") as out:
+        for ident in [st["init"], *st["segs"]]:
+            with open(joined[ident]["tmp"], "rb") as fh:
+                shutil.copyfileobj(fh, out, 1 << 20)
+            total += joined[ident]["j"]["bytes"]
+    return total
+
+
+def _combine(case, c, video: Path, audio: Path, *, seed: str, label: str, info: dict,
+             first, mtime, tally: dict) -> None:
+    """Put a video and its audio in one file (``gleapp/mp4mux.py``) and register it.
+    Nothing is written when the pair cannot be combined; the audit log counts it."""
+    h = hashlib.sha1(f"{c.source}\0{c.root}\0av\0{seed}".encode(
+        "utf-8", "surrogatepass")).hexdigest()
+    dest = Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}.mp4"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        done = mp4mux.mux(video, audio, dest)
+    except (mp4mux.MuxError, OSError, struct.error):
+        tally["not_combined"] += 1
+        with contextlib.suppress(OSError):
+            dest.unlink()
+        return
+    info = {**info, "combined": True, "layout": done["layout"], "bytes_joined": done["bytes"]}
+    case.db.upsert_file(
+        str(dest), rel_path=f"{c.root}/{label}", orig_path=f"{c.root}/{label}",
+        orig_name=label, source=c.source, kind="video", ext=".mp4", size=done["bytes"],
+        mtime=mtime, ctime=None, atime=None, origin=first["origin"],
+        container_id=first["id"], cache_info=json.dumps(info))
+    tally["combined"] += 1
+    tally["added"] += 1
 
 
 def assemble(case, *, progress: Callable[[int], None] | None = None,
@@ -672,7 +708,8 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
     tables = _db_tables(case, recs, got["dbs"], sidecars)
     have_children = {r["container_id"] for r in case.db.iter_files("container_id IS NOT NULL", ())}
     tally = {"added": 0, "items": 0, "no_start": 0, "skipped_other": 0, "failed": 0,
-             "complete": 0, "dash_streams": 0, "in_dash_streams": 0}
+             "complete": 0, "dash_streams": 0, "in_dash_streams": 0, "combined": 0,
+             "not_combined": 0}
     # the first pieces an earlier pass already put inside a DASH stream's file
     in_streams: set[int] = set()
     for r in case.db.iter_files("cache_info IS NOT NULL", ()):
@@ -709,8 +746,41 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
         # an audio stream is kept on the same terms as any other non-media item
         registered = [st for st in streams if include_other or not _is_audio(st)]
         tally["skipped_other"] += len(streams) - len(registered)
-        for st in registered:
-            _register_stream(case, c, joined, st, registered, tally)
+        files: dict = {}
+        temps: list = []
+        for st in streams:
+            if st in registered:
+                files[id(st)] = _register_stream(case, c, joined, st, registered, tally)
+            else:
+                tmp_audio = _stream_path(case, c, st, ".m4a.part")
+                _write_stream(joined, st, tmp_audio)
+                files[id(st)] = tmp_audio
+                temps.append(tmp_audio)
+        for st in streams:
+            if _is_audio(st):
+                continue
+            sound = [o for o in streams if o["manifest"] == st["manifest"] and _is_audio(o)]
+            if len(sound) != 1:
+                continue                   # none, or a choice between languages: no guess
+            a = sound[0]
+            parts = [st["init"], *st["segs"], a["init"], *a["segs"]]
+            _combine(case, c, files[id(st)], files[id(a)], seed=f"dash\0{st['init']}",
+                     label=f"exoplayer_av_{st['init']}.mp4",
+                     info={"format": f"ExoPlayer cache ({c.version}), DASH video and audio",
+                           "app_folder": _app_folder(c.root), "cache_folder": c.root,
+                           "key": st["manifest_key"],
+                           "key_from": f"DASH manifest, cache item {st['manifest']}",
+                           "video": _stream_label(st),
+                           "audio": _stream_label(a) if a in registered else
+                           f"audio stream {a['rep'].get('id')} (not kept on its own)",
+                           "video_segments": f"{len(st['segs'])} of {st['listed']}",
+                           "audio_segments": f"{len(a['segs'])} of {a['listed']}",
+                           "last_touched_ms": max(q[1] for i in parts for q in joined[i]["pieces"]),
+                           "member_first_ids": [joined[i]["first"]["id"] for i in parts]},
+                     first=joined[st["init"]]["first"], mtime=None, tally=tally)
+        for t in temps:
+            with contextlib.suppress(OSError):
+                t.unlink()
         # decide every item's kind first, so a pairing names only files the case keeps
         kept: dict = {}
         for ident, rec in joined.items():
@@ -727,8 +797,9 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 kind, ext = "other", ".m4a"
             if kind not in ("image", "video") and not include_other:
                 tally["skipped_other"] += 1
-                rec["tmp"].unlink()
-                continue
+                if not rec["audio"]:
+                    rec["tmp"].unlink()
+                continue                   # an audio file waits: a video may be combined with it
             label = f"exoplayer_{ident if isinstance(ident, int) else rec['h'][:12]}{ext}"
             kept[ident] = (kind, ext, label)
         for ident, (kind, ext, label) in kept.items():
@@ -785,9 +856,38 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 container_id=first["id"],
                 cache_info=json.dumps(info),
             )
+            rec["file"] = dest
             tally["added"] += 1
             if progress and tally["added"] % 50 == 0:
                 progress(tally["added"])
+        # a whole-file video whose manifest lists exactly one cached whole-file audio
+        for ident, (kind, _ext, label) in kept.items():
+            if kind != "video" or ident not in pairs:
+                continue
+            sound = [o for o in pairs[ident]["with"] if joined[o].get("audio")]
+            if len(sound) != 1:
+                continue
+            a = sound[0]
+            # a file cut short at a gap carries no playable end; a combined copy of it
+            # would only be a second broken file
+            if not (_complete(joined[ident]) and _complete(joined[a])):
+                tally["not_combined"] += 1
+                continue
+            afile = joined[a].get("file") or joined[a]["tmp"]
+            _combine(case, c, joined[ident]["file"], afile, seed=f"single\0{ident}",
+                     label=f"exoplayer_av_{ident if isinstance(ident, int) else joined[ident]['h'][:12]}.mp4",
+                     info={"format": f"ExoPlayer cache ({c.version}), DASH video and audio",
+                           "app_folder": _app_folder(c.root), "cache_folder": c.root,
+                           "key": pairs[ident]["manifest_key"],
+                           "key_from": f"DASH manifest, cache item {pairs[ident]['manifest']}",
+                           "video": label,
+                           "audio": kept[a][2] if a in kept else f"cache item {a} (not kept on its own)",
+                           "last_touched_ms": max(q[1] for i in (ident, a) for q in joined[i]["pieces"])},
+                     first=joined[ident]["first"], mtime=None, tally=tally)
+        for ident, rec in joined.items():
+            if ident not in kept and ident not in consumed:
+                with contextlib.suppress(OSError):
+                    rec["tmp"].unlink()
         case.db.commit()
     case.db.commit()
     if tally["items"]:
@@ -821,6 +921,13 @@ def describe(d) -> str:
         parts.append(f"no key ({i.get('key_from')})")
     if i.get("redirected_to"):
         parts.append(f"redirected to {i['redirected_to']}")
+    if i.get("combined"):
+        parts.append(f"video {i.get('video')} and audio {i.get('audio')} put in one file, "
+                     "no sample re-encoded")
+        if i.get("video_segments"):
+            parts.append(f"video segments {i['video_segments']}, audio segments {i['audio_segments']}")
+        parts.append(f"{i.get('bytes_joined', 0):,} bytes")
+        return _with_touch(parts, i)
     if i.get("dash"):
         r = i.get("representation") or {}
         what = ", ".join(str(v) for v in (

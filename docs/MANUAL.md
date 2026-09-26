@@ -1031,11 +1031,20 @@ or an archive found inside a source:
   and how many of the listed segments were joined. The segments it holds are not
   listed again on their own. Membership comes only from the manifest: segments
   whose addresses merely look alike are never joined.
-- **Video and sound are separate DASH streams.** Each is joined into its own file,
-  so the video is silent; the sound is kept when the source includes other files,
-  and each names the other. A stream stored as one file fetched in ranges (Reddit's
-  `DASH_720.mp4` beside `DASH_audio.mp4`, for example) is already whole, and *App
-  cache* names the manifest that lists it and the other cached streams it lists.
+- **Video and sound are separate DASH streams, and are also put together.** Each
+  stream is joined into its own file, so the video alone is silent; the sound is
+  kept on its own when the source includes other files, and each names the other.
+  Where the manifest lists exactly one cached audio stream beside a video, GLEAPP
+  also writes one file holding both tracks, named `exoplayer_av_...mp4`, whatever
+  the source's other-files setting. Nothing is re-encoded: the tracks' descriptions
+  are rewritten into one header and every sample's bytes are copied unchanged, so
+  the picture and sound are exactly what was cached. When the manifest lists two
+  or more cached audio streams (two languages, say), which belongs with the video
+  would be a guess, so none is combined. A stream stored as one file fetched in
+  ranges (Reddit's `DASH_720.mp4` beside `DASH_audio.mp4`, for example) is already
+  whole; *App cache* names the manifest that lists it and the other cached streams
+  it lists, and the same one-audio rule combines it with its sound. The silent
+  video stays in the case as what was actually cached.
 - An MP4 whose only track is sound is kept as audio, not as a video with no frames.
 - HLS video is cached one segment per item, so a joined HLS segment is only as
   long as the segment. A DASH manifest described by a SegmentTemplate is not used.

@@ -1032,10 +1032,14 @@ the piece's own name instead.</p>
   the listed segments were joined. Segments whose addresses merely look alike are never
   joined.</li>
   <li>Video and sound are separate DASH streams, each joined into its own file; the sound
-  is kept when the source includes other files, and each names the other. A stream
-  stored as one file (Reddit's <code>DASH_720.mp4</code> beside
+  is kept on its own when the source includes other files, and each names the other.
+  Where the manifest lists exactly one cached audio stream beside a video, GLEAPP also
+  writes one file holding both tracks (<code>exoplayer_av_...mp4</code>), with nothing
+  re-encoded: every sample's bytes are copied unchanged. Two or more cached audio
+  streams (two languages) would make the pairing a guess, so none is combined. A
+  stream stored as one file (Reddit's <code>DASH_720.mp4</code> beside
   <code>DASH_audio.mp4</code>) names the manifest that lists it and the other cached
-  streams it lists.</li>
+  streams it lists, and is combined with its sound by the same rule.</li>
   <li>An MP4 whose only track is sound is kept as audio, not as a video with no frames.</li>
   <li>HLS video is cached one segment per item, so a joined HLS segment is only as long as
   the segment.</li>
