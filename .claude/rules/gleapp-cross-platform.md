@@ -186,8 +186,6 @@ Measured 2026-09-26 on four registered images: russell_pixel6a_a13 (zip) joined 
 joined are not image or video (Snapchat's pieces carry no recognisable header, and
 audio, playlists and manifests), and every joined file that does not decode is a DASH
 segment cached as its own item, which the existing fragmented-MP4 messages describe.
-GLEAPP's key-frame sampler seeks by frame number, which OpenCV cannot do in an MPEG
-transport stream, so a joined HLS `.ts` segment (and any `.ts` file) gets no frames.
 
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 
