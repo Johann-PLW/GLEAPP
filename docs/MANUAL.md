@@ -429,7 +429,7 @@ So `dcim 2024-07` finds files whose path mentions DCIM and whose date is in July
 |---|---|
 | **Category** | **Any**, a specific category (presets and your own, hidden ones marked), or **Uncategorized**, which enables the auto-advance review flow. |
 | **Type** | **image**, **video**, or **other** (non-decodable, documents, unknown formats). A fourth value, **archive (container)**, is the only way to see the `.zip` / `.tar` / `.gz` files themselves: they are **hidden from the gallery and reports by default**; only the image and video members found inside them are shown. |
-| **Source** | Restrict to one ingest source (folder name, or the Project VIC source). |
+| **Source** | Restrict to one ingest source (its folder or file name; a Project VIC JSON is listed by its file name). |
 
 **Reattach to source…** in the top bar appears when the case holds a folder or
 Project VIC source. If that source's folder has moved or gone, the source is

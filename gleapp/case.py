@@ -205,7 +205,7 @@ def parse_source_spec(spec: str | Path) -> tuple[list[Source], dict]:
                 "hashes with no media files behind them. Import it as a hash set "
                 "instead: Reference data (NSRL) for every case, or Import hash set "
                 "for this one; from the command line, gleapp hashset <file> --global.")
-        return [Source(name=f"Project VIC ({p.stem})", path=str(p.resolve()),
+        return [Source(name=p.name, path=str(p.resolve()),
                        kind="projectvic")], {}
 
     doc = json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
