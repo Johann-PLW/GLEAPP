@@ -1043,8 +1043,12 @@ the piece's own name instead.</p>
   manifest that lists it and the other cached streams it lists, and is combined with its
   sound the same way; one cut short at a gap is not combined.</li>
   <li>An MP4 whose only track is sound is kept as audio, not as a video with no frames.</li>
-  <li>HLS video is cached one segment per item, so a joined HLS segment is only as long as
-  the segment.</li>
+  <li>HLS streams are joined from their cached playlist: the initialization segment, then
+  the segments in the playlist's order, into one <code>exoplayer_hls_...</code> file
+  (<code>.mp4</code> or <code>.ts</code>). A video is combined with the audio of its own
+  AUDIO group when the master playlist is cached; a transport stream already carries its
+  sound. Encrypted and byte-range playlists are not joined, and subtitles (WebVTT) are left
+  as they are.</li>
 </ul>
 <p>A case ingested before this version did not keep the pieces: re-ingest the source.
 <strong>Expand archives</strong> also runs the join on a case that already holds them.</p>

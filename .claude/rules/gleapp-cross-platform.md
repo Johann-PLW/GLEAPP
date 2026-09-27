@@ -209,6 +209,13 @@ case rows and registers what it produces, so fix the reading upstream and re-ven
 On russell_a14, exoprobe run on its own over the extracted cache files wrote 473 files
 and GLEAPP registered 473, every SHA-256 equal (2026-09-26, before GLEAPP switched to it).
 
+HLS streams are joined the same way from a cached media playlist (`exoprobe.plan_streams`,
+which extends `plan_dash`): every URI resolved against the playlist's own address, as
+`HlsMediaChunk` requests it, a video combined only with its master playlist's AUDIO group,
+and only when it is video alone (a transport stream carries its own sound). A DASH stream
+keeps its file name, `sha1(source, cache folder, "dash", init id)`, so a case ingested before
+HLS was joined matches it on a second pass; `test_exocache_hls.py` pins that.
+
 DASH streams are joined only from a cached manifest (`exoprobe.representations`,
 `plan_dash`): ExoPlayer keys a segment by its address resolved against the
 representation's first BaseURL (`DashUtil.resolveCacheKey`), and resolving the cached
