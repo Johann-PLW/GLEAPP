@@ -17,8 +17,8 @@ from PIL import Image
 # import resolves at run time; whether pylint resolves it depends on the interpreter it
 # runs under, and on 3.14 it does not.
 from ewfwriter import (  # pylint: disable=import-error
-    write_afd, write_aff, write_ewf, write_segmented_udif, write_sparsebundle,
-    write_sparseimage, write_udif)
+    write_afd, write_aff, write_encrypted, write_encrypted_sparsebundle, write_ewf,
+    write_segmented_udif, write_sparsebundle, write_sparseimage, write_udif)
 from gleapp import archive
 from gleapp.case import open_case, parse_source_spec
 from gleapp.pipeline import ingest_sources, process
@@ -277,20 +277,102 @@ def test_an_ordinary_folder_is_still_a_folder_source(tmp_path):
     assert [s.kind for s in sources] != ["archive"]
 
 
-def test_an_encrypted_sparse_bundle_is_refused_with_the_reason(tmp_path):
-    bundle = Path(write_sparsebundle(tmp_path / "locked.sparsebundle", b"\x01" * 4096,
-                                     token=b"encrcdsa" + bytes(1000)))
-    assert archive.archive_format(bundle) is None
-    with pytest.raises(ValueError, match="encrypted Apple sparse bundle"):
-        parse_source_spec(bundle)
+PASSWORD = "gleapp-test-password"
 
 
-def test_an_encrypted_apple_disk_image_is_refused_with_the_reason(tmp_path):
-    enc = tmp_path / "locked.dmg"
+@pytest.fixture
+def _fresh_session(monkeypatch):
+    """Passwords are held per process; each test starts as a new session would."""
+    monkeypatch.setattr(archive, "_PASSWORDS", {})
+
+
+def _udif_bytes(tmp_path, data):
+    return Path(write_udif(tmp_path / "plain.dmg", data)).read_bytes()
+
+
+def _sparse_bytes(tmp_path, data):
+    return Path(write_sparseimage(tmp_path / "plain.sparseimage", data)).read_bytes()
+
+
+@pytest.mark.parametrize("inner", ["udif", "sparseimage", "disk"])
+def test_an_encrypted_image_is_read_with_its_password(tmp_path, _fresh_session, inner):
+    data, laid = _disk(tmp_path)
+    plain = {"udif": lambda: _udif_bytes(tmp_path, data),
+             "sparseimage": lambda: _sparse_bytes(tmp_path, data),
+             "disk": lambda: data}[inner]()
+    (tmp_path / "ev").mkdir()
+    image = Path(write_encrypted(tmp_path / "ev" / "locked.dmg", plain, PASSWORD))
+    assert archive.archive_format(image) == "ewf"
+    assert archive.needs_password(image) and not archive.is_unlocked(image)
+    assert [s.kind for s in parse_source_spec(image)[0]] == ["archive"]
+    with pytest.raises(archive.ImagePasswordNeeded):
+        archive._open_image_file(image)         # pylint: disable=protected-access
+    assert not archive.unlock_image(image, "not it")
+    assert not archive.is_unlocked(image)
+    assert archive.unlock_image(image, PASSWORD)
+    c, n = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        assert n == 3
+        rec = _check_carved(c, image.name, data, laid)
+        assert archive.source_status(c)[0]["status"] == "ok"
+    finally:
+        archive.close_zips()
+        c.close()
+    stored = b"".join(p.read_bytes() for p in (tmp_path / "case").rglob("*") if p.is_file())
+    assert PASSWORD.encode() not in stored, "the password reached the case folder"
+    assert rec["path"] == str(image)
+
+
+def test_a_new_session_shows_the_source_locked_until_it_is_unlocked(tmp_path, monkeypatch,
+                                                                    _fresh_session):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    image = Path(write_encrypted(tmp_path / "ev" / "locked.dmg", data, PASSWORD))
+    assert archive.unlock_image(image, PASSWORD)
+    c, _ = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        archive.close_zips()
+        monkeypatch.setattr(archive, "_PASSWORDS", {})       # the next session
+        assert archive.source_status(c)[0]["status"] == "locked"
+        rows = _rows(c)
+        rec = archive.source_record(c, image.name)
+        hit = next(iter(rows.values()))
+        with pytest.raises(archive.ArchiveUnavailable, match="encrypted Apple disk image"):
+            with archive.local_copy(c.root, rec, hit):
+                pass
+        assert archive.unlock_image(image, PASSWORD)
+        assert archive.source_status(c)[0]["status"] == "ok"
+        _check_carved(c, image.name, data, laid)
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_an_encrypted_sparse_bundle_is_read_with_its_password(tmp_path, _fresh_session):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    bundle = Path(write_encrypted_sparsebundle(tmp_path / "ev" / "locked.sparsebundle",
+                                               data, PASSWORD))
+    assert archive.archive_format(bundle) == "ewf"
+    assert archive.needs_password(bundle)
+    assert archive.unlock_image(bundle, PASSWORD)
+    c, n = _ingest(tmp_path, bundle, "case", do_process=False)
+    try:
+        assert n == 3
+        _check_carved(c, bundle.name, data, laid)
+        assert archive.source_status(c)[0]["status"] == "ok"
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_a_damaged_encrypted_header_is_reported_not_asked_about_again(tmp_path,
+                                                                     _fresh_session):
+    enc = tmp_path / "damaged.dmg"
     enc.write_bytes(b"encrcdsa" + bytes(8192))
-    assert archive.archive_format(enc) is None
-    with pytest.raises(ValueError, match="encrypted Apple disk image"):
-        parse_source_spec(enc)
+    assert archive.archive_format(enc) == "ewf"
+    with pytest.raises(archive.ewfprobe.EwfFormatError, match="encrcdsa version 0"):
+        archive.unlock_image(enc, PASSWORD)
 
 
 def test_logical_evidence_is_refused_with_the_reason(tmp_path):

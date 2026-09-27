@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +17,70 @@ from .similar import find_similar
 
 def _p(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _cli_passwords(args: argparse.Namespace) -> list:
+    """The passwords the command line names: the first line of each --password-file,
+    then each --password-env variable. Never an argument's value, which would show in
+    the process list and the shell history."""
+    out: list = []
+    for path in getattr(args, "password_file", None) or []:
+        try:
+            first = Path(path).read_bytes().split(b"\n", 1)[0]
+        except OSError as exc:
+            raise ValueError(f"the password file could not be read: "
+                             f"{exc.strerror or exc}") from None
+        out.append(first[:-1] if first.endswith(b"\r") else first)
+    for name in getattr(args, "password_env", None) or []:
+        if name not in os.environ:
+            raise ValueError(f"the environment variable {name} is not set")
+        out.append(os.environ[name])
+    return out
+
+
+def _unlock(paths, args: argparse.Namespace) -> list[str]:
+    """Open each encrypted Apple disk image among ``paths`` for this session, with the
+    first password the command line gives that opens it or, when it gives none, one
+    asked for at a terminal (three tries). Returns the names still locked. The
+    passwords are held in memory only (archive.unlock_image)."""
+    from . import archive
+
+    def opens(path, password) -> bool:
+        try:
+            return archive.unlock_image(path, password)
+        except (OSError, archive.ewfprobe.EwfError) as exc:   # not a password matter
+            raise ValueError(f"{Path(path).name} could not be opened: {exc}") from None
+
+    given = _cli_passwords(args)
+    left = []
+    for path in paths:
+        if not archive.needs_password(path) or archive.is_unlocked(path):
+            continue
+        name = Path(path).name
+        if any(opens(path, pw) for pw in given):
+            continue
+        if not given and sys.stdin is not None and sys.stdin.isatty():
+            for _ in range(3):
+                if opens(path, getpass.getpass(f"Password for {name}: ")):
+                    break
+                print("That password does not open the image.", file=sys.stderr)
+            else:
+                left.append(name)
+            continue
+        left.append(name)
+    return left
+
+
+def _unlock_case(case, args: argparse.Namespace) -> None:
+    """Open the case's encrypted image sources for this session, and say which are
+    left locked: files read from them fail until their password is given."""
+    from . import archive
+
+    left = _unlock([r["path"] for r in archive.source_records(case).values()], args)
+    for name in left:
+        print(f"warning: {name} is an encrypted disk image and its password was not "
+              f"given (--password-file, --password-env, or at a terminal); files read "
+              f"from it will fail", file=sys.stderr)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -37,6 +103,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         for s in sources:
             if s.kind == "archive":
                 s.stage = True
+    left = _unlock([s.path for s in sources], args)
+    if left:
+        case.close()
+        raise ValueError(f"{', '.join(left)}: an encrypted disk image opens only with its "
+                         f"password; give it with --password-file or --password-env, or "
+                         f"run at a terminal to be asked for it")
+    _unlock_case(case, args)
     _p(f"Sources ({len(sources)}):")
     for s in sources:
         how = ""
@@ -72,6 +145,7 @@ def _run_process(case, args) -> None:
 
 def cmd_process(args: argparse.Namespace) -> int:
     case = open_case(args.case, examiner=args.examiner)
+    _unlock_case(case, args)
     _run_process(case, args)
     case.close()
     return 0
@@ -241,6 +315,8 @@ def cmd_source(args: argparse.Namespace) -> int:
         raise ValueError("'source relink' needs the zip's new path")
     case = open_case(args.case, examiner=args.examiner)
     try:
+        if args.action in ("stage", "carve"):
+            _unlock_case(case, args)
         if args.action == "list":
             rows = archive.source_status(case)
             if not rows:
@@ -393,6 +469,7 @@ def cmd_similar(args: argparse.Namespace) -> int:
 
 def cmd_report(args: argparse.Namespace) -> int:
     case = open_case(args.case)
+    _unlock_case(case, args)
     where = args.where or {
         "categorized": "category != 0",
         "uncategorized": "category = 0",
@@ -477,6 +554,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--examiner", default=None,
                     help="examiner name for the audit log (default: keep the case's "
                          "stored name, or 'examiner' for a brand-new case)")
+    ap.add_argument("--password-file", metavar="FILE", action="append", default=[],
+                    help="for an encrypted Apple disk image source: a password, the first "
+                         "line of FILE. Repeatable; each image opens with the first that "
+                         "opens it. Held in memory for this run only")
+    ap.add_argument("--password-env", metavar="NAME", action="append", default=[],
+                    help="for an encrypted Apple disk image source: a password, from the "
+                         "environment variable NAME. Repeatable. Without either, GLEAPP "
+                         "asks at a terminal")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="create an empty case")

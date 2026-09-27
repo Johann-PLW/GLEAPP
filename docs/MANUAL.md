@@ -42,6 +42,16 @@ With no case open, GLEAPP shows the **launcher**.
       `.img`/`.dd`, or any segment of a split set such as `.001`, `.002`). Raw
       images are identified by content, not extension. A split set with a
       missing segment is refused and the gap is named.
+      - An encrypted Apple disk image or sparse bundle (AES-128 or AES-256, as
+        `hdiutil` writes them) is read with its password. When
+        you click **Create case & ingest**, GLEAPP asks for it in a password
+        field, and asks again if it does not open the image. The password is
+        held in memory until GLEAPP is closed and is never written into the
+        case, your settings, a log or a report. In a later session the Source
+        banner shows the image as encrypted with an **Unlock…** button. Until
+        it is unlocked, a case that reads the image in place keeps its
+        thumbnails, hashes and categories, and full-size viewing and export
+        wait for it.
       - Filesystems are walked file by file, so each file keeps the name, path
         and dates the filesystem recorded. Supported: ext2/3/4, F2FS, FAT32,
         exFAT, NTFS, HFS+, HFSX, APFS, QNX4, QNX EFS, QNX ETFS, QNX IFS,
@@ -108,6 +118,16 @@ your hash stash and imported basemaps live in your user data folders instead
 process --force`. Without `-c`, GLEAPP looks for a folder named `case` in the
 current directory. The `maps` commands, `hashset --global` and `stash` (except
 `stash --add`) do not use a case.
+
+An encrypted Apple disk image takes its password from `--password-file <file>`
+(the first line of the file) or `--password-env <variable>` (the name of an
+environment variable holding it), both written before the subcommand like `-c`.
+Either can be given more than once when a case holds several encrypted images;
+each password is tried on each image. With neither, GLEAPP asks at the terminal,
+and without a terminal it stops and says which option to use. The password is
+held for that one command, so `process`, `report`, `source stage` and
+`source carve` need it again. A password is never taken on the command line
+itself, where other users of the machine and the shell history could read it.
 
 ## 3. The review gallery
 
@@ -1258,9 +1278,10 @@ already give you.
   and on Windows or Linux use the folder button. An LZFSE-compressed `.dmg` needs
   `pyliblzfse`, which GLEAPP's requirements install.
 - **Raw image**: one file, or any segment of a numbered split set.
-- **Not accepted**: VHD and VMDK; EnCase logical evidence (`.L01`), which holds
-  copies of files rather than a disk; and an encrypted Apple disk image or sparse
-  bundle, which needs its password. Both are refused with that reason.
+- **Encrypted Apple disk image or sparse bundle**: point at it as above; GLEAPP
+  asks for its password (§1).
+- **Not accepted**: VHD and VMDK, and EnCase logical evidence (`.L01`), which
+  holds copies of files rather than a disk and is refused with that reason.
 - An acquisition is recognized by its own signature and a raw image by what it
   holds, so the extension does not matter.
 

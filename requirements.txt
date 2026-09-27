@@ -27,6 +27,12 @@ zstandard>=0.22
 # Windows x64, macOS arm64 and x86_64, and manylinux x86_64 and aarch64. On
 # Windows on ARM, brotli has no wheel and pip builds it from its sdist.
 py7zr>=0.21
+# Reading an Apple disk image encrypted with a password: the vendored ewfprobe
+# imports pycryptodomex (module Cryptodome) when pycryptodome is absent. py7zr
+# already brings it; it is named here so encrypted images do not depend on that.
+# 3.23.0 has abi3 wheels for Windows x64 and ARM64, macOS universal2 and x86_64,
+# and manylinux x86_64 and aarch64 (PyPI, 2026-09-27).
+pycryptodomex>=3.20
 imagehash>=4.3
 numpy>=1.24
 opencv-python-headless>=4.8

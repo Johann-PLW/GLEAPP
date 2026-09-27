@@ -444,6 +444,24 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(400, description=str(exc))
         if not sources:
             abort(400, description="no sources given")
+        # An encrypted Apple disk image is read with its password, held in memory for
+        # this session only. Each one not open yet goes back to the client to ask for,
+        # and comes in the body of the next request, never in a URL or a stored file.
+        passwords = data.get("passwords") or {}
+        locked = []
+        for s in sources:
+            if not archive.needs_password(s.path) or archive.is_unlocked(s.path):
+                continue
+            given = passwords.get(s.path)
+            if given is not None:
+                try:
+                    if archive.unlock_image(s.path, given):
+                        continue
+                except (OSError, archive.ewfprobe.EwfError) as exc:
+                    abort(400, description=f"{s.name} could not be opened: {exc}")
+            locked.append({"name": s.name, "path": s.path, "wrong": given is not None})
+        if locked:
+            return jsonify({"ok": False, "needs_password": locked}), 409
         if opts.get("stage"):
             for s in sources:
                 if s.kind == "archive":
@@ -1819,6 +1837,24 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         except ValueError as exc:
             abort(400, description=str(exc))
         return jsonify({"ok": True, **status})
+
+    @app.post("/api/source/unlock")
+    def source_unlock():
+        """Open an encrypted disk image source with its password, held in memory for
+        this session only. ``ok`` is false, with ``wrong`` true, when it does not open
+        the image."""
+        case = C()
+        body = request.get_json(force=True) or {}
+        rec = archive.source_record(case, str(body.get("name", "")))
+        if rec is None:
+            abort(404, description="no such source")
+        if not archive.needs_password(rec["path"]):
+            abort(400, description=f"{rec['name']} is not an encrypted disk image")
+        try:
+            ok = archive.unlock_image(rec["path"], str(body.get("password") or ""))
+        except (OSError, archive.ewfprobe.EwfError) as exc:
+            abort(400, description=f"{rec['name']} could not be opened: {exc}")
+        return jsonify({"ok": ok, "wrong": not ok})
 
     @app.get("/api/source/folder-status")
     def source_folder_status():

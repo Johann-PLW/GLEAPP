@@ -3750,15 +3750,12 @@ $("#aeGo").onclick = async () => {
   const folders = AE.sources.filter(s => s.kind === "folder" || s.kind === "archive")
     .map(s => ({ name: s.path.split(/[\\/]/).filter(Boolean).pop(), path: s.path }));
   $("#aeGo").disabled = true;
-  const ing = await api("/api/case/ingest", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      spec: specs[0] || null, sources: folders,
-      options: { screen: $("#aeScreen").checked, keyframes: +$("#aeKf").value,
-                 stage: $("#aeStage").checked, carve: $("#aeCarve").checked,
-                 expand_archives: $("#aeExpand").checked }
-    })
-  }).catch(() => ({ error: true, message: "request failed" }));
+  const ing = await postIngest({
+    spec: specs[0] || null, sources: folders,
+    options: { screen: $("#aeScreen").checked, keyframes: +$("#aeKf").value,
+               stage: $("#aeStage").checked, carve: $("#aeCarve").checked,
+               expand_archives: $("#aeExpand").checked }
+  });
   if (ing.error) { $("#aeGo").disabled = false; return toast(ing.message || "Could not start ingest"); }
   $("#addEvDlg").style.display = "none";
   toast(`Ingesting ${ing.sources.length} source(s)…`);
@@ -4011,18 +4008,59 @@ $("#createGo").onclick = async () => {
   const folders = Lr.sources.filter(s => s.kind === "folder" || s.kind === "archive")
     .map(s => ({ name: s.path.split(/[\\/]/).filter(Boolean).pop(), path: s.path }));
   $("#jobMsg").textContent = "Starting ingest…";
-  const ing = await api("/api/case/ingest", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      spec: specs[0] || null, sources: folders,
-      options: { screen: $("#optScreen").checked, keyframes: +$("#optKf").value,
-                 stage: $("#optStage").checked, carve: $("#optCarve").checked,
-                 expand_archives: $("#optExpand").checked }
-    })
-  }).catch(() => ({ error: true, message: "request failed" }));
+  const ing = await postIngest({
+    spec: specs[0] || null, sources: folders,
+    options: { screen: $("#optScreen").checked, keyframes: +$("#optKf").value,
+               stage: $("#optStage").checked, carve: $("#optCarve").checked,
+               expand_archives: $("#optExpand").checked }
+  });
   if (ing.error) return fail(ing.message || "Ingest failed");
   pollJob();
 };
+
+/* ---------- encrypted disk images ---------- */
+// An encrypted Apple disk image opens with its password. The server holds it in
+// memory for this session only, and nothing here keeps it. It is asked for in a
+// dialog with a password field rather than with prompt(), which shows what is typed.
+function askPassword(name, wrong) {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:fixed;inset:0;z-index:10000;display:flex;"
+      + "align-items:center;justify-content:center;background:rgba(0,0,0,.45)";
+    wrap.innerHTML = `<form style="background:var(--panel);color:var(--fg);border:1px solid var(--line);
+        border-radius:8px;padding:16px 18px;min-width:320px;max-width:90vw">
+      <div style="margin-bottom:8px">${wrong
+        ? `That password does not open <b>${esc(name)}</b>.`
+        : `<b>${esc(name)}</b> is an encrypted Apple disk image.`} Its password:</div>
+      <input type="password" autocomplete="off" style="width:100%;box-sizing:border-box">
+      <div style="margin-top:12px;text-align:right">
+        <button type="button" data-cancel>Cancel</button> <button type="submit">Open</button></div>
+    </form>`;
+    const done = v => { wrap.remove(); resolve(v); };
+    wrap.querySelector("form").onsubmit = e => { e.preventDefault(); done(wrap.querySelector("input").value); };
+    wrap.querySelector("[data-cancel]").onclick = () => done(null);
+    document.body.appendChild(wrap);
+    wrap.querySelector("input").focus();
+  });
+}
+
+// POST /api/case/ingest; when the server names encrypted images it cannot open yet,
+// ask for each one's password and post again with them.
+async function postIngest(body) {
+  const passwords = {};
+  for (;;) {
+    const r = await api("/api/case/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, passwords })
+    }).catch(() => ({ error: true, message: "request failed" }));
+    if (!r.needs_password) return r;
+    for (const n of r.needs_password) {
+      const password = await askPassword(n.name, n.wrong);
+      if (password === null) return { error: true, message: `${n.name} needs its password` };
+      passwords[n.path] = password;
+    }
+  }
+}
 
 /* ---------- extraction zips read on demand ---------- */
 // A case built from an extraction zip or a disk image without copying the media
@@ -4181,14 +4219,34 @@ function showSourceStatus(list) {
     $("#main").prepend(el);
   }
   el.innerHTML = bad.map(s => {
-    const what = s.status === "missing"
-      ? "was not found at" : "has a different size or date than the case recorded, at";
     const note = s.mode === "reference"
       ? "Full-size viewing and export need it; thumbnails, hashes and categories still work."
       : "The case holds its own copies, so nothing is lost.";
+    if (s.status === "locked") {
+      return `<div style="margin:2px 0"><b>${esc(s.name)}</b> is an encrypted disk image and
+        its password has not been given this session. ${note}
+        <button data-unlock="${esc(s.name)}" style="margin-left:8px">Unlock…</button></div>`;
+    }
+    const what = s.status === "missing"
+      ? "was not found at" : "has a different size or date than the case recorded, at";
     return `<div style="margin:2px 0"><b>${esc(s.name)}</b> ${what} <code>${esc(s.path)}</code>. ${note}
       <button data-relink="${esc(s.name)}" style="margin-left:8px">Relink…</button></div>`;
   }).join("");
+  el.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => {
+    const name = b.dataset.unlock;
+    for (let wrong = false; ; wrong = true) {
+      const password = await askPassword(name, wrong);
+      if (password === null) return;
+      const r = await api("/api/source/unlock", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, password })
+      }).catch(() => ({ error: true, message: "request failed" }));
+      if (r.error) { toast(r.message || "Unlock failed"); return; }
+      if (r.ok) break;
+    }
+    toast(`${name} is open for this session`);
+    try { showSourceStatus((await api("/api/context")).archive_sources); } catch (e) {}
+  });
   el.querySelectorAll("[data-relink]").forEach(b => b.onclick = async () => {
     const name = b.dataset.relink;
     let p = Lr.native ? await pick("archive") : null;
