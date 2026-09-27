@@ -1054,8 +1054,20 @@ or an archive found inside a source:
   playable end; an audio left out that way is counted in the audit log. The silent
   video stays in the case as what was actually cached.
 - An MP4 whose only track is sound is kept as audio, not as a video with no frames.
-- HLS video is cached one segment per item, so a joined HLS segment is only as
-  long as the segment. A DASH manifest described by a SegmentTemplate is not used.
+- **HLS streams are joined from their cached playlist.** HLS caches one segment per
+  item, the way DASH does, and the playlist that lists them is cached beside them.
+  GLEAPP joins a stream's initialization segment (`#EXT-X-MAP`) and then its
+  segments in the playlist's order, up to the first one missing or incomplete, into
+  one `exoplayer_hls_...` file: `.mp4` for fragmented MP4, `.ts` for an MPEG
+  transport stream. Where a cached master playlist lists the video and its audio
+  renditions, the video is also combined with the audio of its own AUDIO group, the
+  same way as DASH; a transport stream already carries its sound and is not
+  combined. A playlist with encrypted segments or byte ranges is not joined, and a
+  subtitles playlist (WebVTT) is left as it is. On four of the five Android test
+  images with a Twitter cache, its precache folder held each video's playlists and
+  first segments but not the initialization segment they need, so nothing there
+  could be joined.
+- A DASH manifest described by a SegmentTemplate is not used.
 
 A case ingested before this version did not keep the pieces, so re-ingest the
 source to join them. **Expand archives** also runs the join on a case that

@@ -206,9 +206,10 @@ def _join(case, recs: dict, pieces: list, dest: Path) -> dict:
 _state = exoprobe.item_state
 
 
-# ---- DASH ------------------------------------------------------------------
-# Which cached items make up a DASH stream is read from the stream's cached manifest,
-# by exoprobe (``plan_dash``); see its notes for how a segment's cache key is built.
+# ---- DASH and HLS ----------------------------------------------------------
+# Which cached items make up a DASH or HLS stream is read from the stream's cached
+# manifest or playlist, by exoprobe (``plan_streams``); see its notes for how a segment's
+# cache key is built.
 
 
 def _complete(rec) -> bool:
@@ -216,13 +217,32 @@ def _complete(rec) -> bool:
     return exoprobe.is_complete(rec["j"]["bytes"], rec["entry"].get("length"), rec["j"]["gap"])
 
 
-def _dash_streams(joined: dict) -> tuple[list[dict], dict]:
-    """``exoprobe.plan_dash`` over the joined items of one cache."""
-    return exoprobe.plan_dash({ident: {"key": rec["key"], "path": rec["tmp"], "complete": _complete(rec)}
+def _streams(joined: dict) -> tuple[list[dict], dict]:
+    """``exoprobe.plan_streams`` over the joined items of one cache."""
+    return exoprobe.plan_streams({ident: {"key": rec["key"], "path": rec["tmp"], "complete": _complete(rec)}
                                for ident, rec in joined.items()})
 
 
 _is_audio = exoprobe.is_audio_stream
+
+
+def _parts(st: dict) -> list:
+    """A stream's items in written order; an HLS transport stream has no init segment."""
+    return [i for i in [st["init"], *st["segs"]] if i is not None]
+
+
+def _fmt(st: dict) -> str:
+    return st.get("format", "DASH")
+
+
+def _listing(st: dict) -> str:
+    return "DASH manifest" if _fmt(st) == "DASH" else "HLS playlist"
+
+
+def _stream_ext(st: dict) -> str:
+    if _is_audio(st):
+        return ".m4a"
+    return ".mp4" if st["init"] is not None else ".ts"
 
 
 def is_audio_item(row) -> bool:
@@ -239,16 +259,20 @@ def is_audio_item(row) -> bool:
 
 def _stream_label(st: dict) -> str:
     rid = re.sub(r"[^A-Za-z0-9_-]", "", str(st["rep"].get("id") or ""))[:24] or "stream"
-    return f"exoplayer_dash_{st['init']}_{rid}{'.m4a' if _is_audio(st) else '.mp4'}"
+    return f"exoplayer_{_fmt(st).lower()}_{_parts(st)[0]}_{rid}{_stream_ext(st)}"
 
 
 def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: dict) -> None:
     """Write one stream's initialization segment and media segments, in order, into one
     file and register it. Fragmented MP4 is built to be read that way: DASH defines a
-    representation as its initialization segment followed by its media segments."""
+    representation as its initialization segment followed by its media segments, and an
+    HLS media playlist names its initialization segment with #EXT-X-MAP. A transport
+    stream has none and its segments are joined as they are."""
     r = st["rep"]
-    kind, ext = ("other", ".m4a") if _is_audio(st) else ("video", ".mp4")
-    parts = [st["init"], *st["segs"]]
+    ext = _stream_ext(st)
+    kind = "other" if _is_audio(st) else "video"
+    parts = _parts(st)
+    first = joined[parts[0]]["first"]
     dest = _stream_path(case, c, st, ext)
     total = _write_stream(joined, st, dest)
     label = _stream_label(st)
@@ -257,12 +281,14 @@ def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: d
     other = next((o for o in registered if o is not st and o["manifest"] == st["manifest"]
                   and _is_audio(o) != _is_audio(st)), None)
     info = {
-        "format": f"ExoPlayer cache ({c.version}), DASH stream",
+        "format": f"ExoPlayer cache ({c.version}), {_fmt(st)} stream",
         "dash": True,
+        "stream_format": _fmt(st),
+        "has_init": st["init"] is not None,
         "app_folder": _app_folder(c.root),
         "cache_folder": c.root,
         "key": st["manifest_key"],
-        "key_from": f"DASH manifest, cache item {st['manifest']}",
+        "key_from": f"{_listing(st)}, cache item {st['manifest']}",
         "representation": {k: r[k] for k in ("id", "bandwidth", "mime", "codecs", "width", "height")
                            if r.get(k)},
         "track": "audio" if _is_audio(st) else "video",
@@ -288,17 +314,19 @@ def _register_stream(case, c, joined: dict, st: dict, registered: list, tally: d
         mtime=max(mtimes) if mtimes else None,
         ctime=None,
         atime=None,
-        origin=joined[st["init"]]["first"]["origin"],
-        container_id=joined[st["init"]]["first"]["id"],
+        origin=first["origin"],
+        container_id=first["id"],
         cache_info=json.dumps(info),
     )
-    tally["dash_streams"] += 1
+    tally["dash_streams" if _fmt(st) == "DASH" else "hls_streams"] += 1
     tally["added"] += 1
     return dest
 
 
 def _stream_path(case, c, st: dict, ext: str) -> Path:
-    h = hashlib.sha1(f"{c.source}\0{c.root}\0dash\0{st['init']}".encode(
+    # a DASH stream keeps the name it had before HLS was joined, so a second pass matches it
+    tag = "dash" if _fmt(st) == "DASH" else "hls"
+    h = hashlib.sha1(f"{c.source}\0{c.root}\0{tag}\0{_parts(st)[0]}".encode(
         "utf-8", "surrogatepass")).hexdigest()
     return Path(case.root) / EXTRACT_DIR / "exoplayer" / h[:2] / f"{h}{ext}"
 
@@ -306,7 +334,7 @@ def _stream_path(case, c, st: dict, ext: str) -> Path:
 def _write_stream(joined: dict, st: dict, dest: Path) -> int:
     """The initialization segment and media segments, in order, into ``dest``."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    return exoprobe.write_stream([joined[i]["tmp"] for i in [st["init"], *st["segs"]]], dest)
+    return exoprobe.write_stream([joined[i]["tmp"] for i in _parts(st)], dest)
 
 
 def _track(rep: dict, label: str, segments: str | None = None) -> dict:
@@ -364,7 +392,7 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
     tables = _db_tables(case, recs, got["dbs"], sidecars)
     have_children = {r["container_id"] for r in case.db.iter_files("container_id IS NOT NULL", ())}
     tally = {"added": 0, "items": 0, "no_start": 0, "skipped_other": 0, "failed": 0,
-             "complete": 0, "dash_streams": 0, "in_dash_streams": 0, "combined": 0,
+             "complete": 0, "dash_streams": 0, "hls_streams": 0, "in_streams": 0, "combined": 0,
              "not_combined": 0, "audio_left_out": 0}
     # the first pieces an earlier pass already put inside a DASH stream's file
     in_streams: set[int] = set()
@@ -397,8 +425,8 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                 continue
             joined[ident] = {"tmp": tmp, "j": j, "entry": entry, "key": key,
                              "first": first, "pieces": pieces, "h": h}
-        streams, pairs = _dash_streams(joined)
-        consumed = {i for st in streams for i in [st["init"], *st["segs"]]}
+        streams, pairs = _streams(joined)
+        consumed = {i for st in streams for i in _parts(st)}
         # an audio stream is kept on the same terms as any other non-media item
         registered = [st for st in streams if include_other or not _is_audio(st)]
         tally["skipped_other"] += len(streams) - len(registered)
@@ -408,26 +436,31 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
             if st in registered:
                 files[id(st)] = _register_stream(case, c, joined, st, registered, tally)
             else:
-                tmp_audio = _stream_path(case, c, st, ".m4a.part")
+                tmp_audio = _stream_path(case, c, st, _stream_ext(st) + ".part")
                 _write_stream(joined, st, tmp_audio)
                 files[id(st)] = tmp_audio
                 temps.append(tmp_audio)
         for st in streams:
-            if _is_audio(st):
+            # an HLS video that is not video alone (a transport stream) carries its own sound
+            if _is_audio(st) or (_fmt(st) == "HLS" and st["handlers"] != ["vide"]):
                 continue
-            # every cached audio stream of the same manifest, in the manifest's order:
-            # a second language (or bitrate) goes in as an alternative track, not a guess
-            sound = sorted((o for o in streams if o["manifest"] == st["manifest"] and _is_audio(o)),
+            # every cached audio stream of the same manifest, in the manifest's order (for
+            # HLS, those of the AUDIO group the master playlist gives the video): a second
+            # language (or bitrate) goes in as an alternative track, not a guess
+            sound = sorted((o for o in streams if o["manifest"] == st["manifest"] and _is_audio(o)
+                            and (_fmt(st) == "DASH" or not st["rep"].get("audio_group")
+                                 or o["rep"].get("group") == st["rep"]["audio_group"])),
                            key=lambda o: o["rep"].get("order", 0))
             if not sound:
                 continue
-            parts = [st["init"], *st["segs"]] + [i for a in sound for i in [a["init"], *a["segs"]]]
-            _combine(case, c, files[id(st)], [files[id(a)] for a in sound], seed=f"dash\0{st['init']}",
-                     label=f"exoplayer_av_{st['init']}.mp4",
-                     info={"format": f"ExoPlayer cache ({c.version}), DASH video and audio",
+            parts = _parts(st) + [i for a in sound for i in _parts(a)]
+            _combine(case, c, files[id(st)], [files[id(a)] for a in sound],
+                     seed=f"{'dash' if _fmt(st) == 'DASH' else 'hls'}\0{_parts(st)[0]}",
+                     label=f"exoplayer_av_{_parts(st)[0]}.mp4",
+                     info={"format": f"ExoPlayer cache ({c.version}), {_fmt(st)} video and audio",
                            "app_folder": _app_folder(c.root), "cache_folder": c.root,
                            "key": st["manifest_key"],
-                           "key_from": f"DASH manifest, cache item {st['manifest']}",
+                           "key_from": f"{_listing(st)}, cache item {st['manifest']}",
                            "video": _stream_label(st),
                            "video_segments": f"{len(st['segs'])} of {st['listed']}",
                            "audio_tracks": [_track(a["rep"], _stream_label(a) if a in registered else
@@ -436,7 +469,7 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
                                             for a in sound],
                            "last_touched_ms": max(q[1] for i in parts for q in joined[i]["pieces"]),
                            "member_first_ids": [joined[i]["first"]["id"] for i in parts]},
-                     first=joined[st["init"]]["first"], mtime=None, tally=tally)
+                     first=joined[_parts(st)[0]]["first"], mtime=None, tally=tally)
         for t in temps:
             with contextlib.suppress(OSError):
                 t.unlink()
@@ -444,7 +477,7 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
         kept: dict = {}
         for ident, rec in joined.items():
             if ident in consumed:
-                tally["in_dash_streams"] += 1
+                tally["in_streams"] += 1
                 with contextlib.suppress(OSError):
                     rec["tmp"].unlink()
                 continue
@@ -600,8 +633,9 @@ def describe(d) -> str:
             if i.get("video_segments"):
                 parts.append(f"video segments {i['video_segments']}")
             for n, t in enumerate(tracks, 1):
-                bits = [f"language {t['lang']} (as the manifest gives it)" if t.get("lang") else
-                        "no language in the manifest"]
+                where = "playlist" if "HLS" in (i.get("format") or "") else "manifest"
+                bits = [f"language {t['lang']} (as the {where} gives it)" if t.get("lang") else
+                        f"no language in the {where}"]
                 if str(t.get("bandwidth") or "").isdigit():
                     bits.append(f"{int(t['bandwidth']):,} bit/s")
                 if t.get("segments"):
@@ -620,9 +654,10 @@ def describe(d) -> str:
             f"{int(r['bandwidth']):,} bit/s" if str(r.get("bandwidth") or "").isdigit() else None)
             if v)
         parts.append(f"stream {r.get('id')}" + (f" ({what})" if what else ""))
-        parts.append(f"initialization segment and {i.get('segments_joined')} of "
-                     f"{i.get('segments_listed')} listed media segments joined in the manifest's "
-                     f"order, {i.get('bytes_joined', 0):,} bytes")
+        listing = "playlist" if i.get("stream_format") == "HLS" else "manifest"
+        lead = "initialization segment and " if i.get("has_init", True) else ""
+        parts.append(f"{lead}{i.get('segments_joined')} of {i.get('segments_listed')} listed media "
+                     f"segments joined in the {listing}'s order, {i.get('bytes_joined', 0):,} bytes")
         parts.append(i.get("state") or "")
         if i.get("other_track"):
             parts.append(f"the other track of this stream is in {i['other_track']}")
