@@ -3772,13 +3772,10 @@ $("#aeGo").onclick = async () => {
   if (ing.error) { $("#aeGo").disabled = false; return toast(ing.message || "Could not start ingest"); }
   $("#addEvDlg").style.display = "none";
   toast(`Ingesting ${ing.sources.length} source(s)…`);
-  trackJob("#aeInfo", "#taskProg", "Adding evidence", (ok, j) => {
-    if (!ok) return;
-    const added = j.stats?.discovered ?? 0;
-    $("#aeInfo").textContent = "";
-    toast(`Added evidence — ${added.toLocaleString()} file(s) processed. Reloading…`);
-    setTimeout(() => location.reload(), 900);
-  });
+  // the bottom bar follows the job, as it does for a new case: the gallery and the
+  // Source list refresh while the files process, so a new source is listed as soon
+  // as its files are registered rather than after the whole job
+  liveTick = 0; liveJob();
 };
 
 /* ---------- resizable sidebars (drag the shared border to widen/narrow) ---------- */
