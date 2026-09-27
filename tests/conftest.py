@@ -22,6 +22,8 @@ module-level connection, so both are closed around the session.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 
@@ -43,3 +45,39 @@ def _isolate_user_config(tmp_path_factory):
         finally:
             hashstore.close()
             stash.close()
+
+
+@pytest.fixture(autouse=True)
+def _stop_app_threads(monkeypatch):
+    """Stop the background threads of every app a test builds, when the test ends.
+
+    ``create_app`` starts a snapshot loop, and an ingest through the app starts the
+    Find similar indexer. Neither ever stopped in a test, so a full run carried them
+    into every later test: 82 snapshot loops and six indexers still running by the
+    ``test_pipeline`` ingest tests (measured 2026-09-27). With numpy on OpenBLAS on
+    macOS, a ``fork`` for a worker while a leftover indexer was inside a
+    multithreaded OpenBLAS call deadlocked in OpenBLAS's ``pthread_atfork`` handler,
+    with the GIL held, and the run never finished. Tests look ``create_app`` up when
+    they run, so wrapping the module attribute reaches them; ``gleapp.desktop`` binds
+    its own name at import and is wrapped as well. A test that still leaves one of
+    these threads running fails at teardown.
+    """
+    from gleapp import desktop
+    from gleapp.web import app as appmod
+    made = []
+    real = appmod.create_app
+
+    def create_app(*args, **kwargs):
+        app = real(*args, **kwargs)
+        made.append(app)
+        return app
+
+    monkeypatch.setattr(appmod, "create_app", create_app)
+    monkeypatch.setattr(desktop, "create_app", create_app)
+    before = set(threading.enumerate())
+    yield
+    for app in made:
+        app.config["STATE"]["shutdown"]()
+    left = sorted(t.name for t in set(threading.enumerate()) - before
+                  if t.name in ("auto-snapshot", "find-similar-indexer"))
+    assert not left, f"background threads outlived their test: {left}"
