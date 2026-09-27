@@ -1590,7 +1590,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                                            "global_entries": hstore["entries"]},
                             # the app-wide default report-header logo - see
                             # /api/settings {agency_logo} and /api/report/prefs
-                            "agency_logo": appconfig.get_agency_logo()})
+                            "agency_logo": appconfig.get_agency_logo(),
+                            # whether the intro video opens with the launcher -
+                            # see /api/settings {show_intro}
+                            "show_intro": appconfig.get_show_intro()})
         try:
             return jsonify(_context_payload(case))
         except Exception:  # noqa: BLE001 - a broken stat query must not blank the UI
@@ -1657,6 +1660,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "native": state["native"],
             "job": dict(state["job"]),
             "timezone": case.db.get_meta("display_tz") or appconfig.get_timezone(),
+            # the intro's "Don't show this at startup" box, reachable from the case menu
+            "show_intro": appconfig.get_show_intro(),
             "timezone_options": [{"value": v, "label": lbl}
                                  for v, lbl in timeutil.COMMON_ZONES],
             "case": case.db.get_meta("case_name"),
@@ -1984,6 +1989,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             appconfig.set_timezone(tz)
             return jsonify({"ok": True, "timezone": tz,
                             "label": timeutil.label(tz)})
+        if "show_intro" in body:
+            # app-wide: the intro video's "Don't show this at startup" box
+            show = body.get("show_intro")
+            if not isinstance(show, bool):
+                abort(400, description="show_intro must be true or false")
+            appconfig.set_show_intro(show)
+            return jsonify({"ok": True, "show_intro": show})
         if "use_stash" in body:
             # per-case: skip the examiner's hash stash for a case that isn't
             # CSAM/Project VIC related, where a stashed hit would be noise

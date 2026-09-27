@@ -97,6 +97,21 @@ def set_agency_logo(data_uri: str | None) -> None:
     save(cfg)
 
 
+def get_show_intro() -> bool:
+    """Whether the intro video opens with the launcher. On until the examiner ticks
+    "Don't show this at startup" in it."""
+    return load().get("show_intro", True) is not False
+
+
+def set_show_intro(show: bool) -> None:
+    cfg = load()
+    if show:
+        cfg.pop("show_intro", None)
+    else:
+        cfg["show_intro"] = False
+    save(cfg)
+
+
 def _case_summary(case_dir: Path) -> dict | None:
     """(files, name) for a case dir, or None if it isn't a real GLEAPP case."""
     db = case_dir / "case.gleapp"

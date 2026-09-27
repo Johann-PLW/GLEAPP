@@ -22,6 +22,12 @@ This manual is also available in the app: **☰ Menu → Help → Manual** in a 
 
 With no case open, GLEAPP shows the **launcher**.
 
+When GLEAPP opens, a short intro video plays over the launcher. Close it with
+**Close**, `Esc` or a click outside it; tick **Don't show this at startup** to stop it
+opening again. **Watch intro** in the launcher's **☰ Menu** (or under *Help* in a
+case's **☰ Menu**) plays it again and lets you turn it back on. The choice is kept in
+your user settings, not in any case.
+
 - **Recent cases**: click to reopen. Only cases that contain files are listed,
   each with its live file count.
 - **Open existing case**: point at a folder containing `case.gleapp`, or at the

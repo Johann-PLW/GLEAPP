@@ -327,7 +327,15 @@
   #reportDlg .rgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
   #reportDlg .rfields{display:grid;grid-template-columns:1fr 1fr;gap:1px 12px;border:1px solid var(--line);border-radius:6px;padding:8px;max-height:180px;overflow:auto}
   #reportDlg .rfields label{margin:2px 0;font-size:12px}
-  #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg{z-index:100}   /* above the launcher (z-index 95) so Help / Reference data / Maps / Hash stash / Agency logo work pre-case */
+  #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg{z-index:100}
+  /* intro video: over everything, launcher included; closes with the button, Esc, a click outside it, or its end */
+  #introDlg{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:110;display:none;align-items:center;justify-content:center}
+  #introDlg.show{display:flex}
+  #introDlg .box{width:min(1100px,94vw);display:flex;flex-direction:column;gap:10px}
+  #introDlg video{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;display:block}
+  #introDlg .row{display:flex;align-items:center;gap:12px;color:var(--fg)}
+  #introDlg label{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px}
+  #introDlg .hint{font-size:12px;color:var(--muted)}   /* above the launcher (z-index 95) so Help / Reference data / Maps / Hash stash / Agency logo work pre-case */
   #helpDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(860px,94vw);height:88vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   #helpDlg .box>header{display:flex;flex-direction:row;align-items:center;gap:10px;padding:10px 16px;background:var(--panel2);border-bottom:1px solid var(--line);position:static}
   #helpDlg .box>header h2{margin:0;font-size:15px;flex:1}
@@ -503,6 +511,7 @@
       <div class="hd">Help</div>
       <button data-help="manual">Manual</button>
       <button data-help="history">Processing history</button>
+      <button id="btnIntro" title="Play the intro video that opens with GLEAPP, and choose whether it shows at startup">Watch intro</button>
     </div>
     <button class="btn" id="btnAddEvidence" title="Ingest another folder, extraction archive, disk image (E01 or raw), or Project VIC/job JSON into this case">+ Add evidence…</button>
     <span class="stat" id="aeInfo"></span>
@@ -714,6 +723,7 @@
       <button id="btnRefStoreLauncher" title="Add or manage the shared NSRL / reference-hash store">Reference data (NSRL)</button>
       <button id="btnVicSetsLauncher" title="Connect a Project VIC hash set: matches are flagged VIC and go into the category Project VIC gave them">Project VIC hash sets</button>
       <button id="btnLogoLauncher" title="The default logo on every case's report header, unless that case sets its own">Agency logo</button>
+      <button id="btnIntroLauncher" title="Play the intro video that opens with GLEAPP, and choose whether it shows at startup">Watch intro</button>
     </div>
     <button class="btn" id="btnHelpLauncher" title="Manual — features, filters, categories, shortcuts">Help / Manual</button>
   </div>
@@ -1171,6 +1181,17 @@
     <button class="btn sm" id="mapViewClose">Close</button></div>
   <div id="mapViewMap"></div>
 </div>
+
+<div id="introDlg" role="dialog" aria-modal="true" aria-label="GLEAPP intro video"><div class="box">
+  <video id="introVideo" controls playsinline preload="metadata"
+         poster="/static/intro/gleapp-intro-poster.jpg"></video>
+  <div class="row">
+    <label><input type="checkbox" id="introHide"> Don't show this at startup</label>
+    <span class="hint" id="introHint"></span>
+    <span style="flex:1"></span>
+    <button class="btn" id="introClose">Close</button>
+  </div>
+</div></div>
 
 <div id="logoDlg"><div class="box">
   <h2>Agency logo</h2>
