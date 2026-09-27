@@ -15,7 +15,7 @@ from PIL import Image
 # ewfwriter.py sits beside this file. pytest puts that directory on the path, so the
 # import resolves at run time; whether pylint resolves it depends on the interpreter it
 # runs under, and on 3.14 it does not.
-from ewfwriter import write_ewf  # pylint: disable=import-error
+from ewfwriter import write_afd, write_aff, write_ewf  # pylint: disable=import-error
 from gleapp import archive
 from gleapp.case import open_case, parse_source_spec
 from gleapp.pipeline import ingest_sources, process
@@ -118,6 +118,70 @@ def test_an_e01_is_recognised_by_its_signature(tmp_path):
     shutil.copy(image, renamed)
     assert archive.archive_format(renamed) == "ewf"          # the bytes decide, not the name
     assert [s.kind for s in parse_source_spec(image)[0]] == ["archive"]
+
+
+def test_an_ex01_an_aff_and_an_afd_are_recognised_by_their_signatures(tmp_path):
+    data, _ = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    aff = Path(write_aff(tmp_path / "ev" / "disk.aff", data, image_size=len(data)))
+    afd = [Path(p) for p in write_afd(tmp_path / "ev" / "disk.afd", data)]
+    ex01 = tmp_path / "ev" / "disk.Ex01"
+    ex01.write_bytes(b"EVF2\r\n\x81\x00" + bytes(4096))     # the signature decides
+    for path in (aff, afd[0], afd[-1], ex01):
+        assert archive.archive_format(path) == "ewf", path.name
+    assert [s.kind for s in parse_source_spec(afd[1])[0]] == ["archive"]
+
+
+def test_an_aff_is_read_as_the_disk_it_holds(tmp_path):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    image = Path(write_aff(tmp_path / "ev" / "disk.aff", data, image_size=len(data)))
+    c, n = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        assert n == 3
+        rows = _rows(c)
+        rec = archive.source_record(c, image.name)
+        assert rec["segments"] == 1
+        for name, (off, size) in laid.items():
+            hit = next(r for r in rows.values() if r["member_offset"] == off)
+            with archive.local_copy(c.root, rec, hit) as p:
+                assert p.read_bytes()[:size] == data[off:off + size], name
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_an_afd_is_read_whole_and_a_missing_file_is_reported(tmp_path):
+    data, _ = _disk(tmp_path)
+    paths = [Path(p) for p in write_afd(tmp_path / "ev" / "disk.afd", data)]
+    c, n = _ingest(tmp_path, paths[1], "case", do_process=False)   # any file of the folder
+    try:
+        assert n == 3
+        rec = archive.source_record(c, paths[1].name)
+        assert rec["segments"] == 3
+        for r in _rows(c).values():
+            with archive.local_copy(c.root, rec, r) as p:
+                off = r["member_offset"]
+                assert p.read_bytes() == data[off:off + r["size"]]
+        assert archive.source_status(c)[0]["status"] == "ok"
+        archive.close_zips()
+        paths[-1].unlink()
+        assert archive.source_status(c)[0]["status"] == "changed"    # a file is gone
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_logical_evidence_is_refused_with_the_reason(tmp_path):
+    l01 = tmp_path / "evidence.L01"
+    l01.write_bytes(b"LVF\t\r\n\xff\x00" + bytes(4096))
+    assert archive.archive_format(l01) is None
+    with pytest.raises(ValueError, match="logical evidence"):
+        parse_source_spec(l01)
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({"sources": [{"path": str(l01)}]}))
+    with pytest.raises(ValueError, match="logical evidence"):
+        parse_source_spec(spec)
 
 
 def test_carved_media_is_registered_at_the_offset_it_was_found(tmp_path):

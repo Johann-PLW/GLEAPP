@@ -1,4 +1,4 @@
-"""A minimal EWF-E01 writer, for the tests only.
+"""Minimal EWF-E01 and AFF writers, for the tests only.
 
 Nothing on PyPI writes EWF and the reference implementation is LGPL, so an E01
 to ingest has to be built here. This packs sections and chunk tables from the
@@ -104,4 +104,47 @@ def write_ewf(folder, stem, data, *, chunk_size=4096, sector_size=512,
                 _section(out, "done", b"", last=True)
             else:
                 _section(out, "next", b"", last=True)
+    return paths
+
+
+# ---- AFF, from AFFLIB's documented layout (as in ewfprobe's own test suite) -----
+
+def _aff_segment(out, name, data=b"", arg=0):
+    raw = name.encode("utf-8")
+    out.write(struct.pack(">4sIII", b"AFF\x00", len(raw), len(data), arg) + raw + data)
+    out.write(struct.pack(">4sI", b"ATT\x00", 16 + len(raw) + len(data) + 8))
+
+
+def write_aff(path, data, pages=None, page_size=4096, image_size=None):
+    """Write the listed pages of data (all of them by default) as an AFF file:
+    deflated pages, the sector and page size, and the image size and MD5 when
+    image_size is given, which AFFLIB writes into one file of an AFD."""
+    count = -(-len(data) // page_size)
+    with open(path, "wb") as out:
+        out.write(b"AFF10\r\n\x00")
+        _aff_segment(out, "sectorsize", b"", 512)
+        _aff_segment(out, "pagesize", b"", page_size)
+        for n in (range(count) if pages is None else pages):
+            page = data[n * page_size:(n + 1) * page_size]
+            _aff_segment(out, f"page{n}", zlib.compress(page, 6), 0x01)
+        if image_size is not None:
+            _aff_segment(out, "imagesize",
+                         struct.pack(">II", image_size & 0xFFFFFFFF, image_size >> 32), 2)
+            _aff_segment(out, "md5", hashlib.md5(data).digest())
+    return str(path)
+
+
+def write_afd(folder, data, files=3, page_size=4096):
+    """Write data as an AFD: a folder named .afd holding ``files`` AFF files that
+    share the pages, the image size and hash in the last, as AFFLIB lays one out.
+    Returns the paths of the files in order."""
+    os.makedirs(folder, exist_ok=True)
+    count = -(-len(data) // page_size)
+    per = -(-count // files)
+    paths = []
+    for index in range(files):
+        pages = range(index * per, min(count, (index + 1) * per))
+        paths.append(write_aff(os.path.join(folder, f"file_{index:03d}.aff"), data,
+                               pages, page_size,
+                               len(data) if index == files - 1 else None))
     return paths

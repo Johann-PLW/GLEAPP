@@ -266,7 +266,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=("Extraction or disk image "
                                 "(*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
-                                "*.txz;*.tar.xz;*.E01;*.e01;*.img;*.dd;*.raw;*.bin;"
+                                "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.img;*.dd;*.raw;*.bin;"
                                 "*.000;*.001)",
                                 "All files (*.*)"),
                 )
@@ -300,7 +300,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=(
                         "Evidence file (*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
-                        "*.txz;*.tar.xz;*.E01;*.e01;*.img;*.dd;*.raw;*.bin;*.000;"
+                        "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.img;*.dd;*.raw;*.bin;*.000;"
                         "*.001;*.json)",
                         "All files (*.*)"),
                 )

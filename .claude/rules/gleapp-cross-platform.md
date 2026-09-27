@@ -250,10 +250,13 @@ would be a table GLEAPP does not own.
 
 A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered segments
 beside it) or as a raw image: one file (`.img`, `.dd`, `.raw`, any name) or a numbered
-split set (`.001`, `.002`, ...; FTK Imager's default). `archive_format` recognizes an E01
-by the `EVF\x09\x0d\x0a\xff\x00` signature before the zip and tar checks, so the
-extension is never consulted and the first segment of a set is enough to open the whole
-thing. A raw image has no signature, so it is recognized by what it holds: qnxprobe's own
+split set (`.001`, `.002`, ...; FTK Imager's default). `archive_format` recognizes an
+acquisition ewfprobe reads (E01 and SMART s01, Ex01, AFF, and any .aff of an AFD folder)
+by `qnxprobe.acquisition_format`, which reads the signature, before the zip and tar
+checks, so the extension is never consulted and the first segment of a set is enough to
+open the whole thing. EnCase logical evidence (L01, Lx01) holds files, not a disk:
+`case.parse_source_spec` refuses it with that reason rather than registering one opaque
+file. A raw image has no signature, so it is recognized by what it holds: qnxprobe's own
 partition parsers and `identify_fs` find a volume it can name (`_is_raw_image`). That
 check runs BEFORE the tar check, and `_is_tar` now requires at least one member, for a
 measured reason: a raw HFS+ or ext volume begins with 1,024 zero bytes, and 512 zero bytes
@@ -373,7 +376,7 @@ presents the acquired disk as a seekable stream, reconstructing chunks across se
 `qnxprobe` reads the filesystems inside it (NTFS, APFS including the sealed system volume
 of macOS 11 and later, HFS+, ext, F2FS, FAT32, exFAT, the QNX ones, and from qnxprobe 1.31
 the Linux flash filesystems SquashFS, JFFS2, UBI/UBIFS, YAFFS1 and YAFFS2), importing ewfprobe from
-beside it to open an .E01; `mediacarve` scans the stream for image and video signatures and
+beside it to open an acquisition; `mediacarve` scans the stream for image and video signatures and
 reports each hit as an offset and a length. All three are standard library only, which is
 why they are vendored rather than required: GLEAPP ships as a frozen desktop app, and a
 dependency with a build step is a cost with nothing behind it. Fix them upstream

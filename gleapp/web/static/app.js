@@ -3831,10 +3831,10 @@ async function pick(kind, label) {
     }
   }
   return prompt(label || ({ folder: "Folder path:",
-    archive: "Path to the extraction archive or disk image (zip, tar, tar.gz/bz2/xz, E01, raw .img/.dd or any segment of a split set):",
+    archive: "Path to the extraction archive or disk image (zip, tar, tar.gz/bz2/xz, E01, Ex01, AFF, raw .img/.dd or any segment of a split set):",
     basemap: "Path to a basemap file (.pmtiles or .mbtiles):",
     casefile: "Path to the case.gleapp file:",
-    ingestfile: "Path to the evidence file (extraction archive, E01 or raw disk image, or .json job/VIC file):"
+    ingestfile: "Path to the evidence file (extraction archive, E01, Ex01, AFF or raw disk image, or .json job/VIC file):"
     }[kind]
     || "Path to .json job file:")) || null;
 }

@@ -5,15 +5,19 @@ device's filesystem, tens of gigabytes, with a large minority of members carryin
 extension. This module enumerates the archive, decides what to keep, and registers each
 member with the device path the examiner sees kept apart from the path the code reads.
 
-A computer acquisition arrives instead as a disk image: an EnCase/EWF set (``.E01``
-and its numbered segments) or a raw image (one ``.img``/``.dd`` file, or a numbered
-split set, ``.001``, ``.002``, ...). Both hold a disk rather than a list of members.
+A computer acquisition arrives instead as a disk image: an acquisition the vendored
+ewfprobe reads (an EnCase/EWF ``.E01``, SMART ``.s01`` or EWF2 ``.Ex01`` set with its
+numbered segments, an AFF ``.aff``, or an AFD folder of AFF files) or a raw image (one
+``.img``/``.dd`` file, or a numbered split set, ``.001``, ``.002``, ...). Both hold a
+disk rather than a list of members.
 The filesystems in it are walked, so each file keeps its name, path and dates; on
 request the disk is also carved, with each hit registered by the offset it was found
 at. Everything after that is the same machinery, because an offset is what a tar
-member already registers. The E01 and raw forms differ only in how the bytes are
-read: an E01 carries the acquiring tool's own hash of the disk and a raw image does
-not, so a raw source is identified by its size and a hash of its first and last bytes.
+member already registers. The acquisition and raw forms differ only in how the bytes
+are read: an acquisition carries the acquiring tool's own hash of the disk when the
+tool recorded one and a raw image does not, so a raw source is identified by its size
+and a hash of its first and last bytes. EnCase logical evidence (``.L01``) holds
+copies of files rather than a disk, and is refused.
 
 A zip is enumerated from its central directory in seconds. A tar has no directory, so
 enumerating it is one streaming read of the whole file (measured at about 13 minutes
@@ -101,7 +105,10 @@ WALKED_FILESYSTEMS = ("ext2", "ext3", "ext4", "F2FS", "FAT32", "exFAT", "NTFS",
 FORMAT_ZIP = "zip"
 FORMAT_TAR = "tar"
 FORMAT_TAR_COMPRESSED = "tar-compressed"
-FORMAT_EWF = "ewf"            # an EnCase/EWF (.E01) disk image
+FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF or AFD
+# qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
+# Lx01 are logical evidence and not among them.
+_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -164,8 +171,9 @@ def archive_format(path: str | Path) -> str | None:
     file's own bytes.
 
     A gzip, bzip2 or xz stream counts only if a tar is inside it; a gzipped single file
-    is not an archive source. An EWF acquisition is recognised by its own signature, so
-    the first segment of a set is enough and the extension is not consulted. A raw
+    is not an archive source. An acquisition ewfprobe reads (``ewf``: E01, s01, Ex01,
+    AFF, or any .aff of an AFD folder) is recognised by its own signature, so the first
+    segment of a set is enough and the extension is not consulted. A raw
     image has no signature of its own, so it is recognised by what is in it: a
     partition table or a filesystem the vendored reader can name, looked for before
     the tar check, since a raw volume that begins with zeros reads as an empty tar.
@@ -178,7 +186,7 @@ def archive_format(path: str | Path) -> str | None:
             head = fh.read(8)
     except OSError:
         return None
-    if head == ewfprobe.SIGNATURE:
+    if qnxprobe.acquisition_format(os.fspath(p)) in _ACQUISITIONS:
         return FORMAT_EWF
     if head[:4] == b"PK\x03\x04" or p.suffix.lower() == ".zip":
         return FORMAT_ZIP if zipfile.is_zipfile(p) else None
@@ -550,19 +558,43 @@ class _RawImage:
 
 
 def _open_image_file(path):
-    """A fresh handle on a disk image: the EWF reader for an .E01 set, and
-    ``_RawImage`` for a raw image or a numbered split set."""
+    """A fresh handle on a disk image: ewfprobe for an acquisition (an E01, s01 or
+    Ex01 set, an AFF, or an AFD), and ``_RawImage`` for a raw image or a numbered
+    split set."""
     path = os.fspath(path)
-    if qnxprobe.looks_like_ewf(path):
+    if qnxprobe.acquisition_format(path) in _ACQUISITIONS:
         return ewfprobe.open_ewf(path)
     return _RawImage(path)
 
 
 def _segment_count(path: str, fmt: str) -> int:
-    """How many files hold the image at ``path`` now."""
+    """How many files hold the image at ``path`` now: what ``len(img.paths)`` gave
+    at ingest, without indexing the image again."""
     if fmt == FORMAT_EWF:
+        kind = qnxprobe.acquisition_format(path)
+        if kind == "AFD":
+            # ewfprobe opens every .aff of the folder, from any one of them
+            folder = os.path.dirname(os.path.abspath(path))
+            return sum(1 for n in os.listdir(folder)
+                       if n.lower().endswith(".aff")
+                       and os.path.isfile(os.path.join(folder, n)))
+        if kind == "AFF":
+            return 1
         return len(ewfprobe.ewf_segments(path))
     return len(qnxprobe.split_segments(path)) or 1
+
+
+def logical_evidence_refusal(path) -> str | None:
+    """Why GLEAPP does not ingest ``path``, when it is EnCase logical evidence (L01 or
+    Lx01), else None. Logical evidence holds copies of files rather than a disk, so
+    there is nothing to walk or carve, and registered as a single file it would
+    yield nothing without saying why."""
+    kind = qnxprobe.acquisition_format(os.fspath(path))
+    if kind not in ("L01", "Lx01"):
+        return None
+    return (f"{Path(path).name} is EnCase logical evidence ({kind}): it holds copies "
+            "of files, not a disk, and GLEAPP reads disk images. Export its files "
+            "(for an L01, ewfprobe.py export --entry) and add them as a folder.")
 
 
 def _open_image(path: str):
@@ -1057,8 +1089,9 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
     path = Path(src.path)
     fmt = archive_format(path)
     if fmt is None:
-        raise ValueError(f"{path.name} is not a zip, a tar, an E01 acquisition or a "
-                         "raw disk image")
+        raise ValueError(logical_evidence_refusal(path)
+                         or f"{path.name} is not a zip, a tar, a disk acquisition "
+                            "(E01, s01, Ex01, AFF) or a raw disk image")
     if fmt == FORMAT_ZIP:
         return _ingest_zip(case, src, path, count=count, progress=progress)
     if fmt in IMAGE_FORMATS:
@@ -1702,8 +1735,8 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     new = Path(new_path).resolve()
     fmt = archive_format(new)
     if fmt is None:
-        raise ValueError(f"cannot open {new}: not a zip, a tar, an E01 acquisition or "
-                         "a raw disk image")
+        raise ValueError(f"cannot open {new}: not a zip, a tar, a disk acquisition "
+                         "(E01, s01, Ex01, AFF) or a raw disk image")
     if _family(fmt) != _family(rec["format"]):
         raise ValueError(f"{new.name} is a {fmt} and the case registered {name!r} "
                          f"from a {rec['format']}")

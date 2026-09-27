@@ -54,8 +54,9 @@ signals only. Every category decision is the examiner's.</p>
           <code>.tar</code> plain or compressed (<code>.gz</code>, <code>.bz2</code>,
           <code>.xz</code>). Media is read in place unless you tick <em>Copy media out
           of extraction archives</em>. A compressed tar is always copied out.</li>
-          <li><strong>Disk image</strong>: an <code>.E01</code> with its segments
-          beside it, or a raw image (one <code>.img</code>/<code>.dd</code>, or any
+          <li><strong>Disk image</strong>: an <code>.E01</code>, <code>.s01</code> or
+          <code>.Ex01</code> with its segments beside it, an <code>.aff</code> (for an
+          AFD folder, any <code>.aff</code> in it), or a raw image (one <code>.img</code>/<code>.dd</code>, or any
           segment of a split set such as <code>.001</code>, <code>.002</code>). Raw
           images are identified by content, not extension. A split set with a missing
           segment is refused and the gap is named.
@@ -1226,11 +1227,15 @@ the command line (<code>gleapp process --force</code>).</p>
 with a list of members in it, so there is nothing to recover that listing it does not
 already give you.</p>
 <ul>
-  <li><strong>E01 acquisition</strong>: point at the first segment of the set.</li>
+  <li><strong>E01, SMART or Ex01 acquisition</strong>: point at the first segment of the set.</li>
+  <li><strong>AFF</strong>: point at the <code>.aff</code>; for an AFD folder, at any
+    <code>.aff</code> in it.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
-  <li><strong>Not accepted</strong>: VHD and VMDK.</li>
-  <li>An E01 is recognized by its own signature and a raw image by what it holds, so the
-    extension does not matter.</li>
+  <li><strong>Not accepted</strong>: VHD and VMDK, and EnCase logical evidence
+    (<code>.L01</code>), which holds copies of files rather than a disk and is refused with
+    that reason.</li>
+  <li>An acquisition is recognized by its own signature and a raw image by what it holds,
+    so the extension does not matter.</li>
 </ul>
 
 <h3>How to carve</h3>
@@ -1355,7 +1360,8 @@ that.</p>
 
 <h3>Raw images compared with E01</h3>
 <ul>
-  <li>An E01 carries the acquiring tool's own hash of the disk, and a raw image carries none.
+  <li>An E01, Ex01 or AFF carries the acquiring tool's own hash of the disk when the tool
+    recorded one, and a raw image carries none.
     So a raw source is identified, when it is relinked or its copies dropped, by its size and
     a hash of its first and last 4&nbsp;MiB, which tells two images of one size apart and no
     more.</li>

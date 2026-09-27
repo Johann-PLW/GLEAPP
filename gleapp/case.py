@@ -129,16 +129,26 @@ def open_case(path: str | Path, *, create: bool = False, examiner: str | None = 
 
 # --------------------------------------------------------------------------
 def is_archive_file(p: Path) -> bool:
-    """A zip, a tar (plain or compressed), an E01 acquisition or a raw disk image
-    (one file, or any segment of a numbered split set), by its bytes; the file
-    must exist."""
+    """A zip, a tar (plain or compressed), a disk acquisition (E01, s01, Ex01, AFF, or
+    any .aff of an AFD folder) or a raw disk image (one file, or any segment of a
+    numbered split set), by its bytes; the file must exist."""
     from . import archive
     return archive.archive_format(p) is not None
+
+
+def _refuse_logical_evidence(p: Path) -> None:
+    """Raise when p is EnCase logical evidence, which is not a disk to ingest."""
+    if p.is_file():
+        from . import archive
+        why = archive.logical_evidence_refusal(p)
+        if why:
+            raise ValueError(why)
 
 
 def _norm_source(entry: object, base: Path) -> Source | None:
     if isinstance(entry, str):
         p = (base / entry).resolve() if not Path(entry).is_absolute() else Path(entry)
+        _refuse_logical_evidence(p)
         return Source(name=p.name or str(p), path=str(p))
     if isinstance(entry, dict):
         low = {k.lower(): v for k, v in entry.items()}
@@ -148,6 +158,7 @@ def _norm_source(entry: object, base: Path) -> Source | None:
         p = Path(raw)
         if not p.is_absolute():
             p = (base / raw).resolve()
+        _refuse_logical_evidence(p)
         return Source(
             name=str(low.get("name") or p.name or str(p)),
             path=str(p),
@@ -168,6 +179,7 @@ def parse_source_spec(spec: str | Path) -> tuple[list[Source], dict]:
     Returns (sources, meta) where meta may carry 'case'/'examiner'.
     """
     p = Path(spec)
+    _refuse_logical_evidence(p)
     # A full-file-system extraction is a zip, and a computer acquisition a disk image.
     # Check before the folder branch, which would otherwise register the archive
     # itself as one file.
