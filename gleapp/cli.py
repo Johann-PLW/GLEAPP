@@ -491,10 +491,12 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--cluster-threshold", type=int, default=8)
 
     s = sub.add_parser("ingest", help="ingest a folder, a full-file-system extraction archive "
-                                      "(zip or tar), a disk image (E01, raw, or a split raw "
+                                      "(zip or tar), a disk image (E01, s01, Ex01, AFF, raw, "
+                                      "or a split raw "
                                       "set), or a JSON spec, then process")
     s.add_argument("source", help="folder path, extraction .zip or .tar "
-                                 "(plain, .gz, .bz2 or .xz), a disk image (.E01, a raw "
+                                 "(plain, .gz, .bz2 or .xz), a disk image (.E01, .s01, "
+                                 ".Ex01, .aff, a raw "
                                  ".img/.dd, or any segment of a numbered split set), "
                                  "OR .json spec file")
     s.add_argument("--no-process", action="store_true", help="register files only")

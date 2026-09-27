@@ -35,7 +35,8 @@ With no case open, GLEAPP shows the **launcher**.
     - **Extraction archive**: `.zip`, or `.tar` plain or compressed (`.gz`,
       `.bz2`, `.xz`). Media is read in place unless you tick *Copy media out of
       extraction archives*. A compressed tar is always copied out.
-    - **Disk image**: an `.E01` with its segments beside it, or a raw image (one
+    - **Disk image**: an `.E01`, `.s01` or `.Ex01` with its segments beside it, an
+      `.aff` (for an AFD folder, any `.aff` in it), or a raw image (one
       `.img`/`.dd`, or any segment of a split set such as `.001`, `.002`). Raw
       images are identified by content, not extension. A split set with a
       missing segment is refused and the gap is named.
@@ -1246,11 +1247,13 @@ Only a **disk image** can be carved. A mobile extraction is an archive with a
 list of members in it, so there is nothing to recover that listing it does not
 already give you.
 
-- **E01 acquisition**: point at the first segment of the set.
+- **E01, SMART or Ex01 acquisition**: point at the first segment of the set.
+- **AFF**: point at the `.aff`; for an AFD folder, at any `.aff` in it.
 - **Raw image**: one file, or any segment of a numbered split set.
-- **Not accepted**: VHD and VMDK.
-- An E01 is recognized by its own signature and a raw image by what it holds,
-  so the extension does not matter.
+- **Not accepted**: VHD and VMDK, and EnCase logical evidence (`.L01`), which
+  holds copies of files rather than a disk and is refused with that reason.
+- An acquisition is recognized by its own signature and a raw image by what it
+  holds, so the extension does not matter.
 
 ### How to carve
 
@@ -1373,8 +1376,8 @@ partition on a dual-boot disk is enough to do that.
 
 ### Raw images compared with E01
 
-- An E01 carries the acquiring tool's own hash of the disk, and a raw image
-  carries none. So a raw source is identified, when it is relinked or its copies
+- An E01, Ex01 or AFF carries the acquiring tool's own hash of the disk when the
+  tool recorded one, and a raw image carries none. So a raw source is identified, when it is relinked or its copies
   dropped, by its size and a hash of its first and last 4 MiB, which tells two
   images of one size apart and no more.
 - An image whose partition table describes a volume larger than the file holds
@@ -1710,8 +1713,8 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
   inside an acquisition (NTFS, APFS, HFS+, ext, F2FS, FAT32, exFAT and more),
   finds the partitions, and joins the numbered segments of a split raw image.
 - **[ewfprobe](https://github.com/abrignoni/ewfprobe)** presents an EnCase/EWF
-  (`.E01`) acquisition as a seekable disk image, reconstructing chunks across
-  segments; qnxprobe imports it to open an `.E01`.
+  (`.E01`, `.s01`), EWF2 (`.Ex01`) or AFF acquisition as a seekable disk image,
+  reconstructing chunks across segments; qnxprobe imports it to open one.
 - **[mediacarve](https://github.com/abrignoni/mediacarve)** scans unallocated
   (or whole-disk) space for image/video signatures when a carve is requested.
 - **[exoprobe](https://github.com/abrignoni/exoprobe)** reads the media caches
