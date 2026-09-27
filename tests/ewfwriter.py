@@ -14,6 +14,7 @@ import hashlib
 import os
 import struct
 import zlib
+from pathlib import Path
 
 from gleapp.vendor import ewfprobe
 
@@ -206,3 +207,66 @@ def write_sparseimage(path, data, band_sectors=8):
         for b in stored:
             out.write(data[b * band:(b + 1) * band].ljust(band, b"\x00"))
     return str(path)
+
+
+def write_segmented_udif(folder, stem, data, part_size, chunk_sectors=64):
+    """Write data as a UDIF image split the way hdiutil segment splits one: the
+    segments' data laid end to end, the block table only in the first (stem.dmg),
+    and on every segment a trailer carrying one identifier, the segment count, the
+    segment's own number and where its data starts in the whole. Returns the paths,
+    the .dmg first."""
+    import plistlib  # pylint: disable=import-outside-toplevel
+    data = data + b"\x00" * (-len(data) % 512)
+    sectors = len(data) // 512
+    fork, entries, at = bytearray(), [], 0
+    while at < sectors:
+        count = min(chunk_sectors, sectors - at)
+        blob = zlib.compress(data[at * 512:(at + count) * 512])
+        entries.append((0x80000005, 0, at, count, len(fork), len(blob)))
+        fork += blob
+        at += count
+    entries.append((0xFFFFFFFF, 0, at, 0, len(fork), 0))
+    crc = zlib.crc32(data)
+    mish = struct.pack(">4sIQQQII24x", b"mish", 1, 0, sectors, 0, 0, len(entries))
+    mish += _udif_checksum(crc) + struct.pack(">I", len(entries))
+    mish += b"".join(struct.pack(">IIQQQQ", *e) for e in entries)
+    tables = plistlib.dumps({"resource-fork": {"blkx": [{"Name": "whole disk", "Data": mish}]}})
+    pieces = [bytes(fork[i:i + part_size]) for i in range(0, len(fork), part_size)]
+    paths, running = [], 0
+    for number, piece in enumerate(pieces, 1):
+        path = Path(folder) / (f"{stem}.dmg" if number == 1 else f"{stem}.{number:03d}.dmgpart")
+        body = tables if number == 1 else plistlib.dumps({"resource-fork": {}})
+        with open(path, "wb") as out:
+            out.write(piece)
+            xml_offset = out.tell()
+            out.write(body)
+            trailer = struct.pack(">4sIIIQQQQQII", b"koly", 4, 512, 1, running, 0,
+                                  len(piece), 0, 0, number, len(pieces))
+            trailer += b"\x5a" * 16 + _udif_checksum(zlib.crc32(piece))
+            trailer += struct.pack(">QQ", xml_offset, len(body)) + bytes(120)
+            trailer += _udif_checksum(zlib.crc32(struct.pack(">I", crc)))
+            trailer += struct.pack(">IQ", 1, sectors) + bytes(12)
+            out.write(trailer)
+        paths.append(str(path))
+        running += len(piece)
+    return paths
+
+
+def write_sparsebundle(path, data, band=4096, token=b""):
+    """Write data as an Apple sparse bundle folder: Info.plist, a token file, and
+    bands/ holding each band that is not all zeros, named in lowercase hexadecimal."""
+    import plistlib  # pylint: disable=import-outside-toplevel
+    data = data + b"\x00" * (-len(data) % 512)
+    folder = Path(path)
+    (folder / "bands").mkdir(parents=True)
+    info = {"CFBundleInfoDictionaryVersion": "6.0", "band-size": band,
+            "bundle-backingstore-version": 1,
+            "diskimage-bundle-type": "com.apple.diskimage.sparsebundle",
+            "size": len(data)}
+    (folder / "Info.plist").write_bytes(plistlib.dumps(info))
+    (folder / "token").write_bytes(token)
+    for number in range(-(-len(data) // band)):
+        piece = data[number * band:(number + 1) * band]
+        if any(piece):
+            (folder / "bands" / format(number, "x")).write_bytes(piece)
+    return str(folder)

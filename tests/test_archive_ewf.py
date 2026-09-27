@@ -4,6 +4,7 @@ seeking to that offset in the reconstructed disk."""
 
 import io
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from PIL import Image
 # import resolves at run time; whether pylint resolves it depends on the interpreter it
 # runs under, and on 3.14 it does not.
 from ewfwriter import (  # pylint: disable=import-error
-    write_afd, write_aff, write_ewf, write_sparseimage, write_udif)
+    write_afd, write_aff, write_ewf, write_segmented_udif, write_sparsebundle,
+    write_sparseimage, write_udif)
 from gleapp import archive
 from gleapp.case import open_case, parse_source_spec
 from gleapp.pipeline import ingest_sources, process
@@ -194,6 +196,93 @@ def test_an_apple_disk_image_is_read_as_the_disk_it_holds(tmp_path, writer, name
     finally:
         archive.close_zips()
         c.close()
+
+
+def _check_carved(c, image_name, data, laid):
+    rows = _rows(c)
+    rec = archive.source_record(c, image_name)
+    for item, (off, size) in laid.items():
+        hit = next(r for r in rows.values() if r["member_offset"] == off)
+        with archive.local_copy(c.root, rec, hit) as p:
+            assert p.read_bytes()[:size] == data[off:off + size], item
+    return rec
+
+
+def test_a_segmented_dmg_is_read_as_one_disk_and_a_lost_part_is_reported(tmp_path):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    paths = write_segmented_udif(tmp_path / "ev", "disk", data, part_size=3000)
+    assert len(paths) > 2
+    image = Path(paths[0])
+    assert archive.archive_format(image) == "ewf"
+    c, n = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        assert n == 3
+        rec = _check_carved(c, image.name, data, laid)
+        assert rec["segments"] == len(paths)
+        assert archive.source_status(c)[0]["status"] == "ok"
+        archive.close_zips()
+        Path(paths[-1]).unlink()
+        assert archive.source_status(c)[0]["status"] == "changed"
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_a_sparse_bundle_folder_is_read_as_one_disk(tmp_path):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    bundle = Path(write_sparsebundle(tmp_path / "ev" / "disk.sparsebundle", data))
+    assert archive.archive_format(bundle) == "ewf"
+    sources, _ = parse_source_spec(bundle)
+    assert [s.kind for s in sources] == ["archive"]
+    c, n = _ingest(tmp_path, bundle, "case", do_process=False)
+    try:
+        assert n == 3
+        rec = _check_carved(c, bundle.name, data, laid)
+        assert rec["segments"] == 1
+        assert archive.source_status(c)[0]["status"] == "ok"
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+@pytest.mark.parametrize("change", ["grown", "rewritten"])
+def test_a_sparse_bundle_whose_band_changes_is_reported_changed(tmp_path, change):
+    data, _laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    bundle = Path(write_sparsebundle(tmp_path / "ev" / "disk.sparsebundle", data))
+    c, _ = _ingest(tmp_path, bundle, "case", do_process=False)
+    try:
+        archive.close_zips()
+        band = sorted((bundle / "bands").iterdir())[-1]
+        if change == "grown":
+            with open(band, "ab") as fh:
+                fh.write(b"\x01" * 512)
+        else:                           # same size, written later
+            band.write_bytes(bytes(len(band.read_bytes())))
+            stamp = band.stat().st_mtime + 60
+            os.utime(band, (stamp, stamp))
+        assert archive.source_status(c)[0]["status"] == "changed"
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_an_ordinary_folder_is_still_a_folder_source(tmp_path):
+    folder = tmp_path / "extraction"
+    (folder / "DCIM").mkdir(parents=True)
+    assert archive.archive_format(folder) is None
+    sources, _ = parse_source_spec(folder)
+    assert [s.kind for s in sources] != ["archive"]
+
+
+def test_an_encrypted_sparse_bundle_is_refused_with_the_reason(tmp_path):
+    bundle = Path(write_sparsebundle(tmp_path / "locked.sparsebundle", b"\x01" * 4096,
+                                     token=b"encrcdsa" + bytes(1000)))
+    assert archive.archive_format(bundle) is None
+    with pytest.raises(ValueError, match="encrypted Apple sparse bundle"):
+        parse_source_spec(bundle)
 
 
 def test_an_encrypted_apple_disk_image_is_refused_with_the_reason(tmp_path):

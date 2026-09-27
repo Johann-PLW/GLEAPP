@@ -56,8 +56,9 @@ signals only. Every category decision is the examiner's.</p>
           of extraction archives</em>. A compressed tar is always copied out.</li>
           <li><strong>Disk image</strong>: an <code>.E01</code>, <code>.s01</code> or
           <code>.Ex01</code> with its segments beside it, an <code>.aff</code> (for an
-          AFD folder, any <code>.aff</code> in it), an Apple <code>.dmg</code> or
-          <code>.sparseimage</code>, or a raw image (one <code>.img</code>/<code>.dd</code>, or any
+          AFD folder, any <code>.aff</code> in it), an Apple <code>.dmg</code> (with any
+          <code>.dmgpart</code> files beside it), <code>.sparseimage</code> or
+          <code>.sparsebundle</code> folder, or a raw image (one <code>.img</code>/<code>.dd</code>, or any
           segment of a split set such as <code>.001</code>, <code>.002</code>). Raw
           images are identified by content, not extension. A split set with a missing
           segment is refused and the gap is named.
@@ -1232,11 +1233,16 @@ already give you.</p>
   <li><strong>AFF</strong>: point at the <code>.aff</code>; for an AFD folder, at any
     <code>.aff</code> in it.</li>
   <li><strong>Apple disk image</strong>: point at the <code>.dmg</code> or
-    <code>.sparseimage</code>.</li>
+    <code>.sparseimage</code>. For a <code>.dmg</code> that <code>hdiutil segment</code>
+    split into <code>.dmgpart</code> files, point at the <code>.dmg</code> and keep the
+    <code>.dmgpart</code> files beside it; a missing one is refused and named. For a
+    sparse bundle, point at the <code>.sparsebundle</code> folder: on a Mac the file
+    dialog lists it as one item, and on Windows or Linux use the folder button.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
   <li><strong>Not accepted</strong>: VHD and VMDK; EnCase logical evidence
     (<code>.L01</code>), which holds copies of files rather than a disk; and an encrypted
-    Apple disk image, which needs its password. Both are refused with that reason.</li>
+    Apple disk image or sparse bundle, which needs its password. Both are refused with
+    that reason.</li>
   <li>An acquisition is recognized by its own signature and a raw image by what it holds,
     so the extension does not matter.</li>
 </ul>

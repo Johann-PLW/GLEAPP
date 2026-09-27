@@ -36,8 +36,9 @@ With no case open, GLEAPP shows the **launcher**.
       `.bz2`, `.xz`). Media is read in place unless you tick *Copy media out of
       extraction archives*. A compressed tar is always copied out.
     - **Disk image**: an `.E01`, `.s01` or `.Ex01` with its segments beside it, an
-      `.aff` (for an AFD folder, any `.aff` in it), an Apple `.dmg` or
-      `.sparseimage`, or a raw image (one
+      `.aff` (for an AFD folder, any `.aff` in it), an Apple `.dmg` (with any
+      `.dmgpart` files beside it), `.sparseimage` or `.sparsebundle` folder, or a raw
+      image (one
       `.img`/`.dd`, or any segment of a split set such as `.001`, `.002`). Raw
       images are identified by content, not extension. A split set with a
       missing segment is refused and the gap is named.
@@ -1250,12 +1251,16 @@ already give you.
 
 - **E01, SMART or Ex01 acquisition**: point at the first segment of the set.
 - **AFF**: point at the `.aff`; for an AFD folder, at any `.aff` in it.
-- **Apple disk image**: point at the `.dmg` or `.sparseimage`. An LZFSE-compressed
-  `.dmg` needs `pyliblzfse`, which GLEAPP's requirements install.
+- **Apple disk image**: point at the `.dmg` or `.sparseimage`. For a `.dmg` that
+  `hdiutil segment` split into `.dmgpart` files, point at the `.dmg` and keep the
+  `.dmgpart` files beside it; a missing one is refused and named. For a sparse bundle,
+  point at the `.sparsebundle` folder: on a Mac the file dialog lists it as one item,
+  and on Windows or Linux use the folder button. An LZFSE-compressed `.dmg` needs
+  `pyliblzfse`, which GLEAPP's requirements install.
 - **Raw image**: one file, or any segment of a numbered split set.
 - **Not accepted**: VHD and VMDK; EnCase logical evidence (`.L01`), which holds
-  copies of files rather than a disk; and an encrypted Apple disk image, which needs
-  its password. Both are refused with that reason.
+  copies of files rather than a disk; and an encrypted Apple disk image or sparse
+  bundle, which needs its password. Both are refused with that reason.
 - An acquisition is recognized by its own signature and a raw image by what it
   holds, so the extension does not matter.
 
@@ -1720,7 +1725,8 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
   inside an acquisition (NTFS, APFS, HFS+, ext, F2FS, FAT32, exFAT and more),
   finds the partitions, and joins the numbered segments of a split raw image.
 - **[ewfprobe](https://github.com/abrignoni/ewfprobe)** presents an EnCase/EWF
-  (`.E01`, `.s01`), EWF2 (`.Ex01`), AFF or Apple (`.dmg`, `.sparseimage`) acquisition
+  (`.E01`, `.s01`), EWF2 (`.Ex01`), AFF or Apple (`.dmg` and its `.dmgpart` files,
+  `.sparseimage`, `.sparsebundle`) acquisition
   as a seekable disk image,
   reconstructing chunks across segments; qnxprobe imports it to open one.
 - **[mediacarve](https://github.com/abrignoni/mediacarve)** scans unallocated

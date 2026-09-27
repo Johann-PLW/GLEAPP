@@ -228,7 +228,8 @@ python -m gleapp --case mycase ingest  sample_evidence\ingest.json
 #    --stage to copy the media into the case instead (self-contained, and as large as
 #    the media). A compressed tar (.tar.gz) is always copied out, since it cannot be
 #    read on demand. A disk image (an .E01, .s01 or .Ex01 with its numbered segments
-#    beside it, an .aff or any .aff of an .afd folder, an Apple .dmg or .sparseimage,
+#    beside it, an .aff or any .aff of an .afd folder, an Apple .dmg (with any
+#    .dmgpart files beside it), .sparseimage or .sparsebundle folder,
 #    or a raw image: one file, or any
 #    segment of a numbered .001 split set) is
 #    a source too: its filesystems are walked file by file, so each file keeps the name,
@@ -293,7 +294,8 @@ The most recent 20 are kept. To roll back, close GLEAPP and copy a snapshot over
 
 A path in `sources` may also be a full-file-system extraction archive (a zip or a tar,
 plain or compressed), a disk acquisition (EnCase/EWF `.E01`, SMART `.s01`, EWF2 `.Ex01`,
-AFF `.aff`, any `.aff` of an AFD folder, or an Apple `.dmg` or `.sparseimage`) or a raw disk
+AFF `.aff`, any `.aff` of an AFD folder, or an Apple `.dmg` with any `.dmgpart` files
+beside it, `.sparseimage` or `.sparsebundle` folder) or a raw disk
 image (one file, or any segment of
 a numbered split set); it is detected by its bytes and ingested as an archive
 source. Its media is read from the archive on demand unless the
