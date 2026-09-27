@@ -71,6 +71,16 @@ signals only. Every category decision is the examiner's.</p>
               <li>Deleted-media recovery is separate (&sect;16). Tick <em>Recover
               media (filesystem records and carving)</em> to run it during ingest, or
               run it later from the Source panel.</li>
+              <li>An encrypted Apple disk image or sparse bundle (AES-128 or AES-256,
+              as <code>hdiutil</code> writes them) is read with its
+              password. When you click <strong>Create case &amp; ingest</strong>, GLEAPP
+              asks for it in a password field, and asks again if it does not open the
+              image. The password is held in memory until GLEAPP is closed and is never
+              written into the case, your settings, a log or a report. In a later
+              session the Source banner shows the image as encrypted with an
+              <strong>Unlock&hellip;</strong> button. Until it is unlocked, a case that
+              reads the image in place keeps its thumbnails, hashes and categories, and
+              full-size viewing and export wait for it.</li>
             </ul>
           </li>
           <li><strong>JSON</strong>: a GLEAPP job spec or a <strong>Project VIC 2.0
@@ -132,6 +142,16 @@ your hash stash and imported basemaps live in your user data folders instead
 looks for a folder named <code>case</code> in the current directory. The <code>maps</code>
 commands, <code>hashset --global</code> and <code>stash</code> (except
 <code>stash --add</code>) do not use a case.</p>
+<p>An encrypted Apple disk image takes its password from
+<code>--password-file &lt;file&gt;</code> (the first line of the file) or
+<code>--password-env &lt;variable&gt;</code> (the name of an environment variable holding
+it), both written before the subcommand like <code>-c</code>. Either can be given more
+than once when a case holds several encrypted images; each password is tried on each
+image. With neither, GLEAPP asks at the terminal, and without a terminal it stops and says
+which option to use. The password is held for that one command, so <code>process</code>,
+<code>report</code>, <code>source stage</code> and <code>source carve</code> need it again.
+A password is never taken on the command line itself, where other users of the machine
+and the shell history could read it.</p>
 
 <h2 id="gallery">3. The review gallery</h2>
 <table>
@@ -1239,10 +1259,11 @@ already give you.</p>
     sparse bundle, point at the <code>.sparsebundle</code> folder: on a Mac the file
     dialog lists it as one item, and on Windows or Linux use the folder button.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
-  <li><strong>Not accepted</strong>: VHD and VMDK; EnCase logical evidence
-    (<code>.L01</code>), which holds copies of files rather than a disk; and an encrypted
-    Apple disk image or sparse bundle, which needs its password. Both are refused with
-    that reason.</li>
+  <li><strong>Encrypted Apple disk image or sparse bundle</strong>: point at it as
+    above; GLEAPP asks for its password (&sect;1).</li>
+  <li><strong>Not accepted</strong>: VHD and VMDK, and EnCase logical evidence
+    (<code>.L01</code>), which holds copies of files rather than a disk and is refused
+    with that reason.</li>
   <li>An acquisition is recognized by its own signature and a raw image by what it holds,
     so the extension does not matter.</li>
 </ul>

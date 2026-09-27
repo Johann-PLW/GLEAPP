@@ -270,3 +270,72 @@ def write_sparsebundle(path, data, band=4096, token=b""):
         if any(piece):
             (folder / "bands" / format(number, "x")).write_bytes(piece)
     return str(folder)
+
+
+# ---- encrypted Apple disk images (encrcdsa version 2) ---------------------------
+# Laid out as hdiutil writes one on current macOS: a header, one password item whose
+# AES and HMAC-SHA1 keys are wrapped with AES-192-CBC under PBKDF2-HMAC-SHA1 of the
+# password, then the data in 512-byte blocks, each AES-CBC with the IV
+# HMAC-SHA1(HMAC key, block number)[:16]. ewfprobe's own suite checks the reader
+# against images hdiutil wrote; these are for GLEAPP's handling of them.
+
+def _cipher():
+    try:
+        from Cryptodome.Cipher import AES  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        from Crypto.Cipher import AES  # pylint: disable=import-outside-toplevel
+    return AES
+
+
+def _encrcdsa_keys(password, key_bits, seed):
+    import random  # pylint: disable=import-outside-toplevel
+    aes = _cipher()
+    rng = random.Random(seed)
+    aes_key, hmac_key = rng.randbytes(key_bits // 8), rng.randbytes(20)
+    salt, iv = rng.randbytes(20), rng.randbytes(8)
+    keydata = aes_key + hmac_key + b"CKIE\x00"
+    pad = 16 - len(keydata) % 16
+    keydata += bytes([pad]) * pad
+    secret = password.encode() if isinstance(password, str) else password
+    derived = hashlib.pbkdf2_hmac("sha1", secret, salt, 1000, 32)
+    blob = aes.new(derived[:24], aes.MODE_CBC, iv=iv + bytes(8)).encrypt(keydata)
+    item = struct.pack(">LQL32sL32s5L", 0x67, 1000, 20, salt, 8, iv, 192, 0x80000001,
+                       7, 6, len(blob)) + blob
+    return aes_key, hmac_key, item
+
+
+def _encrypt_blocks(aes_key, hmac_key, data):
+    import hmac  # pylint: disable=import-outside-toplevel
+    aes = _cipher()
+    data = data + bytes(-len(data) % 512)
+    return b"".join(
+        aes.new(aes_key, aes.MODE_CBC,
+                iv=hmac.new(hmac_key, struct.pack(">L", n), "sha1").digest()[:16])
+        .encrypt(data[n * 512:(n + 1) * 512]) for n in range(len(data) // 512))
+
+
+def _encrcdsa_header(item, key_bits, data_length, start=4096):
+    head = (struct.pack(">8s7L16sLQQL", b"encrcdsa", 2, 16, 5, 0x80000001, key_bits, 0x5B,
+                        160, bytes(16), 512, data_length, start, 1)
+            + struct.pack(">LQQ", 1, 0x60, len(item)) + item)
+    return head.ljust(start, b"\0")
+
+
+def write_encrypted(path, plain, password, key_bits=128, seed=1):
+    """Write ``plain`` (a disk, a UDIF image or a sparse image, as bytes) encrypted
+    with ``password``, as hdiutil -encryption writes a file."""
+    aes_key, hmac_key, item = _encrcdsa_keys(password, key_bits, seed)
+    Path(path).write_bytes(_encrcdsa_header(item, key_bits, len(plain))
+                           + _encrypt_blocks(aes_key, hmac_key, plain))
+    return str(path)
+
+
+def write_encrypted_sparsebundle(path, data, password, band=4096, seed=2):
+    """``data`` as an encrypted sparse bundle: the token holds the header, and each
+    band is encrypted on its own, its block numbers starting again at 0."""
+    folder = Path(write_sparsebundle(path, data, band=band))
+    aes_key, hmac_key, item = _encrcdsa_keys(password, 256, seed)
+    (folder / "token").write_bytes(_encrcdsa_header(item, 256, 0))
+    for f in (folder / "bands").iterdir():
+        f.write_bytes(_encrypt_blocks(aes_key, hmac_key, f.read_bytes()))
+    return str(folder)

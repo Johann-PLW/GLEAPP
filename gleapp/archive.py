@@ -109,9 +109,11 @@ FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF
                               # an Apple .dmg (with any .dmgpart segments), a
                               # .sparseimage, or a .sparsebundle folder
 # qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
-# Lx01 are logical evidence and an encrypted Apple disk image needs its password,
-# so they are not among them.
-_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE", "SPARSEBUNDLE")
+# Lx01 are logical evidence, so they are not among them. An encrypted Apple disk
+# image (DMG_ENCRYPTED: a .dmg, a split one, a .sparseimage or a sparse bundle) is,
+# and opens with its password.
+_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE", "SPARSEBUNDLE",
+                 "DMG_ENCRYPTED")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -131,6 +133,51 @@ _DEVICE_TOPS = frozenset({
 
 class ArchiveUnavailable(Exception):
     """The archive a reference-mode row points at cannot be read where the case recorded it."""
+
+
+class ImagePasswordNeeded(ArchiveUnavailable):
+    """An encrypted Apple disk image was opened with no password that opens it this
+    session. ``unlock_image`` takes one."""
+
+    def __init__(self, path):
+        super().__init__(f"{Path(path).name} is an encrypted Apple disk image and opens "
+                         f"only with its password, which has not been given this session")
+        self.path = os.fspath(path)
+
+
+# Passwords of encrypted Apple disk images, by the image's path. Held by this process
+# only and never written anywhere (not the case, the config, a log or a report), so a
+# new session asks for them again.
+_PASSWORDS: dict[str, str | bytes] = {}
+_PASSWORD_LOCK = threading.Lock()
+
+
+def _password_key(path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def needs_password(path) -> bool:
+    """True when ``path`` is an Apple disk image encrypted with a password."""
+    return qnxprobe.acquisition_format(os.fspath(path)) == "DMG_ENCRYPTED"
+
+
+def is_unlocked(path) -> bool:
+    """True when this session holds a password that opens the image at ``path``."""
+    with _PASSWORD_LOCK:
+        return _password_key(path) in _PASSWORDS
+
+
+def unlock_image(path, password) -> bool:
+    """Open the encrypted image at ``path`` with ``password``. When it opens, keep the
+    password for this session and return True; when it does not, return False. Anything
+    else that stops the image opening (a damaged header, no cipher package) is raised."""
+    try:
+        ewfprobe.open_ewf(os.fspath(path), password=password).close()
+    except ewfprobe.EwfPasswordError:
+        return False
+    with _PASSWORD_LOCK:
+        _PASSWORDS[_password_key(path)] = password
+    return True
 
 
 # ---- format ----------------------------------------------------------------
@@ -204,7 +251,7 @@ def archive_format(path: str | Path) -> str | None:
     p = Path(path)
     if p.is_dir():
         kind = qnxprobe.acquisition_format(os.fspath(p))
-        return FORMAT_EWF if kind == "SPARSEBUNDLE" else None
+        return FORMAT_EWF if kind in ("SPARSEBUNDLE", "DMG_ENCRYPTED") else None
     if not p.is_file():
         return None
     try:
@@ -421,8 +468,9 @@ def source_records(case) -> dict[str, dict]:
 def source_status(case) -> list[dict]:
     """One entry per archive source: the record, how many files it registered
     (``files``, split into ``walked`` and ``carved``), and ``status``: ``ok``,
-    ``changed`` (a file is at the recorded path but its size or date differ) or
-    ``missing``."""
+    ``changed`` (a file is at the recorded path but its size or date differ),
+    ``missing``, or ``locked`` (an encrypted image whose password has not been given
+    this session; ``unlock_image`` takes it)."""
     out = []
     for name, rec in sorted(source_records(case).items()):
         try:
@@ -431,15 +479,16 @@ def source_status(case) -> list[dict]:
             status = "missing"
         else:
             same = size == rec["size"] and abs(mtime - rec["mtime"]) < 2
+            locked = same and needs_password(rec["path"]) and not is_unlocked(rec["path"])
             # A segmented acquisition is several files and the record names one, so a
             # later segment going missing leaves the first one untouched and the source
             # reading fine until something asks for bytes that live in the missing part.
-            if same and rec["format"] in IMAGE_FORMATS and rec["segments"]:
+            if same and not locked and rec["format"] in IMAGE_FORMATS and rec["segments"]:
                 try:
                     same = _segment_count(rec["path"], rec["format"]) >= rec["segments"]
                 except _IMAGE_ERRORS:
                     same = False                     # the set can no longer be joined
-            status = "ok" if same else "changed"
+            status = "locked" if locked else "ok" if same else "changed"
         # Split the count by how each row was actually recovered, rather than
         # inferring it from the format: an acquisition whose filesystems could
         # be read is walked, and recovering its deleted records and carving its
@@ -588,7 +637,14 @@ def _open_image_file(path):
     Ex01 set, an AFF, or an AFD), and ``_RawImage`` for a raw image or a numbered
     split set."""
     path = os.fspath(path)
-    if qnxprobe.acquisition_format(path) in _ACQUISITIONS:
+    kind = qnxprobe.acquisition_format(path)
+    if kind == "DMG_ENCRYPTED":
+        with _PASSWORD_LOCK:
+            password = _PASSWORDS.get(_password_key(path))
+        if password is None:
+            raise ImagePasswordNeeded(path)
+        return ewfprobe.open_ewf(path, password=password)
+    if kind in _ACQUISITIONS:
         return ewfprobe.open_ewf(path)
     return _RawImage(path)
 
@@ -609,6 +665,10 @@ def _segment_count(path: str, fmt: str) -> int:
             return len(ewfprobe.udif_segments(path))
         if kind in ("AFF", "SPARSEIMAGE", "SPARSEBUNDLE"):
             return 1
+        if kind == "DMG_ENCRYPTED":
+            # each file of an encrypted set is decrypted to find the others, so ask
+            # the image already open rather than read the set again
+            return len(_open_image(path)[0].paths)
         return len(ewfprobe.ewf_segments(path))
     return len(qnxprobe.split_segments(path)) or 1
 
@@ -616,21 +676,15 @@ def _segment_count(path: str, fmt: str) -> int:
 def container_refusal(path) -> str | None:
     """Why GLEAPP does not ingest ``path``, when it is a container GLEAPP recognises
     and cannot read, else None: EnCase logical evidence (L01 or Lx01), which holds
-    copies of files rather than a disk, and an encrypted Apple disk image, which
-    needs its password. Registered as a single file, either would yield nothing
-    without saying why."""
+    copies of files rather than a disk. Registered as a single file it would yield
+    nothing without saying why. An encrypted Apple disk image is read, with its
+    password (``unlock_image``)."""
     kind = qnxprobe.acquisition_format(os.fspath(path))
     name = Path(path).name
     if kind in ("L01", "Lx01"):
         return (f"{name} is EnCase logical evidence ({kind}): it holds copies of files, "
                 "not a disk, and GLEAPP reads disk images. Export its files (for an "
                 "L01, ewfprobe.py export --entry) and add them as a folder.")
-    if kind == "DMG_ENCRYPTED":
-        what = ("an encrypted Apple sparse bundle" if Path(path).is_dir() else
-                "an encrypted Apple disk image")
-        return (f"{name} is {what}: it needs its password. "
-                "Attach it on a Mac with the password and add the attached volume as a "
-                "folder, or convert it to an unencrypted image with hdiutil convert.")
     return None
 
 

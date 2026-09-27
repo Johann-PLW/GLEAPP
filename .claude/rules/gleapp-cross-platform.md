@@ -266,6 +266,19 @@ nothing, zero rows and no error, while every other raw image registered as one "
 file. Measured on a 268 MB HFS+ volume and its E01 wrap: 4 media walked from the E01, 0
 from the raw file.
 
+**An encrypted Apple disk image opens with its password, and the password is never stored.**
+`DMG_ENCRYPTED` (an encrypted `.dmg`, split `.dmg`, `.sparseimage` or sparse bundle,
+AES-128 or AES-256) is one of `_ACQUISITIONS`. `archive.unlock_image` checks a password
+against the image and keeps it in `_PASSWORDS`, keyed by the image's path, for the life of
+the process; `_open_image_file` raises `ImagePasswordNeeded` without one, and
+`source_status` reports such a source as `locked`. The web ingest answers 409 with the
+images it cannot open and the page posts again with the passwords; `POST
+/api/source/unlock` serves a later session. The command line takes `--password-file` or
+`--password-env`, or asks at a terminal, never an argument value. Decryption needs
+`pycryptodomex` (imported as `Cryptodome`), declared in the requirements; the vendored
+ewfprobe also accepts `pycryptodome`. `tests/test_encrypted_sources.py` checks the
+password never reaches the case folder or the settings folder.
+
 Either form holds filesystems, so its files have names, paths and dates of their own, and reading
 them is what a walk is for. `_volumes()` finds every volume through qnxprobe's own GPT and
 MBR parsers and its `identify_fs`, then each is walked and its media registered under
