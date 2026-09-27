@@ -254,6 +254,45 @@ def test_the_background_indexer_waits_for_a_job_then_finishes(tmp_path):
         c.close()
 
 
+def test_a_source_added_while_the_indexer_works_is_indexed_too(tmp_path, monkeypatch):
+    """A source ingested while the indexer is part way (here: during the content pass,
+    after the match pass ended) is indexed without reopening the case. The indexer used
+    to note the file count only once idle, when it already held the new files, so it
+    sat idle with them unindexed and the Build indexes button hidden."""
+    import time
+    from gleapp import content
+    from gleapp.web import indexer
+    from gleapp.web.indexer import BackgroundIndexer
+    monkeypatch.setattr(indexer, "IDLE_POLL", 0.4)
+    monkeypatch.setattr(indexer, "BUSY_POLL", 0.1)
+    c = open_case(tmp_path / "case", create=True, examiner="t")
+    c.thumb_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(3):
+        _add(c, f"s{n}", _scene(400 + n))
+    c.db.conn.commit()
+    real_build, added = content.build_index, []
+
+    def build_after_an_ingest(case, **kw):
+        if not added:                  # a second source lands while this pass runs
+            for n in range(3):
+                _add(case, f"t{n}", _scene(500 + n))
+            case.db.conn.commit()
+            added.append(True)
+        return real_build(case, **kw)
+    monkeypatch.setattr(content, "build_index", build_after_an_ingest)
+    ix = BackgroundIndexer({"case": c, "job": {"running": False}})
+    try:
+        ix.start()
+        for _ in range(600):
+            if simindex.status(c)["indexed"] == 6:
+                break
+            time.sleep(0.1)
+        assert added and simindex.status(c)["indexed"] == 6
+    finally:
+        ix.stop()
+        c.close()
+
+
 def test_a_video_is_answered_in_two_steps_with_the_same_full_answer(indexed):
     """?quick=1 searches the video's thumbnail only and says more is coming; the full
     answer adds what its key frames find."""

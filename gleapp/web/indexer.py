@@ -77,7 +77,10 @@ class BackgroundIndexer:
         from .. import content, simindex
         workers = max(2, (os.cpu_count() or 4) // 2)
         progress = lambda d, t: self.status.update(done=d, total=t)
-        finished = {"copies": False, "content": False}   # a pass that ran to its end
+        # how many files each pass covered when it last ran to its end: a pass runs
+        # again whenever that number changes, however the files arrived (a source
+        # ingested during the other pass used to stay unindexed until the case reopened)
+        finished = {"copies": None, "content": None}
         try:
             while not self._stop.is_set() and self.state.get("case") is case:
                 if self.state["job"]["running"]:
@@ -89,30 +92,29 @@ class BackgroundIndexer:
                     continue
                 self.status.update(paused=False)
                 st = simindex.status(case)
-                if st["indexed"] < st["indexable"] and not finished["copies"]:
+                if st["indexed"] < st["indexable"] and finished["copies"] != st["indexable"]:
                     self.status.update(stage="copies", done=0, total=st["indexable"] - st["indexed"])
                     simindex.build_index(case, workers=workers, progress=progress,
                                          stop=lambda: self._should_yield(case))
-                    finished["copies"] = not self._should_yield(case)
+                    if not self._should_yield(case):
+                        finished["copies"] = st["indexable"]
                     continue
                 ct = content.status(case)
-                if ct["model"] and ct["indexed"] < ct["indexable"] and not finished["content"]:
+                if (ct["model"] and ct["indexed"] < ct["indexable"]
+                        and finished["content"] != ct["indexable"]):
                     self.status.update(stage="content", done=0, total=ct["indexable"] - ct["indexed"])
                     content.build_index(case, workers=workers, progress=progress,
                                         stop=lambda: self._should_yield(case))
-                    finished["content"] = not self._should_yield(case)
+                    if not self._should_yield(case):
+                        finished["content"] = ct["indexable"]
                     continue
                 # up to date (an unreadable thumbnail is not retried until new files
-                # arrive): idle, and look again for files a later job adds
+                # arrive): idle, then look again for files a later job adds
                 self.status.update(stage="idle", done=0, total=0)
-                before = (st["indexable"], ct["indexable"])
                 for _ in range(int(IDLE_POLL / BUSY_POLL)):
                     if self._stop.is_set() or self.state.get("case") is not case:
                         return
                     self._stop.wait(BUSY_POLL)
-                st, ct = simindex.status(case), content.status(case)
-                if (st["indexable"], ct["indexable"]) != before:
-                    finished = {"copies": False, "content": False}
         except sqlite3.ProgrammingError:
             pass                  # the case was closed under it (not through the app): stop
         # pylint: disable-next=broad-exception-caught
