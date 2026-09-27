@@ -15,7 +15,8 @@ from PIL import Image
 # ewfwriter.py sits beside this file. pytest puts that directory on the path, so the
 # import resolves at run time; whether pylint resolves it depends on the interpreter it
 # runs under, and on 3.14 it does not.
-from ewfwriter import write_afd, write_aff, write_ewf  # pylint: disable=import-error
+from ewfwriter import (  # pylint: disable=import-error
+    write_afd, write_aff, write_ewf, write_sparseimage, write_udif)
 from gleapp import archive
 from gleapp.case import open_case, parse_source_spec
 from gleapp.pipeline import ingest_sources, process
@@ -170,6 +171,37 @@ def test_an_afd_is_read_whole_and_a_missing_file_is_reported(tmp_path):
     finally:
         archive.close_zips()
         c.close()
+
+
+@pytest.mark.parametrize("writer,name", [(write_udif, "disk.dmg"),
+                                         (write_sparseimage, "disk.sparseimage")])
+def test_an_apple_disk_image_is_read_as_the_disk_it_holds(tmp_path, writer, name):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "ev").mkdir()
+    image = Path(writer(tmp_path / "ev" / name, data))
+    assert archive.archive_format(image) == "ewf"
+    c, n = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        assert n == 3
+        rows = _rows(c)
+        rec = archive.source_record(c, image.name)
+        assert rec["segments"] == 1
+        assert archive.source_status(c)[0]["status"] == "ok"
+        for item, (off, size) in laid.items():
+            hit = next(r for r in rows.values() if r["member_offset"] == off)
+            with archive.local_copy(c.root, rec, hit) as p:
+                assert p.read_bytes()[:size] == data[off:off + size], item
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def test_an_encrypted_apple_disk_image_is_refused_with_the_reason(tmp_path):
+    enc = tmp_path / "locked.dmg"
+    enc.write_bytes(b"encrcdsa" + bytes(8192))
+    assert archive.archive_format(enc) is None
+    with pytest.raises(ValueError, match="encrypted Apple disk image"):
+        parse_source_spec(enc)
 
 
 def test_logical_evidence_is_refused_with_the_reason(tmp_path):

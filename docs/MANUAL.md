@@ -36,7 +36,8 @@ With no case open, GLEAPP shows the **launcher**.
       `.bz2`, `.xz`). Media is read in place unless you tick *Copy media out of
       extraction archives*. A compressed tar is always copied out.
     - **Disk image**: an `.E01`, `.s01` or `.Ex01` with its segments beside it, an
-      `.aff` (for an AFD folder, any `.aff` in it), or a raw image (one
+      `.aff` (for an AFD folder, any `.aff` in it), an Apple `.dmg` or
+      `.sparseimage`, or a raw image (one
       `.img`/`.dd`, or any segment of a split set such as `.001`, `.002`). Raw
       images are identified by content, not extension. A split set with a
       missing segment is refused and the gap is named.
@@ -1249,9 +1250,12 @@ already give you.
 
 - **E01, SMART or Ex01 acquisition**: point at the first segment of the set.
 - **AFF**: point at the `.aff`; for an AFD folder, at any `.aff` in it.
+- **Apple disk image**: point at the `.dmg` or `.sparseimage`. An LZFSE-compressed
+  `.dmg` needs `pyliblzfse`, which GLEAPP's requirements install.
 - **Raw image**: one file, or any segment of a numbered split set.
-- **Not accepted**: VHD and VMDK, and EnCase logical evidence (`.L01`), which
-  holds copies of files rather than a disk and is refused with that reason.
+- **Not accepted**: VHD and VMDK; EnCase logical evidence (`.L01`), which holds
+  copies of files rather than a disk; and an encrypted Apple disk image, which needs
+  its password. Both are refused with that reason.
 - An acquisition is recognized by its own signature and a raw image by what it
   holds, so the extension does not matter.
 
@@ -1380,6 +1384,9 @@ partition on a dual-boot disk is enough to do that.
   tool recorded one, and a raw image carries none. So a raw source is identified, when it is relinked or its copies
   dropped, by its size and a hash of its first and last 4 MiB, which tells two
   images of one size apart and no more.
+- An Apple disk image records checksums of its stored data but no hash of the
+  disk, so, like an acquisition that recorded none, it is identified by its size
+  alone when it is relinked or its copies dropped.
 - An image whose partition table describes a volume larger than the file holds
   (a split set with its later segments missing, or a truncated image) is walked
   as far as it goes, and the Source panel says which volume is not all there.
@@ -1713,7 +1720,8 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
   inside an acquisition (NTFS, APFS, HFS+, ext, F2FS, FAT32, exFAT and more),
   finds the partitions, and joins the numbered segments of a split raw image.
 - **[ewfprobe](https://github.com/abrignoni/ewfprobe)** presents an EnCase/EWF
-  (`.E01`, `.s01`), EWF2 (`.Ex01`) or AFF acquisition as a seekable disk image,
+  (`.E01`, `.s01`), EWF2 (`.Ex01`), AFF or Apple (`.dmg`, `.sparseimage`) acquisition
+  as a seekable disk image,
   reconstructing chunks across segments; qnxprobe imports it to open one.
 - **[mediacarve](https://github.com/abrignoni/mediacarve)** scans unallocated
   (or whole-disk) space for image/video signatures when a carve is requested.

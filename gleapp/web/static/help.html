@@ -56,7 +56,8 @@ signals only. Every category decision is the examiner's.</p>
           of extraction archives</em>. A compressed tar is always copied out.</li>
           <li><strong>Disk image</strong>: an <code>.E01</code>, <code>.s01</code> or
           <code>.Ex01</code> with its segments beside it, an <code>.aff</code> (for an
-          AFD folder, any <code>.aff</code> in it), or a raw image (one <code>.img</code>/<code>.dd</code>, or any
+          AFD folder, any <code>.aff</code> in it), an Apple <code>.dmg</code> or
+          <code>.sparseimage</code>, or a raw image (one <code>.img</code>/<code>.dd</code>, or any
           segment of a split set such as <code>.001</code>, <code>.002</code>). Raw
           images are identified by content, not extension. A split set with a missing
           segment is refused and the gap is named.
@@ -1230,10 +1231,12 @@ already give you.</p>
   <li><strong>E01, SMART or Ex01 acquisition</strong>: point at the first segment of the set.</li>
   <li><strong>AFF</strong>: point at the <code>.aff</code>; for an AFD folder, at any
     <code>.aff</code> in it.</li>
+  <li><strong>Apple disk image</strong>: point at the <code>.dmg</code> or
+    <code>.sparseimage</code>.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
-  <li><strong>Not accepted</strong>: VHD and VMDK, and EnCase logical evidence
-    (<code>.L01</code>), which holds copies of files rather than a disk and is refused with
-    that reason.</li>
+  <li><strong>Not accepted</strong>: VHD and VMDK; EnCase logical evidence
+    (<code>.L01</code>), which holds copies of files rather than a disk; and an encrypted
+    Apple disk image, which needs its password. Both are refused with that reason.</li>
   <li>An acquisition is recognized by its own signature and a raw image by what it holds,
     so the extension does not matter.</li>
 </ul>
@@ -1365,6 +1368,9 @@ that.</p>
     So a raw source is identified, when it is relinked or its copies dropped, by its size and
     a hash of its first and last 4&nbsp;MiB, which tells two images of one size apart and no
     more.</li>
+  <li>An Apple disk image records checksums of its stored data but no hash of the disk, so,
+    like an acquisition that recorded none, it is identified by its size alone when it is
+    relinked or its copies dropped.</li>
   <li>An image whose partition table describes a volume larger than the file holds (a split
     set with its later segments missing, or a truncated image) is walked as far as it goes,
     and the Source panel says which volume is not all there.</li>
