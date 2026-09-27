@@ -612,7 +612,9 @@ stop event instead of sleeping (a stop used to wait out up to two seconds), and 
 snapshot loop skips a case closed under it instead of dying. `tests/conftest.py` wraps
 `create_app` (and `gleapp.desktop`'s own import of it), shuts every app down at teardown,
 and fails any test that leaves either thread running. Build an app some other way in a
-test and stop it yourself.
+test and stop it yourself. `CaseDB.close()` now takes the lock every query takes: the first
+version of the snapshot-loop test closed a case while the loop was querying it, and the
+Linux CI job segfaulted.
 
 The same overlap can happen in the app: the indexer stands aside for a job only between
 chunks, so a job that forks a worker right after it starts can meet an indexer inside
