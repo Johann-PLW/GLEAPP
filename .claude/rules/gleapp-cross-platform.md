@@ -620,5 +620,14 @@ Linux CI job segfaulted.
 
 The same overlap can happen in the app: the indexer stands aside for a job only between
 chunks, so a job that forks a worker right after it starts can meet an indexer inside
-numpy. Not measured in the app, and which BLAS the macOS release's numpy is built on was
-not checked (that build installs OpenCV and Pillow from conda-forge).
+numpy. The GLEAPP.app 2026.5.1 installed on this Mac does not deadlock that way, measured
+2026-09-27. Its numpy calls conda-forge's OpenBLAS 0.3.34 (`libcblas.3.dylib` links to the
+bundled `libopenblas`), an OpenMP build (`openblas_get_config()` reports `USE_OPENMP`).
+Loaded from the app bundle, with one thread running a threaded 512 x 512 `cblas_sgemm` in a
+loop while the main thread started `/usr/bin/true` 1,000 times, it finished 3 runs of 3. The
+same harness on numpy 1.26.4's OpenBLAS 0.3.23, a pthreads build, hung before 20 forks both
+times, in `blas_thread_shutdown_`, and finished with one OpenBLAS thread. So the exposure is a
+source or test run on a pthreads OpenBLAS, such as PyPI's numpy 1.26.4. numpy 2.5.3's macOS 11
+wheel also bundles OpenBLAS and was not checked, nor was the Intel release build. If the
+release ever takes a pthreads OpenBLAS, the app inherits the deadlock; `openblas_get_config()`
+on the bundled library says which it has.
