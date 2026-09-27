@@ -266,9 +266,11 @@ nothing, zero rows and no error, while every other raw image registered as one "
 file. Measured on a 268 MB HFS+ volume and its E01 wrap: 4 media walked from the E01, 0
 from the raw file.
 
-**An encrypted Apple disk image opens with its password, and the password is never stored.**
+**An encrypted image opens with its password, and the password is never stored.**
 `DMG_ENCRYPTED` (an encrypted `.dmg`, split `.dmg`, `.sparseimage` or sparse bundle,
-AES-128 or AES-256) is one of `_ACQUISITIONS`. `archive.unlock_image` checks a password
+AES-128 or AES-256) and `AD_ENCRYPTED` (an E01, SMART or raw set FTK Imager encrypted
+with AD encryption, recognised from its first file or any numbered file of a raw set)
+are in `_ACQUISITIONS`, and `qnxprobe.PASSWORD_FORMATS` names both. `archive.unlock_image` checks a password
 against the image and keeps it in `_PASSWORDS`, keyed by the image's path, for the life of
 the process; `_open_image_file` raises `ImagePasswordNeeded` without one, and
 `source_status` reports such a source as `locked`. The web ingest answers 409 with the

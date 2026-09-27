@@ -39,7 +39,7 @@ def _cli_passwords(args: argparse.Namespace) -> list:
 
 
 def _unlock(paths, args: argparse.Namespace) -> list[str]:
-    """Open each encrypted Apple disk image among ``paths`` for this session, with the
+    """Open each encrypted image among ``paths`` for this session, with the
     first password the command line gives that opens it or, when it gives none, one
     asked for at a terminal (three tries). Returns the names still locked. The
     passwords are held in memory only (archive.unlock_image)."""
@@ -555,11 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="examiner name for the audit log (default: keep the case's "
                          "stored name, or 'examiner' for a brand-new case)")
     ap.add_argument("--password-file", metavar="FILE", action="append", default=[],
-                    help="for an encrypted Apple disk image source: a password, the first "
+                    help="for an encrypted image source (an Apple disk image or an FTK "
+                         "Imager AD-encrypted set): a password, the first "
                          "line of FILE. Repeatable; each image opens with the first that "
                          "opens it. Held in memory for this run only")
     ap.add_argument("--password-env", metavar="NAME", action="append", default=[],
-                    help="for an encrypted Apple disk image source: a password, from the "
+                    help="for an encrypted image source: a password, from the "
                          "environment variable NAME. Repeatable. Without either, GLEAPP "
                          "asks at a terminal")
     sub = ap.add_subparsers(dest="cmd", required=True)

@@ -78,8 +78,9 @@ case.</p>
               media (filesystem records and carving)</em> to run it during ingest, or
               run it later from the Source panel.</li>
               <li>An encrypted Apple disk image or sparse bundle (AES-128 or AES-256,
-              as <code>hdiutil</code> writes them) is read with its
-              password. When you click <strong>Create case &amp; ingest</strong>, GLEAPP
+              as <code>hdiutil</code> writes them), or an E01, SMART or raw set FTK
+              Imager encrypted with AD encryption (point at its first file, or at any
+              numbered file of a raw set), is read with its password. When you click <strong>Create case &amp; ingest</strong>, GLEAPP
               asks for it in a password field, and asks again if it does not open the
               image. The password is held in memory until GLEAPP is closed and is never
               written into the case, your settings, a log or a report. In a later
@@ -148,7 +149,8 @@ your hash stash and imported basemaps live in your user data folders instead
 looks for a folder named <code>case</code> in the current directory. The <code>maps</code>
 commands, <code>hashset --global</code> and <code>stash</code> (except
 <code>stash --add</code>) do not use a case.</p>
-<p>An encrypted Apple disk image takes its password from
+<p>An encrypted image (an Apple disk image, or an FTK Imager AD-encrypted set) takes
+its password from
 <code>--password-file &lt;file&gt;</code> (the first line of the file) or
 <code>--password-env &lt;variable&gt;</code> (the name of an environment variable holding
 it), both written before the subcommand like <code>-c</code>. Either can be given more
@@ -1265,8 +1267,9 @@ already give you.</p>
     sparse bundle, point at the <code>.sparsebundle</code> folder: on a Mac the file
     dialog lists it as one item, and on Windows or Linux use the folder button.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
-  <li><strong>Encrypted Apple disk image or sparse bundle</strong>: point at it as
-    above; GLEAPP asks for its password (&sect;1).</li>
+  <li><strong>Encrypted Apple disk image or sparse bundle, or an E01, SMART or raw set
+    FTK Imager encrypted with AD encryption</strong>: point at it as above; GLEAPP asks
+    for its password (&sect;1).</li>
   <li><strong>Not accepted</strong>: VHD and VMDK, and EnCase logical evidence
     (<code>.L01</code>), which holds copies of files rather than a disk and is refused
     with that reason.</li>
