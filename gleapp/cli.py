@@ -496,7 +496,8 @@ def build_parser() -> argparse.ArgumentParser:
                                       "set), or a JSON spec, then process")
     s.add_argument("source", help="folder path, extraction .zip or .tar "
                                  "(plain, .gz, .bz2 or .xz), a disk image (.E01, .s01, "
-                                 ".Ex01, .aff, .dmg, .sparseimage, a raw "
+                                 ".Ex01, .aff, .dmg with any .dmgpart files, "
+                                 ".sparseimage, a .sparsebundle folder, a raw "
                                  ".img/.dd, or any segment of a numbered split set), "
                                  "OR .json spec file")
     s.add_argument("--no-process", action="store_true", help="register files only")

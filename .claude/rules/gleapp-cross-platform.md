@@ -252,7 +252,7 @@ A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered s
 beside it) or as a raw image: one file (`.img`, `.dd`, `.raw`, any name) or a numbered
 split set (`.001`, `.002`, ...; FTK Imager's default). `archive_format` recognizes an
 acquisition ewfprobe reads (E01 and SMART s01, Ex01, AFF, any .aff of an AFD folder,
-and an Apple .dmg or .sparseimage)
+and an Apple .dmg, with any .dmgpart segments, .sparseimage or .sparsebundle folder)
 by `qnxprobe.acquisition_format`, which reads the signature, before the zip and tar
 checks, so the extension is never consulted and the first segment of a set is enough to
 open the whole thing. EnCase logical evidence (L01, Lx01) holds files, not a disk:

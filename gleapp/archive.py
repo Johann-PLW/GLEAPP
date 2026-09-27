@@ -106,11 +106,12 @@ FORMAT_ZIP = "zip"
 FORMAT_TAR = "tar"
 FORMAT_TAR_COMPRESSED = "tar-compressed"
 FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF, AFD,
-                              # an Apple .dmg or .sparseimage
+                              # an Apple .dmg (with any .dmgpart segments), a
+                              # .sparseimage, or a .sparsebundle folder
 # qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
 # Lx01 are logical evidence and an encrypted Apple disk image needs its password,
 # so they are not among them.
-_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE")
+_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE", "SPARSEBUNDLE")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -168,6 +169,24 @@ def _is_raw_image(path: Path) -> bool:
         return False
 
 
+def _source_stat(path: str | Path) -> tuple[int, float]:
+    """The size and modification time a source is recorded with, and compared against
+    later to tell whether it changed. A sparse bundle is a folder whose own entry does
+    not change when a band is rewritten, so it is the total bytes of its Info.plist and
+    band files and the latest of their times."""
+    p = Path(path)
+    if p.is_dir():
+        files = [p / "Info.plist"]
+        bands = p / "bands"
+        if bands.is_dir():
+            files += [f for f in bands.iterdir() if f.is_file()]
+        stats = [f.stat() for f in files if f.is_file()]
+        return (sum(s.st_size for s in stats),
+                max((s.st_mtime for s in stats), default=p.stat().st_mtime))
+    st = p.stat()
+    return st.st_size, st.st_mtime
+
+
 def archive_format(path: str | Path) -> str | None:
     """``zip``, ``tar``, ``tar-compressed``, ``ewf``, ``raw`` or None, decided by the
     file's own bytes.
@@ -179,8 +198,13 @@ def archive_format(path: str | Path) -> str | None:
     image has no signature of its own, so it is recognised by what is in it: a
     partition table or a filesystem the vendored reader can name, looked for before
     the tar check, since a raw volume that begins with zeros reads as an empty tar.
+    An Apple sparse bundle is a folder, recognised by its Info.plist, and is ``ewf``
+    too; any other folder is not an archive.
     """
     p = Path(path)
+    if p.is_dir():
+        kind = qnxprobe.acquisition_format(os.fspath(p))
+        return FORMAT_EWF if kind == "SPARSEBUNDLE" else None
     if not p.is_file():
         return None
     try:
@@ -402,11 +426,11 @@ def source_status(case) -> list[dict]:
     out = []
     for name, rec in sorted(source_records(case).items()):
         try:
-            st = Path(rec["path"]).stat()
+            size, mtime = _source_stat(rec["path"])
         except OSError:
             status = "missing"
         else:
-            same = st.st_size == rec["size"] and abs(st.st_mtime - rec["mtime"]) < 2
+            same = size == rec["size"] and abs(mtime - rec["mtime"]) < 2
             # A segmented acquisition is several files and the record names one, so a
             # later segment going missing leaves the first one untouched and the source
             # reading fine until something asks for bytes that live in the missing part.
@@ -580,7 +604,10 @@ def _segment_count(path: str, fmt: str) -> int:
             return sum(1 for n in os.listdir(folder)
                        if n.lower().endswith(".aff")
                        and os.path.isfile(os.path.join(folder, n)))
-        if kind in ("AFF", "UDIF", "SPARSEIMAGE"):
+        if kind == "UDIF":
+            # one file, or a .dmg and the .dmgpart files hdiutil segment wrote
+            return len(ewfprobe.udif_segments(path))
+        if kind in ("AFF", "SPARSEIMAGE", "SPARSEBUNDLE"):
             return 1
         return len(ewfprobe.ewf_segments(path))
     return len(qnxprobe.split_segments(path)) or 1
@@ -599,7 +626,9 @@ def container_refusal(path) -> str | None:
                 "not a disk, and GLEAPP reads disk images. Export its files (for an "
                 "L01, ewfprobe.py export --entry) and add them as a folder.")
     if kind == "DMG_ENCRYPTED":
-        return (f"{name} is an encrypted Apple disk image: it needs its password. "
+        what = ("an encrypted Apple sparse bundle" if Path(path).is_dir() else
+                "an encrypted Apple disk image")
+        return (f"{name} is {what}: it needs its password. "
                 "Attach it on a Mac with the password and add the attached volume as a "
                 "folder, or convert it to an unencrypted image with hdiutil convert.")
     return None
@@ -1056,13 +1085,13 @@ def _register(case, src, dest: Path, name: str, rel: str, kind: str, ext: str, s
 
 def _finish(case, src, path: Path, *, fmt: str, root: str, stage: bool, reason: str,
             tally: _Tally, timestamps: str) -> None:
-    st = path.stat()
+    size, mtime = _source_stat(path)
     key = _meta_key(src.name)
     sha = _sidecar_sha256(path)
     mode = MODE_STAGED if stage else MODE_REFERENCE
     case.db.set_meta(f"{key}:path", str(path))
-    case.db.set_meta(f"{key}:size", str(st.st_size))
-    case.db.set_meta(f"{key}:mtime", str(st.st_mtime))
+    case.db.set_meta(f"{key}:size", str(size))
+    case.db.set_meta(f"{key}:mtime", str(mtime))
     case.db.set_meta(f"{key}:root", root)
     case.db.set_meta(f"{key}:format", fmt)
     case.db.set_meta(f"{key}:mode", mode)
@@ -1776,14 +1805,14 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
                          f"{name!r}: {shown}")
     _drop_zip(rec["path"])
     _drop_image(rec["path"])
-    st = new.stat()
+    size, mtime = _source_stat(new)
     key = _meta_key(name)
     if fmt == FORMAT_TAR:
         for r in case.db.iter_files("source = ?", (name,)):
             case.db.update_file(r["id"], member_offset=index[r["orig_path"]][2])
     case.db.set_meta(f"{key}:path", str(new))
-    case.db.set_meta(f"{key}:size", str(st.st_size))
-    case.db.set_meta(f"{key}:mtime", str(st.st_mtime))
+    case.db.set_meta(f"{key}:size", str(size))
+    case.db.set_meta(f"{key}:mtime", str(mtime))
     case.db.set_meta(f"{key}:format", fmt)
     case.db.commit()
     case.db.audit_log(case.examiner, "relink-source", f"{name}: {rec['path']} -> {new}")

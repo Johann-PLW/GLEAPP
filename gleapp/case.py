@@ -130,16 +130,17 @@ def open_case(path: str | Path, *, create: bool = False, examiner: str | None = 
 # --------------------------------------------------------------------------
 def is_archive_file(p: Path) -> bool:
     """A zip, a tar (plain or compressed), a disk acquisition (E01, s01, Ex01, AFF, any
-    .aff of an AFD folder, or an Apple .dmg or .sparseimage) or a raw disk image (one file, or any segment of a
-    numbered split set), by its bytes; the file must exist."""
+    .aff of an AFD folder, an Apple .dmg with any .dmgpart segments, a .sparseimage, or a
+    .sparsebundle folder) or a raw disk image (one file, or any segment of a numbered
+    split set), by its bytes; the file or folder must exist."""
     from . import archive
     return archive.archive_format(p) is not None
 
 
 def _refuse_unreadable_container(p: Path) -> None:
     """Raise when p is a container GLEAPP recognises and cannot read: EnCase logical
-    evidence, or an encrypted Apple disk image."""
-    if p.is_file():
+    evidence, or an encrypted Apple disk image or sparse bundle."""
+    if p.is_file() or p.is_dir():
         from . import archive
         why = archive.container_refusal(p)
         if why:
@@ -183,8 +184,8 @@ def parse_source_spec(spec: str | Path) -> tuple[list[Source], dict]:
     _refuse_unreadable_container(p)
     # A full-file-system extraction is a zip, and a computer acquisition a disk image.
     # Check before the folder branch, which would otherwise register the archive
-    # itself as one file.
-    if p.is_file() and is_archive_file(p):
+    # itself as one file, or walk a sparse bundle's band files as a folder.
+    if (p.is_file() or p.is_dir()) and is_archive_file(p):
         return [Source(name=p.name, path=str(p.resolve()), kind="archive")], {}
     if p.is_dir() or (p.exists() and p.suffix.lower() not in {".json"}):
         return [Source(name=p.name or str(p), path=str(p.resolve()))], {}
