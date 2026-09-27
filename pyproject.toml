@@ -46,7 +46,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "piexif>=1.1", "pillow-heif>=1.0"]
+# pillow-heif below 1.2.1 crashes on macOS when OpenCV was imported first: both bundle
+# an x265, and dyld binds pillow-heif's rdoQuant to OpenCV's copy
+# (.claude/rules/gleapp-cross-platform.md).
+dev = ["pytest>=8.0", "piexif>=1.1", "pillow-heif>=1.2.1"]
 desktop = ["pywebview>=5.0"]
 build = ["pywebview>=5.0", "pyinstaller==6.22.2", "dmgbuild==1.6.7; sys_platform == 'darwin'"]
 
