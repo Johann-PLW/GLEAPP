@@ -15,8 +15,8 @@ VIDEO = ROOT / "gleapp/web/static/intro/gleapp-intro.mp4"
 POSTER = ROOT / "gleapp/web/static/intro/gleapp-intro-poster.jpg"
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+@pytest.fixture(name="client")
+def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("GLEAPP_CONFIG_DIR", str(tmp_path / "cfg"))
     from gleapp.web.app import create_app  # pylint: disable=import-outside-toplevel
     return create_app(None).test_client()
