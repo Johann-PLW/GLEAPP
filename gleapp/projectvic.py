@@ -28,8 +28,6 @@ from typing import Iterator
 
 from . import jsonstream, vicdetails
 
-VIC_SOURCE_NAME = "Project VIC"
-
 
 def _as_text(value) -> str | None:
     """A VIC field that may arrive as a string, a number or a nested object."""
@@ -398,7 +396,7 @@ def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = Non
         r = recs[0]
         fields = dict(
             rel_path=r.rel_path,
-            source=VIC_SOURCE_NAME,
+            source=vic_path.name,     # the file's own name: VIC is its format, not a source
             kind=_kind_from_mime(r.mime, r.abs_path),
             ext=Path(r.abs_path).suffix.lower(),
             size=r.size,

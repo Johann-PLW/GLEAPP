@@ -2140,6 +2140,8 @@ def test_projectvic_detect_and_import(tmp_path, evidence):
 
     sources, _ = parse_source_spec(vic)
     assert len(sources) == 1 and sources[0].kind == "projectvic"
+    # the source is named after the JSON file: Project VIC is its format, not a source
+    assert sources[0].name == vic.name
 
     c = open_case(tmp_path / "viccase", create=True, examiner="t")
     try:
@@ -2149,6 +2151,7 @@ def test_projectvic_detect_and_import(tmp_path, evidence):
 
         rows = c.db.iter_files()
         assert len(rows) == 4                       # 3 present + 1 missing
+        assert {r["source"] for r in rows} == {vic.name}
         missing = [r for r in rows if r["error"]]
         assert len(missing) == 1 and missing[0]["media_id"] == 99
 
