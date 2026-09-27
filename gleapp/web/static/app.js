@@ -2829,7 +2829,9 @@ function trackJob(infoSel, barSel, label, done) {
     bar.classList.remove("err");
     bar.classList.add("indeterminate");   // no total yet - starts as a sliding stripe
     bar.style.display = "block";
-    bar.querySelector("i").style.width = "0";
+    // no inline width: it would override the stylesheet's sliding-stripe width and
+    // leave an empty track while the total is unknown
+    bar.querySelector("i").style.width = "";
     if (barTxt) barTxt.textContent = label;
     if (barPct) barPct.textContent = "";
   }
@@ -2854,7 +2856,7 @@ function trackJob(infoSel, barSel, label, done) {
       : `${j.message || label}…`;
     if (bar) {
       bar.classList.toggle("indeterminate", !j.total);
-      if (j.total) bar.querySelector("i").style.width = pct + "%";
+      bar.querySelector("i").style.width = j.total ? pct + "%" : "";
     }
     if (barTxt) barTxt.textContent = j.message || label;
     if (barPct) barPct.textContent = j.total ? `${pct}% · ${j.done.toLocaleString()}/${j.total.toLocaleString()}` : "";
