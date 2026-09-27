@@ -690,6 +690,8 @@ python tools/make_test_media.py test_media
 
 ## Credits
 
+GLEAPP logo courtesy of Kevin Pagano.
+
 GLEAPP is built on Pillow, OpenCV, NumPy, ImageHash, Flask, SQLite, the YuNet
 face detector and the SFace face-recognition model (both OpenCV Zoo; YuNet is
 MIT and SFace is Apache-2.0, their licenses shipped at

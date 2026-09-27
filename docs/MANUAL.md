@@ -1659,6 +1659,8 @@ license texts, and the page loads nothing else.
 
 GLEAPP stands on a lot of other people's work.
 
+The GLEAPP logo is by Kevin Pagano.
+
 The table below names each component. The full licence texts travel inside the build,
 because that is what most of these licences ask for: open **Help -> Third-party
 notices**, or `/notices` in the browser. The file carries GLEAPP's own MIT licence,
