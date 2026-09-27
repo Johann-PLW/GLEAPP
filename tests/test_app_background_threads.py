@@ -66,10 +66,42 @@ def test_the_snapshot_loop_outlives_a_case_closed_under_it(tmp_path, monkeypatch
     loop = [t for t in set(threading.enumerate()) - before if t.name == "auto-snapshot"]
     assert len(loop) == 1
     case = state["case"]
-    case.db.dirty = True
+    # Closed while clean, so the loop only reads the flag and cannot be querying the
+    # connection as it closes; then dirtied, so every round after reads the closed one.
+    assert not case.db.dirty
     case.close()                            # still state["case"]
+    case.db.dirty = True
     time.sleep(0.5)                         # about 25 rounds of the loop
     assert not raised, [a.exc_value for a in raised]
     assert any(t.is_alive() for t in loop)
     state["shutdown"]()
     assert not any(t.is_alive() for t in loop)
+
+
+def test_closing_the_database_waits_for_a_query_in_another_thread(tmp_path):
+    """Every query takes the database lock; closing did not. A close landing inside
+    another thread's query crashed the interpreter on Linux CI."""
+    c = open_case(tmp_path / "case", create=True, examiner="t")
+    holding, release, closed = threading.Event(), threading.Event(), threading.Event()
+
+    def query():
+        with c.db.lock:                     # what get_meta and the rest hold
+            holding.set()
+            release.wait(10)
+
+    def close():
+        c.close()
+        closed.set()
+
+    q = threading.Thread(target=query)
+    q.start()
+    assert holding.wait(10)
+    closer = threading.Thread(target=close)
+    closer.start()
+    try:
+        assert not closed.wait(0.5), "the database closed under a running query"
+    finally:
+        release.set()
+        q.join(10)
+        closer.join(10)
+    assert closed.is_set()
