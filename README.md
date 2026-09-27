@@ -625,9 +625,9 @@ gleapp/
   case.py       case open/create + ingest-source spec parsing
   archive.py    extraction zip/tar and disk image (E01, raw, split raw) sources:
                 enumerate, walk or carve, register, read back on demand
-  vendor/       qnxprobe (filesystem reader), ewfprobe (E01 reader) and mediacarve
-                (signature carver), copied in verbatim with their provenance in
-                vendored.json
+  vendor/       qnxprobe (filesystem reader), ewfprobe (E01 reader), mediacarve
+                (signature carver) and exoprobe (ExoPlayer cache reader), copied in
+                verbatim with their provenance in vendored.json
   appconfig.py  per-user config (recent cases) in %APPDATA%\GLEAPP
   cli.py        argparse CLI
   desktop.py    pywebview shell (the PyInstaller entry point)
@@ -696,8 +696,9 @@ includes software developed by SecureAuth Corporation
 images are walked with [qnxprobe](https://github.com/abrignoni/qnxprobe),
 which also joins a split raw set; an E01 is read with
 [ewfprobe](https://github.com/abrignoni/ewfprobe); both are carved with
-[mediacarve](https://github.com/abrignoni/mediacarve), all three MIT and
-vendored under `gleapp/vendor/`. GLEAPP is part of the **LEAPP** family
+[mediacarve](https://github.com/abrignoni/mediacarve); Android apps' ExoPlayer
+caches are rejoined with [exoprobe](https://github.com/abrignoni/exoprobe); all
+four MIT and vendored under `gleapp/vendor/`. GLEAPP is part of the **LEAPP** family
 (ALEAPP / iLEAPP / RLEAPP …), the project started by Alexis Brignoni &
 contributors, and its Android storage-view table is ported from ALEAPP. It
 reads the **Project VIC** data model and the **NSRL RDS** (NIST). Full

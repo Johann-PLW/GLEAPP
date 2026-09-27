@@ -51,6 +51,19 @@
       "licence": "Apache-1.1",
       "licence_file": "gleapp/vendor/LICENSE-impacket",
       "note": "Copied verbatim from DLEAPP, which itself adapted it from Fortra impacket 0.13.1 (impacket/structure.py + impacket/ese.py, folded into one stdlib-only file with the six/logging dependencies inlined, plus a fix so an ESE 7-bit-compressed tagged column decodes instead of returning None). GLEAPP's own upstream for this file is DLEAPP, not impacket directly - re-vendor from DLEAPP if it updates this file, or re-adapt from impacket per the provenance note at the top of the file if going further upstream is ever needed. Reads Windows.edb (ESE) for the Windows Search index; see gleapp/winsearch.py."
+    },
+    {
+      "path": "gleapp/vendor/exoprobe.py",
+      "name": "exoprobe",
+      "version": "0.1.2",
+      "upstream": "https://github.com/abrignoni/exoprobe",
+      "upstream_file": "exoprobe.py",
+      "commit": "1569b41e3b54554dbd078e37332fd939f698824d",
+      "commit_date": "2026-09-26T18:40:43-04:00",
+      "sha256": "a345a0670f3a28bf15772b2ee5bd483a5c10b7ff79b64cdf9e9fbb6eff09c479",
+      "licence": "MIT",
+      "licence_file": "gleapp/vendor/LICENSE-exoprobe",
+      "note": "Copied verbatim. Fix upstream and re-vendor; edits here are reverted by the next sync. Reads ExoPlayer caches, joins their pieces and DASH streams, and muxes video with its audio; gleapp/exocache.py registers what it produces."
     }
   ]
 }

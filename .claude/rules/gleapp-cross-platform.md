@@ -203,8 +203,14 @@ joined are not image or video (Snapchat's pieces carry no recognisable header, a
 audio, playlists and manifests), and every joined file that does not decode is a DASH
 segment cached as its own item, which the existing fragmented-MP4 messages describe.
 
-DASH streams are joined only from a cached manifest (`exocache.representations`,
-`_dash_streams`): ExoPlayer keys a segment by its address resolved against the
+The cache reading, joining, DASH planning and muxing are the vendored `exoprobe`
+(`abrignoni/exoprobe`, `gleapp/vendor/exoprobe.py`); `gleapp/exocache.py` only feeds it
+case rows and registers what it produces, so fix the reading upstream and re-vendor.
+On russell_a14, exoprobe run on its own over the extracted cache files wrote 473 files
+and GLEAPP registered 473, every SHA-256 equal (2026-09-26, before GLEAPP switched to it).
+
+DASH streams are joined only from a cached manifest (`exoprobe.representations`,
+`plan_dash`): ExoPlayer keys a segment by its address resolved against the
 representation's first BaseURL (`DashUtil.resolveCacheKey`), and resolving the cached
 MPD the same way matched cached keys exactly on the test images. Google's segment
 addresses carry per-request signatures, so a stream's segments share no key that
@@ -217,14 +223,21 @@ from its init segment's `hdlr`, not from a manifest attribute, and processing le
 audio (`exocache.is_audio_item`): its brand is a video one, so the byte sniff would
 otherwise call it a video with no frames.
 
-A video and its audio from one manifest are also put in one file by `gleapp/mp4mux.py`,
+A video and its audio from one manifest are also put in one file by `exoprobe.mux`,
 which rewrites the track boxes and copies every sample unchanged, for both fragmented
-and progressive MP4. Its oracle is ffmpeg's per-frame MD5 of each stream, which must
-equal the separate inputs'. That test runs only where ffmpeg is installed, so the tests
-that always run check the output's own boxes instead (both tracks declared, every input
+and progressive MP4. Its tests live in exoprobe; their oracle is ffmpeg's per-frame MD5
+of each stream, which must equal the separate inputs'. That test runs only where ffmpeg
+is installed, so the tests that always run check the output's own boxes instead (both tracks declared, every input
 `mdat` present unchanged, every rewritten chunk offset pointing at the bytes it pointed at).
-Only a manifest with exactly one cached audio stream is combined: with two, the pairing
-would be a guess.
+Every cached audio stream a manifest lists goes in, in the manifest's order, because
+picking one would be a guess. Several audio tracks get alternate_group 1 and only the
+first keeps tkhd flag 0x1 (enabled), the marking ffmpeg 9.0.1 writes for two languages and
+the one ffprobe reads as `default`. A single audio track's tkhd is left as the input had
+it (ffmpeg's own audio already carries group 1). The manifest's `lang` is read where
+`DashManifestParser.parseAdaptationSet` reads it (the AdaptationSet, then a
+ContentComponent; androidx/media 1.11.1 lines 473 and 505) and recorded as written; the
+file's `mdhd` language is never rewritten, since mapping an RFC 5646 tag to ISO 639-2
+would be a table GLEAPP does not own.
 
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 

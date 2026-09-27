@@ -65,7 +65,7 @@ def test_the_notices_open_with_gleapps_own_licence(only_fakes):
     assert "charpy4n6" in text
     # the vendored readers travel too, and Impacket's Apache 1.1 asks by name
     assert "SecureAuth Corporation" in text
-    for label in ("qnxprobe", "ewfprobe", "mediacarve", "SFace", "YuNet"):
+    for label in ("qnxprobe", "ewfprobe", "mediacarve", "exoprobe", "SFace", "YuNet"):
         assert label in text, f"{label} notice missing"
 
 

@@ -1033,13 +1033,15 @@ the piece's own name instead.</p>
   joined.</li>
   <li>Video and sound are separate DASH streams, each joined into its own file; the sound
   is kept on its own when the source includes other files, and each names the other.
-  Where the manifest lists exactly one cached audio stream beside a video, GLEAPP also
-  writes one file holding both tracks (<code>exoplayer_av_...mp4</code>), with nothing
-  re-encoded: every sample's bytes are copied unchanged. Two or more cached audio
-  streams (two languages) would make the pairing a guess, so none is combined. A
-  stream stored as one file (Reddit's <code>DASH_720.mp4</code> beside
-  <code>DASH_audio.mp4</code>) names the manifest that lists it and the other cached
-  streams it lists, and is combined with its sound by the same rule.</li>
+  Where the manifest lists a cached audio stream beside a video, GLEAPP also writes one
+  file holding the video and its sound (<code>exoplayer_av_...mp4</code>), with nothing
+  re-encoded: every sample's bytes are copied unchanged. With two or more cached audio
+  streams (two languages), each goes in as its own audio track in the manifest's order,
+  marked as alternatives with only the first enabled, and <em>App cache</em> lists every
+  track with the language the manifest declares for it. A stream stored as one file
+  (Reddit's <code>DASH_720.mp4</code> beside <code>DASH_audio.mp4</code>) names the
+  manifest that lists it and the other cached streams it lists, and is combined with its
+  sound the same way; one cut short at a gap is not combined.</li>
   <li>An MP4 whose only track is sound is kept as audio, not as a video with no frames.</li>
   <li>HLS video is cached one segment per item, so a joined HLS segment is only as long as
   the segment.</li>
@@ -1585,8 +1587,12 @@ verbatim under <code>gleapp/vendor/</code> (each with its own license file,
   <li><strong><a href="https://github.com/abrignoni/mediacarve">mediacarve</a></strong>
     scans unallocated (or whole-disk) space for image/video signatures when a
     carve is requested.</li>
+  <li><strong><a href="https://github.com/abrignoni/exoprobe">exoprobe</a></strong>
+    reads the media caches Android apps keep through ExoPlayer, joins each cached
+    item's pieces and each DASH stream's segments, and puts a video and its audio
+    into one MP4.</li>
 </ul>
-<p>All three are MIT licensed, &copy; Alexis&nbsp;Brignoni. GLEAPP's Android
+<p>All four are MIT licensed, &copy; Alexis&nbsp;Brignoni. GLEAPP's Android
 storage-view table (<code>gleapp/storage_views.py</code>), which knows that
 credential-encrypted, device-encrypted and shared storage never collapse
 together, is ported from <strong>ALEAPP</strong>'s
