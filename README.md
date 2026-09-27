@@ -228,7 +228,8 @@ python -m gleapp --case mycase ingest  sample_evidence\ingest.json
 #    --stage to copy the media into the case instead (self-contained, and as large as
 #    the media). A compressed tar (.tar.gz) is always copied out, since it cannot be
 #    read on demand. A disk image (an .E01, .s01 or .Ex01 with its numbered segments
-#    beside it, an .aff or any .aff of an .afd folder, or a raw image: one file, or any
+#    beside it, an .aff or any .aff of an .afd folder, an Apple .dmg or .sparseimage,
+#    or a raw image: one file, or any
 #    segment of a numbered .001 split set) is
 #    a source too: its filesystems are walked file by file, so each file keeps the name,
 #    path and dates the filesystem recorded. Recovering deleted media (from deleted
@@ -292,7 +293,8 @@ The most recent 20 are kept. To roll back, close GLEAPP and copy a snapshot over
 
 A path in `sources` may also be a full-file-system extraction archive (a zip or a tar,
 plain or compressed), a disk acquisition (EnCase/EWF `.E01`, SMART `.s01`, EWF2 `.Ex01`,
-AFF `.aff`, or any `.aff` of an AFD folder) or a raw disk image (one file, or any segment of
+AFF `.aff`, any `.aff` of an AFD folder, or an Apple `.dmg` or `.sparseimage`) or a raw disk
+image (one file, or any segment of
 a numbered split set); it is detected by its bytes and ingested as an archive
 source. Its media is read from the archive on demand unless the
 entry sets `"stage": true`, which copies it under the case; a compressed tar is always
@@ -625,9 +627,9 @@ gleapp/
   backup.py     case snapshots (auto + manual), pruning
   db.py         SQLite schema + helpers (one case = one file)
   case.py       case open/create + ingest-source spec parsing
-  archive.py    extraction zip/tar and disk image (E01, Ex01, AFF, raw, split raw) sources:
+  archive.py    extraction zip/tar and disk image (E01, Ex01, AFF, DMG, raw, split raw) sources:
                 enumerate, walk or carve, register, read back on demand
-  vendor/       qnxprobe (filesystem reader), ewfprobe (E01/Ex01/AFF reader), mediacarve
+  vendor/       qnxprobe (filesystem reader), ewfprobe (E01/Ex01/AFF/DMG reader), mediacarve
                 (signature carver) and exoprobe (ExoPlayer cache reader), copied in
                 verbatim with their provenance in vendored.json
   appconfig.py  per-user config (recent cases) in %APPDATA%\GLEAPP
@@ -696,7 +698,7 @@ package's licence text travels inside the build, assembled by
 includes software developed by SecureAuth Corporation
 (https://www.secureauth.com/) and Fortra (https://www.fortra.com). Disk
 images are walked with [qnxprobe](https://github.com/abrignoni/qnxprobe),
-which also joins a split raw set; an E01, Ex01 or AFF is read with
+which also joins a split raw set; an E01, Ex01, AFF or Apple disk image is read with
 [ewfprobe](https://github.com/abrignoni/ewfprobe); both are carved with
 [mediacarve](https://github.com/abrignoni/mediacarve); Android apps' ExoPlayer
 caches are rejoined with [exoprobe](https://github.com/abrignoni/exoprobe); all

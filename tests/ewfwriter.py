@@ -1,4 +1,4 @@
-"""Minimal EWF-E01 and AFF writers, for the tests only.
+"""Minimal EWF-E01, AFF and Apple disk image writers, for the tests only.
 
 Nothing on PyPI writes EWF and the reference implementation is LGPL, so an E01
 to ingest has to be built here. This packs sections and chunk tables from the
@@ -148,3 +148,61 @@ def write_afd(folder, data, files=3, page_size=4096):
                                pages, page_size,
                                len(data) if index == files - 1 else None))
     return paths
+
+
+# ---- Apple disk images (as in ewfprobe's own test suite) --------------------
+
+def _udif_checksum(value):
+    return struct.pack(">II", 2, 32) + struct.pack(">I", value) + bytes(124)
+
+
+def write_udif(path, data, chunk_sectors=64):
+    """Write data as a UDIF (.dmg) image of zlib chunks, as hdiutil's UDZO stores
+    them, with the block table in the property list and the koly trailer."""
+    import plistlib  # pylint: disable=import-outside-toplevel
+    data = data + b"\x00" * (-len(data) % 512)
+    sectors = len(data) // 512
+    fork, entries, at = bytearray(), [], 0
+    while at < sectors:
+        count = min(chunk_sectors, sectors - at)
+        blob = zlib.compress(data[at * 512:(at + count) * 512])
+        entries.append((0x80000005, 0, at, count, len(fork), len(blob)))
+        fork += blob
+        at += count
+    entries.append((0xFFFFFFFF, 0, at, 0, len(fork), 0))
+    crc = zlib.crc32(data)
+    mish = struct.pack(">4sIQQQII24x", b"mish", 1, 0, sectors, 0, 0, len(entries))
+    mish += _udif_checksum(crc) + struct.pack(">I", len(entries))
+    mish += b"".join(struct.pack(">IIQQQQ", *e) for e in entries)
+    body = plistlib.dumps({"resource-fork": {"blkx": [{"Name": "whole disk", "Data": mish}]}})
+    with open(path, "wb") as out:
+        out.write(fork)
+        xml_offset = out.tell()
+        out.write(body)
+        trailer = struct.pack(">4sIIIQQQQQII", b"koly", 4, 512, 1, 0, 0, len(fork), 0, 0, 1, 1)
+        trailer += bytes(16) + _udif_checksum(zlib.crc32(fork))
+        trailer += struct.pack(">QQ", xml_offset, len(body)) + bytes(120)
+        trailer += _udif_checksum(zlib.crc32(struct.pack(">I", crc)))
+        trailer += struct.pack(">IQ", 1, sectors) + bytes(12)
+        out.write(trailer)
+    return str(path)
+
+
+def write_sparseimage(path, data, band_sectors=8):
+    """Write data as a sparse image (.sparseimage): a 4096-byte header listing the
+    stored bands in the order written, then the bands, zero bands left out."""
+    data = data + b"\x00" * (-len(data) % 512)
+    band = band_sectors * 512
+    sectors = len(data) // 512
+    stored = [b for b in range(-(-sectors // band_sectors))
+              if any(data[b * band:(b + 1) * band])]
+    assert len(stored) <= 1008
+    head = bytearray(4096)
+    struct.pack_into(">4sIIII", head, 0, b"sprs", 3, band_sectors, 1, sectors)
+    struct.pack_into(">QQ", head, 20, 0, sectors)
+    struct.pack_into(f">{len(stored)}I", head, 64, *[b + 1 for b in stored])
+    with open(path, "wb") as out:
+        out.write(head)
+        for b in stored:
+            out.write(data[b * band:(b + 1) * band].ljust(band, b"\x00"))
+    return str(path)

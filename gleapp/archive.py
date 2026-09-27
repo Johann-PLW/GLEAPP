@@ -105,10 +105,12 @@ WALKED_FILESYSTEMS = ("ext2", "ext3", "ext4", "F2FS", "FAT32", "exFAT", "NTFS",
 FORMAT_ZIP = "zip"
 FORMAT_TAR = "tar"
 FORMAT_TAR_COMPRESSED = "tar-compressed"
-FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF or AFD
+FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF, AFD,
+                              # an Apple .dmg or .sparseimage
 # qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
-# Lx01 are logical evidence and not among them.
-_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD")
+# Lx01 are logical evidence and an encrypted Apple disk image needs its password,
+# so they are not among them.
+_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -578,23 +580,29 @@ def _segment_count(path: str, fmt: str) -> int:
             return sum(1 for n in os.listdir(folder)
                        if n.lower().endswith(".aff")
                        and os.path.isfile(os.path.join(folder, n)))
-        if kind == "AFF":
+        if kind in ("AFF", "UDIF", "SPARSEIMAGE"):
             return 1
         return len(ewfprobe.ewf_segments(path))
     return len(qnxprobe.split_segments(path)) or 1
 
 
-def logical_evidence_refusal(path) -> str | None:
-    """Why GLEAPP does not ingest ``path``, when it is EnCase logical evidence (L01 or
-    Lx01), else None. Logical evidence holds copies of files rather than a disk, so
-    there is nothing to walk or carve, and registered as a single file it would
-    yield nothing without saying why."""
+def container_refusal(path) -> str | None:
+    """Why GLEAPP does not ingest ``path``, when it is a container GLEAPP recognises
+    and cannot read, else None: EnCase logical evidence (L01 or Lx01), which holds
+    copies of files rather than a disk, and an encrypted Apple disk image, which
+    needs its password. Registered as a single file, either would yield nothing
+    without saying why."""
     kind = qnxprobe.acquisition_format(os.fspath(path))
-    if kind not in ("L01", "Lx01"):
-        return None
-    return (f"{Path(path).name} is EnCase logical evidence ({kind}): it holds copies "
-            "of files, not a disk, and GLEAPP reads disk images. Export its files "
-            "(for an L01, ewfprobe.py export --entry) and add them as a folder.")
+    name = Path(path).name
+    if kind in ("L01", "Lx01"):
+        return (f"{name} is EnCase logical evidence ({kind}): it holds copies of files, "
+                "not a disk, and GLEAPP reads disk images. Export its files (for an "
+                "L01, ewfprobe.py export --entry) and add them as a folder.")
+    if kind == "DMG_ENCRYPTED":
+        return (f"{name} is an encrypted Apple disk image: it needs its password. "
+                "Attach it on a Mac with the password and add the attached volume as a "
+                "folder, or convert it to an unencrypted image with hdiutil convert.")
+    return None
 
 
 def _open_image(path: str):
@@ -1089,9 +1097,9 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
     path = Path(src.path)
     fmt = archive_format(path)
     if fmt is None:
-        raise ValueError(logical_evidence_refusal(path)
+        raise ValueError(container_refusal(path)
                          or f"{path.name} is not a zip, a tar, a disk acquisition "
-                            "(E01, s01, Ex01, AFF) or a raw disk image")
+                            "(E01, s01, Ex01, AFF, DMG) or a raw disk image")
     if fmt == FORMAT_ZIP:
         return _ingest_zip(case, src, path, count=count, progress=progress)
     if fmt in IMAGE_FORMATS:
@@ -1736,7 +1744,7 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     fmt = archive_format(new)
     if fmt is None:
         raise ValueError(f"cannot open {new}: not a zip, a tar, a disk acquisition "
-                         "(E01, s01, Ex01, AFF) or a raw disk image")
+                         "(E01, s01, Ex01, AFF, DMG) or a raw disk image")
     if _family(fmt) != _family(rec["format"]):
         raise ValueError(f"{new.name} is a {fmt} and the case registered {name!r} "
                          f"from a {rec['format']}")
