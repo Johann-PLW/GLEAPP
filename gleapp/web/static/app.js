@@ -3913,6 +3913,68 @@ function openLogoDlg() {
   $("#logoDlg").style.display = "block";
 }
 $("#btnLogoLauncher").onclick = openLogoDlg;
+
+/* ---------- intro video ----------
+   Opens with the launcher until "Don't show this at startup" is ticked, and from
+   Watch intro in either menu at any time. The box is saved as soon as it changes,
+   in the per-user config (appconfig show_intro), not in any case. */
+const Intro = { show: true };
+function introOpen() { return $("#introDlg").classList.contains("show"); }
+function openIntro(atStartup) {
+  document.querySelectorAll(".hdrmenu").forEach(m => m.style.display = "none");
+  const v = $("#introVideo");
+  $("#introHide").checked = !Intro.show;
+  $("#introHint").textContent = "";
+  // set on first open only, so a launch that never shows it never loads it
+  if (!v.getAttribute("src")) v.src = "/static/intro/gleapp-intro.mp4";
+  v.muted = false;
+  try { v.currentTime = 0; } catch (e) { /* not loaded yet: it starts at 0 anyway */ }
+  $("#introDlg").classList.add("show");
+  $("#introClose").focus();
+  if (atStartup && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    $("#introHint").textContent = "Press play to watch.";
+    return;
+  }
+  v.play().catch(() => {
+    // a webview can refuse to start sound without a click; play it muted instead
+    v.muted = true;
+    v.play().then(() => {
+      $("#introHint").textContent = "Sound is off. Use the speaker button to turn it on.";
+    }).catch(() => { $("#introHint").textContent = "Press play to watch."; });
+  });
+}
+function closeIntro() {
+  $("#introVideo").pause();
+  $("#introDlg").classList.remove("show");
+}
+$("#introClose").onclick = closeIntro;
+$("#introDlg").addEventListener("click", e => { if (e.target.id === "introDlg") closeIntro(); });
+$("#introVideo").addEventListener("ended", closeIntro);
+// a window that cannot play the file (a Linux WebKit without H.264, say) just closes it
+$("#introVideo").addEventListener("error", () => { if (introOpen()) closeIntro(); });
+$("#introHide").onchange = async () => {
+  const show = !$("#introHide").checked;
+  try {
+    const r = await api("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_intro: show })
+    });
+    if (!r || r.error) throw new Error(r && r.message);
+    Intro.show = show;
+  } catch (e) {
+    $("#introHide").checked = !show;
+    toast("Could not save the startup choice");
+  }
+};
+// While it is open, keys belong to it: Escape closes it, and nothing reaches the
+// gallery's shortcuts behind it (a number key would otherwise categorize a file).
+document.addEventListener("keydown", e => {
+  if (!introOpen()) return;
+  e.stopPropagation();
+  if (e.key === "Escape") { e.preventDefault(); closeIntro(); }
+}, true);
+$("#btnIntroLauncher").onclick = () => openIntro(false);
+$("#btnIntro").onclick = () => openIntro(false);
 $("#logoFile").addEventListener("change", e => {
   const f = e.target.files[0];
   if (!f) return;
@@ -4506,7 +4568,12 @@ $("#mapViewClose").onclick = closeMapView;
   catch (e) { c = {}; }
   Lr.native = !!c.native;          // so pick() uses the OS file dialog even when
                                    // GLEAPP boots straight into an existing case
-  if (c.needs_case) { showLauncher(c); $("#bootLoad").style.display = "none"; return; }
+  Intro.show = c.show_intro !== false;
+  if (c.needs_case) {
+    showLauncher(c); $("#bootLoad").style.display = "none";
+    if (Intro.show) openIntro(true);
+    return;
+  }
   try {
     $("#launcher").style.display = "none";
     $("#main").style.display = "";
