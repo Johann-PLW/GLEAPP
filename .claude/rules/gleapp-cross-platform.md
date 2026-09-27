@@ -563,3 +563,58 @@ CI never saw it because a floor of `>=10.0` resolves to the newest release. It b
 developer machine whose Pillow predated the fix, as an intermittent failure of the CgBI
 thumbnail test. `test_thumbnail_encoder_is_deterministic` encodes a white tile forty
 times and turns that coin flip into a certain failure on an affected build.
+
+## pillow-heif below 1.2.1 crashes on macOS once OpenCV is loaded
+
+The dev extra floors pillow-heif at 1.2.1. It is there only to write HEIC test fixtures;
+the app decodes with pi-heif, which has no encoder, and the frozen build excludes
+pillow_heif. On macOS, OpenCV's wheels and pillow-heif's both bundle an x265, and every
+cp312 arm64 wheel of pillow-heif from 0.14.0 through 1.2.0 exports
+`x265::Quant::rdoQuant<N>` as weak definitions (1.2.1 exports none). With `cv2` imported
+first, `DYLD_PRINT_BINDINGS=1` shows pillow-heif's x265 bound to OpenCV's
+`libx265.215.dylib` for those functions; imported without `cv2`, to its own. Measured 2026-09-27 on macOS 26 arm64 with Python 3.12, encoding a 64x48
+HEIF twenty times: with `cv2` 5.0.0.93 imported first, pillow-heif 0.14.0, 0.20.0, 0.21.0,
+1.0.0, 1.1.1 and 1.2.0 each segfaulted 3 times of 3, and 1.2.1 encoded 3 times of 3;
+0.14.0 also crashed with `cv2` 4.12.0.88. With pillow-heif imported before `cv2`, or no
+`cv2` at all, 0.14.0, 1.0.0 and 1.2.0 encoded every time. Upstream's 1.2.1 changelog names it ("macOS: crash when `cv2` and
+`pillow_heif` both bundle libx265",
+https://github.com/bigcat88/pillow_heif/blob/4ce712961deece4507463c83de1a41f486d303b8/CHANGELOG.md#L115).
+
+In a full run an earlier test has always loaded `cv2`, so
+`test_heic_is_placed_as_a_jpeg_lava_can_show` crashed there and passed alone. After the
+fault the process kept a core busy and did not end on SIGTERM; it needed SIGKILL. CI never
+met it: it installs the newest pillow-heif and runs the suite on Linux and Windows.
+`tools/make_test_media.py` imports pillow-heif before `cv2`, the order that works.
+
+## The suite stops every app's background threads when a test ends
+
+`create_app` starts a snapshot loop, and an ingest through the app starts the Find
+similar indexer. Nothing stopped either in a test, so every one ran on through the rest of
+the suite. Measured 2026-09-27 with a thread count after each test: by the `test_pipeline`
+ingest tests, 82 snapshot loops and six indexers were alive.
+
+On a Python whose numpy is built on OpenBLAS (numpy 1.26.4 here, OpenBLAS 0.3.23) that
+deadlocked the run at about the 545th test. A job thread started the video worker with
+`subprocess.run` while a leftover indexer was inside OpenBLAS's `cblas_sgemm`; `fork()`
+ran OpenBLAS's `pthread_atfork` prepare handler (`blas_thread_shutdown_`), which waited on
+the thread pool that call was using. CPython 3.12 calls `fork()` holding the GIL except on
+Linux, where it uses `vfork()` and releases the GIL first
+(https://github.com/python/cpython/blob/92564331defba3462116d54658cd97624bb12678/Modules/_posixsubprocess.c#L44-L49,
+lines 823 and 838), so every Python thread stopped, the test's own wait loop included.
+Stacks taken seven minutes apart were identical. numpy 2.5.3's macOS 14 wheels (arm64
+and x86_64) carry no OpenBLAS, and the arm64 one reports Accelerate; its macOS 11 arm64
+and 10.13 x86_64 wheels bundle OpenBLAS, and those are the ones a Mac on macOS 13 or older
+can install. A fresh venv on macOS 26 finished (784 passed) but reached 145 threads and
+3.3 GB on the way, and seven snapshot loops died on cases closed under them.
+
+`state["shutdown"]()` now stops both threads and waits for them, the indexer waits on its
+stop event instead of sleeping (a stop used to wait out up to two seconds), and the
+snapshot loop skips a case closed under it instead of dying. `tests/conftest.py` wraps
+`create_app` (and `gleapp.desktop`'s own import of it), shuts every app down at teardown,
+and fails any test that leaves either thread running. Build an app some other way in a
+test and stop it yourself.
+
+The same overlap can happen in the app: the indexer stands aside for a job only between
+chunks, so a job that forks a worker right after it starts can meet an indexer inside
+numpy. Not measured in the app, and which BLAS the macOS release's numpy is built on was
+not checked (that build installs OpenCV and Pillow from conda-forge).
