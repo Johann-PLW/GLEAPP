@@ -347,11 +347,16 @@ let similarOfId = null;
 async function showSimilar(id) {
   const seq = ++loadSeq;
   const q = `/api/similar/${id}?threshold=14&min=${+$("#simMin").value || 70}`;
+  // a search that takes more than a moment (a long video) marks the file it was
+  // started from, so the click visibly did something
+  const busy = setTimeout(() => { if (seq === loadSeq) markSimBusy(id); }, 250);
   // a video comes back in two steps: its thumbnail's results at once, then the full
   // answer with every key frame; a picture comes back in one
-  const d = await api(q + "&quick=1");
+  const d = await api(q + "&quick=1").catch(() => ({ error: true }));
+  clearTimeout(busy);
+  clearSimBusy();
   if (seq !== loadSeq) return;
-  if (d.error) return toast(d.message || "Find similar failed");
+  if (d.error) { updateStat(); return toast(d.message || "Find similar failed"); }
   rememberPlace(id);
   similarOfId = id;
   showSimilarResult(id, d);
@@ -361,6 +366,14 @@ async function showSimilar(id) {
   const keep = { t: $("#grid").scrollTop, m: $("#main").scrollTop };
   showSimilarResult(id, full);
   $("#grid").scrollTop = keep.t; $("#main").scrollTop = keep.m;
+}
+function markSimBusy(id) {
+  const at = document.querySelector(`#grid .tile[data-id="${id}"] .thumb, #grid .lvrow[data-id="${id}"] td`);
+  if (at) at.insertAdjacentHTML("beforeend", '<div class="simbusy"><i></i>Finding similar…</div>');
+  $("#statLine").textContent = `Finding files similar to #${id}…`;
+}
+function clearSimBusy() {
+  document.querySelectorAll("#grid .simbusy").forEach(el => el.remove());
 }
 function showSimilarResult(id, d) {
   state.similarOf = id;
