@@ -107,13 +107,16 @@ FORMAT_TAR = "tar"
 FORMAT_TAR_COMPRESSED = "tar-compressed"
 FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF, AFD,
                               # an Apple .dmg (with any .dmgpart segments), a
-                              # .sparseimage, or a .sparsebundle folder
+                              # .sparseimage, or a .sparsebundle folder, and an E01,
+                              # s01 or raw set FTK Imager encrypted with AD encryption
 # qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
 # Lx01 are logical evidence, so they are not among them. An encrypted Apple disk
 # image (DMG_ENCRYPTED: a .dmg, a split one, a .sparseimage or a sparse bundle) is,
-# and opens with its password.
+# and so is an E01, s01 or raw (dd) set FTK Imager encrypted with AD encryption
+# (AD_ENCRYPTED, from its first file or any numbered file of a raw set); both open
+# with their password.
 _ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE", "SPARSEBUNDLE",
-                 "DMG_ENCRYPTED")
+                 "DMG_ENCRYPTED", "AD_ENCRYPTED")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -136,16 +139,16 @@ class ArchiveUnavailable(Exception):
 
 
 class ImagePasswordNeeded(ArchiveUnavailable):
-    """An encrypted Apple disk image was opened with no password that opens it this
-    session. ``unlock_image`` takes one."""
+    """An encrypted image was opened with no password that opens it this session.
+    ``unlock_image`` takes one."""
 
     def __init__(self, path):
-        super().__init__(f"{Path(path).name} is an encrypted Apple disk image and opens "
-                         f"only with its password, which has not been given this session")
+        super().__init__(f"{Path(path).name} is {encrypted_kind(path)} and opens only "
+                         f"with its password, which has not been given this session")
         self.path = os.fspath(path)
 
 
-# Passwords of encrypted Apple disk images, by the image's path. Held by this process
+# Passwords of encrypted images, by the image's path. Held by this process
 # only and never written anywhere (not the case, the config, a log or a report), so a
 # new session asks for them again.
 _PASSWORDS: dict[str, str | bytes] = {}
@@ -157,8 +160,17 @@ def _password_key(path) -> str:
 
 
 def needs_password(path) -> bool:
-    """True when ``path`` is an Apple disk image encrypted with a password."""
-    return qnxprobe.acquisition_format(os.fspath(path)) == "DMG_ENCRYPTED"
+    """True when ``path`` is an image that opens only with its password: an encrypted
+    Apple disk image, or an E01, s01 or raw set FTK Imager encrypted with AD
+    encryption (a raw set from any of its numbered files)."""
+    return qnxprobe.needs_password(os.fspath(path))
+
+
+def encrypted_kind(path) -> str:
+    """What an encrypted image is, as a sentence names it."""
+    if qnxprobe.acquisition_format(os.fspath(path)) == "AD_ENCRYPTED":
+        return "an acquisition FTK Imager encrypted with AD encryption"
+    return "an encrypted Apple disk image"
 
 
 def is_unlocked(path) -> bool:
@@ -638,7 +650,7 @@ def _open_image_file(path):
     split set."""
     path = os.fspath(path)
     kind = qnxprobe.acquisition_format(path)
-    if kind == "DMG_ENCRYPTED":
+    if kind in qnxprobe.PASSWORD_FORMATS:
         with _PASSWORD_LOCK:
             password = _PASSWORDS.get(_password_key(path))
         if password is None:
@@ -665,7 +677,7 @@ def _segment_count(path: str, fmt: str) -> int:
             return len(ewfprobe.udif_segments(path))
         if kind in ("AFF", "SPARSEIMAGE", "SPARSEBUNDLE"):
             return 1
-        if kind == "DMG_ENCRYPTED":
+        if kind in qnxprobe.PASSWORD_FORMATS:
             # each file of an encrypted set is decrypted to find the others, so ask
             # the image already open rather than read the set again
             return len(_open_image(path)[0].paths)
@@ -677,8 +689,8 @@ def container_refusal(path) -> str | None:
     """Why GLEAPP does not ingest ``path``, when it is a container GLEAPP recognises
     and cannot read, else None: EnCase logical evidence (L01 or Lx01), which holds
     copies of files rather than a disk. Registered as a single file it would yield
-    nothing without saying why. An encrypted Apple disk image is read, with its
-    password (``unlock_image``)."""
+    nothing without saying why. An encrypted Apple disk image or AD-encrypted
+    acquisition is read, with its password (``unlock_image``)."""
     kind = qnxprobe.acquisition_format(os.fspath(path))
     name = Path(path).name
     if kind in ("L01", "Lx01"):

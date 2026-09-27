@@ -49,7 +49,9 @@ your user settings, not in any case.
       images are identified by content, not extension. A split set with a
       missing segment is refused and the gap is named.
       - An encrypted Apple disk image or sparse bundle (AES-128 or AES-256, as
-        `hdiutil` writes them) is read with its password. When
+        `hdiutil` writes them), or an E01, SMART or raw set FTK Imager encrypted
+        with AD encryption (point at its first file, or at any numbered file of
+        a raw set), is read with its password. When
         you click **Create case & ingest**, GLEAPP asks for it in a password
         field, and asks again if it does not open the image. The password is
         held in memory until GLEAPP is closed and is never written into the
@@ -125,7 +127,8 @@ process --force`. Without `-c`, GLEAPP looks for a folder named `case` in the
 current directory. The `maps` commands, `hashset --global` and `stash` (except
 `stash --add`) do not use a case.
 
-An encrypted Apple disk image takes its password from `--password-file <file>`
+An encrypted image (an Apple disk image, or an FTK Imager AD-encrypted set) takes
+its password from `--password-file <file>`
 (the first line of the file) or `--password-env <variable>` (the name of an
 environment variable holding it), both written before the subcommand like `-c`.
 Either can be given more than once when a case holds several encrypted images;
@@ -1284,8 +1287,9 @@ already give you.
   and on Windows or Linux use the folder button. An LZFSE-compressed `.dmg` needs
   `pyliblzfse`, which GLEAPP's requirements install.
 - **Raw image**: one file, or any segment of a numbered split set.
-- **Encrypted Apple disk image or sparse bundle**: point at it as above; GLEAPP
-  asks for its password (§1).
+- **Encrypted Apple disk image or sparse bundle, or an E01, SMART or raw set FTK
+  Imager encrypted with AD encryption**: point at it as above; GLEAPP asks for its
+  password (§1).
 - **Not accepted**: VHD and VMDK, and EnCase logical evidence (`.L01`), which
   holds copies of files rather than a disk and is refused with that reason.
 - An acquisition is recognized by its own signature and a raw image by what it

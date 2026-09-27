@@ -444,9 +444,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(400, description=str(exc))
         if not sources:
             abort(400, description="no sources given")
-        # An encrypted Apple disk image is read with its password, held in memory for
-        # this session only. Each one not open yet goes back to the client to ask for,
-        # and comes in the body of the next request, never in a URL or a stored file.
+        # An encrypted image (an Apple disk image or an AD-encrypted acquisition) is
+        # read with its password, held in memory for this session only. Each one not
+        # open yet goes back to the client to ask for, and comes in the body of the
+        # next request, never in a URL or a stored file.
         passwords = data.get("passwords") or {}
         locked = []
         for s in sources:

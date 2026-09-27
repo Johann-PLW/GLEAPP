@@ -17,7 +17,8 @@ from PIL import Image
 # import resolves at run time; whether pylint resolves it depends on the interpreter it
 # runs under, and on 3.14 it does not.
 from ewfwriter import (  # pylint: disable=import-error
-    write_afd, write_aff, write_encrypted, write_encrypted_sparsebundle, write_ewf,
+    write_adcrypt, write_afd, write_aff, write_encrypted, write_encrypted_sparsebundle,
+    write_ewf,
     write_segmented_udif, write_sparsebundle, write_sparseimage, write_udif)
 from gleapp import archive
 from gleapp.case import open_case, parse_source_spec
@@ -360,6 +361,67 @@ def test_an_encrypted_sparse_bundle_is_read_with_its_password(tmp_path, _fresh_s
     try:
         assert n == 3
         _check_carved(c, bundle.name, data, laid)
+        assert archive.source_status(c)[0]["status"] == "ok"
+    finally:
+        archive.close_zips()
+        c.close()
+
+
+def _ad_raw_set(tmp_path, data):
+    """``data`` as a raw set of two files FTK Imager encrypted, in tmp_path/ev."""
+    (tmp_path / "ev").mkdir()
+    half = len(data) // 2 // 512 * 512
+    plain = []
+    for n, piece in enumerate((data[:half], data[half:]), start=1):
+        plain.append(tmp_path / f"plain.{n:03d}")
+        plain[-1].write_bytes(piece)
+    return [Path(p) for p in write_adcrypt(
+        plain, [tmp_path / "ev" / f"evidence.{n:03d}" for n in (1, 2)], PASSWORD)]
+
+
+def test_an_ad_encrypted_raw_set_is_read_from_any_of_its_files(tmp_path, monkeypatch,
+                                                              _fresh_session):
+    """Only the first file carries the header, so the second is recognised by it; the
+    set is read through ewfprobe, not joined as a plain split image."""
+    data, laid = _disk(tmp_path)
+    first, second = _ad_raw_set(tmp_path, data)
+    for path in (first, second):
+        assert archive.archive_format(path) == "ewf"
+        assert archive.needs_password(path)
+    assert archive.encrypted_kind(second) == "an acquisition FTK Imager encrypted with AD encryption"
+    with pytest.raises(archive.ImagePasswordNeeded, match="AD encryption"):
+        archive._open_image_file(second)        # pylint: disable=protected-access
+    assert not archive.unlock_image(second, "not it")
+    assert archive.unlock_image(second, PASSWORD)
+    c, n = _ingest(tmp_path, second, "case", do_process=False)
+    try:
+        assert n == 3
+        _check_carved(c, second.name, data, laid)
+        assert [(s["status"], s["segments"]) for s in archive.source_status(c)] == [("ok", 2)]
+        archive.close_zips()
+        monkeypatch.setattr(archive, "_PASSWORDS", {})       # the next session
+        assert archive.source_status(c)[0]["status"] == "locked"
+    finally:
+        archive.close_zips()
+        c.close()
+    stored = b"".join(p.read_bytes() for p in (tmp_path / "case").rglob("*") if p.is_file())
+    assert PASSWORD.encode() not in stored, "the password reached the case folder"
+
+
+def test_an_ad_encrypted_e01_set_is_read_with_its_password(tmp_path, _fresh_session):
+    data, laid = _disk(tmp_path)
+    (tmp_path / "plain").mkdir()
+    plain = write_ewf(tmp_path / "plain", "disk", data, chunks_per_segment=4)
+    assert len(plain) > 1
+    (tmp_path / "ev").mkdir()
+    out = [Path(p) for p in write_adcrypt(
+        plain, [tmp_path / "ev" / Path(p).name for p in plain], PASSWORD)]
+    assert archive.archive_format(out[0]) == "ewf" and archive.needs_password(out[0])
+    assert archive.unlock_image(out[0], PASSWORD)
+    c, n = _ingest(tmp_path, out[0], "case", do_process=False)
+    try:
+        assert n == 3
+        _check_carved(c, out[0].name, data, laid)
         assert archive.source_status(c)[0]["status"] == "ok"
     finally:
         archive.close_zips()

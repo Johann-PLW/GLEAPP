@@ -339,3 +339,36 @@ def write_encrypted_sparsebundle(path, data, password, band=4096, seed=2):
     for f in (folder / "bands").iterdir():
         f.write_bytes(_encrypt_blocks(aes_key, hmac_key, f.read_bytes()))
     return str(folder)
+
+
+# FTK Imager's AD encryption: every file of a set encrypted with one AES-256 key in CTR
+# mode, file i from counter i << 64 (little endian), the 512-byte header in the first
+# file only, and the key itself encrypted under PBKDF2-HMAC-SHA1 of the password's
+# SHA-512. ewfprobe's own suite checks the reader against sets FTK Imager wrote.
+
+def write_adcrypt(plain_files, out_files, password, seed=3):
+    """Encrypt each of ``plain_files`` into ``out_files`` as one AD-encrypted set."""
+    import hmac  # pylint: disable=import-outside-toplevel
+    import random  # pylint: disable=import-outside-toplevel
+    aes = _cipher()
+    try:
+        from Cryptodome.Util import Counter  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        from Crypto.Util import Counter  # pylint: disable=import-outside-toplevel
+
+    def ctr(key, data, first):
+        counter = Counter.new(128, initial_value=first, little_endian=True)
+        return aes.new(key, aes.MODE_CTR, counter=counter).encrypt(data)
+
+    rng = random.Random(seed)
+    file_key, salt = rng.randbytes(32), rng.randbytes(16)
+    secret = password.encode() if isinstance(password, str) else password
+    made = hashlib.pbkdf2_hmac("sha1", hashlib.sha512(secret).digest(), salt, 1000, 32)
+    wrapped = ctr(made, file_key, 0)
+    header = (struct.pack("<8sIIhhh2sIIIIII", b"ADCRYPT\x00", 1, 512, -1, -1, -1,
+                          b"\x00\x00", 3, 2, 1000, 16, 32, 64)
+              + salt + wrapped + hmac.new(made, wrapped, "sha512").digest()).ljust(512, b"\0")
+    for index, (src, dst) in enumerate(zip(plain_files, out_files)):
+        body = ctr(file_key, Path(src).read_bytes(), index << 64)
+        Path(dst).write_bytes((header if index == 0 else b"") + body)
+    return [str(p) for p in out_files]

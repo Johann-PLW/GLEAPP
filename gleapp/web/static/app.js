@@ -4094,7 +4094,8 @@ $("#createGo").onclick = async () => {
 };
 
 /* ---------- encrypted disk images ---------- */
-// An encrypted Apple disk image opens with its password. The server holds it in
+// An encrypted image (an Apple disk image, or an E01, SMART or raw set FTK Imager
+// encrypted with AD encryption) opens with its password. The server holds it in
 // memory for this session only, and nothing here keeps it. It is asked for in a
 // dialog with a password field rather than with prompt(), which shows what is typed.
 function askPassword(name, wrong) {
@@ -4106,7 +4107,7 @@ function askPassword(name, wrong) {
         border-radius:8px;padding:16px 18px;min-width:320px;max-width:90vw">
       <div style="margin-bottom:8px">${wrong
         ? `That password does not open <b>${esc(name)}</b>.`
-        : `<b>${esc(name)}</b> is an encrypted Apple disk image.`} Its password:</div>
+        : `<b>${esc(name)}</b> is encrypted.`} Its password:</div>
       <input type="password" autocomplete="off" style="width:100%;box-sizing:border-box">
       <div style="margin-top:12px;text-align:right">
         <button type="button" data-cancel>Cancel</button> <button type="submit">Open</button></div>
