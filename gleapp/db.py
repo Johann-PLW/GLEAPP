@@ -662,8 +662,11 @@ class CaseDB:
             self.conn.commit()
 
     def close(self) -> None:
-        self.conn.commit()
-        self.conn.close()
+        # Under the lock every query takes: closing the connection while another
+        # thread's query runs on it crashed the interpreter (segfault, Linux CI).
+        with self.lock:
+            self.conn.commit()
+            self.conn.close()
 
     def __enter__(self) -> "CaseDB":
         return self

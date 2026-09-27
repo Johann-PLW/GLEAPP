@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-import time
 import traceback
 
 IDLE_POLL = 10.0      # seconds between checks for new files when everything is indexed
@@ -83,10 +82,10 @@ class BackgroundIndexer:
             while not self._stop.is_set() and self.state.get("case") is case:
                 if self.state["job"]["running"]:
                     self.status.update(paused=True)
-                    time.sleep(BUSY_POLL)
+                    self._stop.wait(BUSY_POLL)   # returns at once when stop() is called
                     continue
                 if self._searches:
-                    time.sleep(0.2)          # a search is running: wait for it to finish
+                    self._stop.wait(0.2)     # a search is running: wait for it to finish
                     continue
                 self.status.update(paused=False)
                 st = simindex.status(case)
@@ -110,7 +109,7 @@ class BackgroundIndexer:
                 for _ in range(int(IDLE_POLL / BUSY_POLL)):
                     if self._stop.is_set() or self.state.get("case") is not case:
                         return
-                    time.sleep(BUSY_POLL)
+                    self._stop.wait(BUSY_POLL)
                 st, ct = simindex.status(case), content.status(case)
                 if (st["indexable"], ct["indexable"]) != before:
                     finished = {"copies": False, "content": False}

@@ -34,6 +34,8 @@ from ..ingest import is_exoplayer_cache_name
 from ..pipeline import ingest_sources, process
 from ..similar import find_similar
 
+AUTO_BACKUP_POLL = 60.0   # seconds between the snapshot loop's checks
+
 FIELDS = (
     "id, path, rel_path, source, kind, ext, size, mtime, ctime, atime, ingested_at, "
     "created_dt, md5, sha1, sha256, "
@@ -138,13 +140,20 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                               state["case"].db.get_meta("case_name"))
 
     # ---- auto-snapshot daemon --------------------------------------
+    stopping = threading.Event()
+
     def _auto_backup_loop() -> None:
-        while True:
-            time.sleep(60)
+        while not stopping.wait(AUTO_BACKUP_POLL):
             case = state["case"]
             if case is None or not getattr(case.db, "dirty", False):
                 continue
-            every = backup.interval_min(case)
+            try:
+                every = backup.interval_min(case)
+            except sqlite3.ProgrammingError:
+                # closed while state still holds it (_close_current() closes it before
+                # its caller lets go, and a failed final snapshot leaves it dirty):
+                # skip the round rather than let the exception end the loop
+                continue
             if not every:                        # examiner turned timed snapshots off
                 continue
             due = time.time() - state["last_backup"] >= every * 60
@@ -158,7 +167,19 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 except Exception:  # noqa: BLE001 - never kill the daemon
                     pass
 
-    threading.Thread(target=_auto_backup_loop, daemon=True).start()
+    snapshot_thread = threading.Thread(target=_auto_backup_loop, daemon=True,
+                                       name="auto-snapshot")
+    snapshot_thread.start()
+
+    def _shutdown() -> None:
+        """Stop this app's background threads, the snapshot loop and the Find similar
+        indexer, and wait for them. The case stays open; closing it is
+        ``close_current``'s job."""
+        stopping.set()
+        indexer.stop()
+        snapshot_thread.join(timeout=30)   # at most the snapshot it may be writing
+
+    state["shutdown"] = _shutdown
 
     # ---- helpers ----------------------------------------------------
     def C():
