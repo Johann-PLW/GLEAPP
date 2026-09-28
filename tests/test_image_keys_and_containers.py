@@ -339,6 +339,14 @@ def test_the_web_ingest_asks_for_a_private_key_and_reads_it_from_its_path(tmp_pa
     for p in (tmp_path / "c").rglob("*"):
         if p.is_file():
             assert secret not in p.read_bytes(), f"the key reached {p.name}"
+    # carve=true runs the scoped carve, and this disk holds no filesystem, so nothing
+    # claims any of it and all six pictures come back. Until 2026-09-28 this found none.
+    case = open_case(tmp_path / "c")
+    try:
+        carved = [r for r in case.db.iter_files() if r["origin"] == "carve"]
+    finally:
+        case.close()
+    assert len(carved) == 6, f"the web carve of a volume-less image found {len(carved)}"
 
 
 def test_the_web_ingest_asks_for_a_bitlocker_key_or_leaves_the_volume_locked(tmp_path):
