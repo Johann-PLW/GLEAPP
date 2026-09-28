@@ -116,6 +116,22 @@ def test_the_bytes_read_back_are_the_bytes_that_were_in_the_volume(tmp_path):
     case.close()
 
 
+def test_a_walked_file_still_reads_after_the_image_handles_are_released(tmp_path):
+    """Closing a case releases every image handle (close_zips). A walker cached from
+    before then reads through a closed handle, so it has to go with its image: until
+    2026-09-28 the next read of a walked file failed with "seek of closed file", which
+    is what reopening a case in the same session did."""
+    image = _image(tmp_path)
+    case, _ = _ingest(tmp_path, image)
+    rec = list(archive.source_records(case).values())[0]
+    first = archive.cached_copy(case.root, rec, _rows(case)["lba0/HOLIDAY.JPG"])
+    assert first.read_bytes() == JPG
+    archive.close_zips()
+    again = archive.cached_copy(case.root, rec, _rows(case)["lba0/SCREEN.PNG"])
+    assert again.read_bytes() == PNG
+    case.close()
+
+
 def test_no_date_is_invented_for_a_filesystem_whose_dates_are_not_read(tmp_path):
     """FAT records a local time with no zone. Reading it as though it were UTC
     would place every file wrong by the offset, so nothing is claimed at all:
