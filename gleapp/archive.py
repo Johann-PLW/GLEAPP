@@ -157,14 +157,16 @@ class ImagePasswordNeeded(ArchiveUnavailable):
 
 
 # What opens an encrypted image, by the image's path: its password, or the bytes of
-# the RSA private key of a certificate it is sealed to, and for the BitLocker volumes
+# the RSA private key of a certificate it is sealed to; for the BitLocker volumes
 # inside an image, the passwords or recovery passwords and the bytes of the startup
-# key (.BEK) files that open them. Held by this process only and never written
-# anywhere (not the case, the config, a log or a report), so a new session asks for
-# them again.
+# key (.BEK) files that open them; and for the encrypted APFS volumes inside it, the
+# passwords or personal recovery keys that open them. Held by this process only and
+# never written anywhere (not the case, the config, a log or a report), so a new
+# session asks for them again.
 _PASSWORDS: dict[str, str | bytes] = {}
 _PRIVATE_KEYS: dict[str, bytes] = {}
 _BITLOCKER: dict[str, tuple[list, list]] = {}      # (secrets, startup keys)
+_APFS: dict[str, list] = {}                        # passwords or recovery keys
 _PASSWORD_LOCK = threading.Lock()
 # What the vendored reader says a BitLocker volume can be opened with, of the kinds
 # a person can give: anything else (a TPM, a clear key already used) is not asked for.
@@ -284,6 +286,62 @@ def unlock_bitlocker(path, secret=None, startup_key: bytes | None = None) -> boo
             held = _BITLOCKER.setdefault(_password_key(path), ([], []))
             held[0].extend(tried_secret)
             held[1].extend(tried_key)
+        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+    return opened
+
+
+def _apfs_held(path) -> list:
+    """The APFS passwords and personal recovery keys this session holds for ``path``."""
+    with _PASSWORD_LOCK:
+        return list(_APFS.get(_password_key(path), []))
+
+
+def _apfs_askable(lock) -> bool:
+    """True when an encrypted APFS volume still locked could open with a password or
+    personal recovery key, so asking for one could help."""
+    return lock.vek is None and not lock.why
+
+
+def apfs_volumes(path) -> list[dict]:
+    """The encrypted APFS volumes whose blocks are ciphertext in the image at ``path``,
+    tried with what this session holds for them: each one's ``label`` (the volume and
+    the region it is in), ``open``, ``askable`` (still locked, and a password or
+    personal recovery key could open it), ``hint`` (the passphrase hint it stores, as
+    stored) and the reader's ``note`` on why it is locked. Empty for an image with no
+    such volume, and for an encrypted image not open this session (``unlock_image``
+    comes first)."""
+    try:
+        img = _open_image_file(path, apfs=False)
+    except (ArchiveUnavailable, *_IMAGE_ERRORS):
+        return []
+    try:
+        _fh, found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
+        return [{"label": f"{lk.name} in {lk.label}", "open": lk.vek is not None,
+                 "askable": _apfs_askable(lk), "hint": lk.hint,
+                 "note": "" if lk.vek is not None else lk.locked_note()} for lk in found]
+    finally:
+        img.close()
+
+
+def unlock_apfs(path, secret) -> bool:
+    """Try ``secret`` (a password or personal recovery key) on each encrypted APFS
+    volume in the image at ``path`` that is still locked this session. When it opens
+    at least one, keep it for this session and return True; when it opens none,
+    return False."""
+    if not secret:
+        return False
+    img = _open_image_file(path, apfs=False)
+    try:
+        _fh, found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
+        opened = False
+        for lock in found:
+            if lock.vek is None and lock.unlock([secret]):
+                opened = True
+    finally:
+        img.close()
+    if opened:
+        with _PASSWORD_LOCK:
+            _APFS.setdefault(_password_key(path), []).append(secret)
         _drop_image(os.fspath(path))    # a handle opened before this reads it locked
     return opened
 
@@ -565,6 +623,8 @@ def source_record(case, name: str) -> dict | None:
         # the byte offsets of the BitLocker volumes the walk read through, so a later
         # session can say their keys are needed again
         "bitlocker": case.db.get_meta(f"{key}:bitlocker") or "",
+        # and the identifiers of the encrypted APFS volumes it read decrypted
+        "apfs": case.db.get_meta(f"{key}:apfs") or "",
     }
 
 
@@ -581,9 +641,11 @@ def source_status(case) -> list[dict]:
     (``files``, split into ``walked`` and ``carved``), and ``status``: ``ok``,
     ``changed`` (a file is at the recorded path but its size or date differ),
     ``missing``, or ``locked`` (an encrypted image whose password or private key has
-    not been given this session, which ``unlock_image`` takes, or an image holding
+    not been given this session, which ``unlock_image`` takes, an image holding
     BitLocker volumes that no key given this session opens, which ``unlock_bitlocker``
-    takes). ``locked_by`` says which: ``password``, ``private key`` or ``BitLocker``."""
+    takes, or one holding encrypted APFS volumes the walk read decrypted and nothing
+    given this session opens, which ``unlock_apfs`` takes). ``locked_by`` says which:
+    ``password``, ``private key``, ``BitLocker`` or ``APFS``."""
     out = []
     for name, rec in sorted(source_records(case).items()):
         locked_by = ""
@@ -599,6 +661,8 @@ def source_status(case) -> list[dict]:
             if same and not locked_by and rec["bitlocker"] and not any(
                     _bitlocker_held(rec["path"])):
                 locked_by = "BitLocker"
+            if same and not locked_by and rec["apfs"] and not _apfs_held(rec["path"]):
+                locked_by = "APFS"
             locked = bool(locked_by)
             # A segmented acquisition is several files and the record names one, so a
             # later segment going missing leaves the first one untouched and the source
@@ -753,13 +817,15 @@ class _RawImage:
         return False
 
 
-def _open_image_file(path, *, bitlocker: bool = True):
+def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True):
     """A fresh handle on a disk image: ewfprobe for an acquisition (an E01, s01 or
     Ex01 set, an AFF, AFD or AFM, an AFF4, an Apple disk image, or a virtual machine
     disk), and ``_RawImage`` for a raw image or a numbered split set. An encrypted one
     opens with what this session holds for it, and ``ImagePasswordNeeded`` is raised
     when that is nothing. The BitLocker volumes the session holds keys for are read
-    decrypted, in place, unless ``bitlocker`` is False."""
+    decrypted, in place, unless ``bitlocker`` is False, and the encrypted APFS volumes
+    it holds passwords for are read decrypted unless ``apfs`` is False; either way an
+    APFS volume left locked carries what would open it in its walker's note."""
     path = os.fspath(path)
     kind = qnxprobe.acquisition_format(path)
     if kind in _ACQUISITIONS:
@@ -784,6 +850,8 @@ def _open_image_file(path, *, bitlocker: bool = True):
         if secrets or keys:
             img, _found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
                                                     secrets, keys)
+    if apfs:
+        img, _found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
     return img
 
 
@@ -895,6 +963,9 @@ def close_zips() -> None:
         images = list(_IMAGES.values())
         _IMAGES.clear()
         _IMAGE_READ.clear()
+        # a walker reads through its image, so one kept past its image being closed
+        # fails the next read of that source ("seek of closed file")
+        _WALKERS.clear()
     for img in images:
         with contextlib.suppress(Exception):
             img.close()
@@ -1476,6 +1547,25 @@ def _not_walked(img, base: int, size) -> str:
     return "the vendored reader names this filesystem and does not walk it"
 
 
+def _apfs_states(walker, vol: str, refused: list) -> list[str]:
+    """The identifiers of the encrypted APFS volumes in a container that the walk reads
+    decrypted, and, into ``refused``, one line for each it cannot read: its blocks are
+    ciphertext in the image and nothing given opens it, or it is of a kind the reader
+    does not open, with the reader's reason and, when the volume stores one, its
+    passphrase hint."""
+    opened = []
+    for i, (_oid, _blk, name, _incompat) in enumerate(walker.volumes):
+        state = walker.encryption(i)
+        if state == "unlocked":
+            opened.append(str(walker.volume_uuids[i]))
+        elif state == "locked":
+            lock = walker.lock(i)
+            why = (lock.locked_note() if lock is not None
+                   else "its blocks are ciphertext in this image")
+            refused.append(f"{vol}/{name or f'volume {i}'} (apfs, encrypted): {why}")
+    return opened
+
+
 def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                        progress) -> int:
     """Register the media in the filesystems an acquisition holds, by walking them.
@@ -1526,6 +1616,9 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # not walked, and is recorded below as a volume not read.
         bitlocker = sorted(int(b.base) for b in getattr(img, "bitlocker_found", ())
                            if b.fvek is not None)
+        # and the encrypted APFS volumes it read decrypted, likewise; one left locked
+        # is recorded below as a volume not read, with what would open it
+        apfs: list[str] = []
         for base, size, fskind, label in vols:
             vol = label or f"lba{base // ss}"
             try:
@@ -1533,6 +1626,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 if walker is None:
                     refused.append(f"{vol} ({fskind}): {_not_walked(img, base, size)}")
                     continue
+                if fskind == "apfs":
+                    apfs += _apfs_states(walker, vol, refused)
                 _prime_catalog(walker)
                 # FAT and exFAT keep a wall-clock reading and no zone, so their
                 # mtime comes back as zero and the readings arrive here instead,
@@ -1631,6 +1726,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         case.db.set_meta(f"{key}:volumes_not_read", json.dumps(refused))
     if bitlocker:
         case.db.set_meta(f"{key}:bitlocker", json.dumps(bitlocker))
+    if apfs:
+        case.db.set_meta(f"{key}:apfs", json.dumps(apfs))
     if short:
         case.db.set_meta(f"{key}:volumes_short", json.dumps(short))
     _finish(case, src, image_path, fmt=fmt, root="", stage=stage,

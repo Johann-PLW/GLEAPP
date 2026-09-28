@@ -4096,26 +4096,29 @@ $("#createGo").onclick = async () => {
 // An encrypted image (an Apple disk image, an encrypted AFF, or an E01, SMART or raw
 // set FTK Imager encrypted with AD encryption) opens with its password, or, when it is
 // sealed to a certificate, with that certificate's private key; a BitLocker volume in
-// an image opens with its password, recovery password or startup key. The server holds
-// them in memory for this session only, and nothing here keeps them. A password is
-// asked for in a field that hides what is typed, not with prompt(). A key file is
-// named by its path on this machine, which the server reads.
+// an image opens with its password, recovery password or startup key, and an encrypted
+// APFS volume with its password or personal recovery key. The server holds them in
+// memory for this session only, and nothing here keeps them. A password is asked for
+// in a field that hides what is typed, not with prompt(). A key file is named by its
+// path on this machine, which the server reads.
 //
 // ``n`` is what the server says is locked: its ``name``, ``needs`` ("password",
-// "private key" or "bitlocker", with the BitLocker ``volume`` label when known) and
-// ``wrong``. Resolves to {password}, {private_key}, {secret} or {key_file}, to "skip"
-// for a BitLocker volume left locked, or to null.
+// "private key", "bitlocker" or "apfs", with the volume's ``volume`` label when known)
+// and ``wrong``. Resolves to {password}, {private_key}, {secret} or {key_file}, to
+// "skip" for a volume left locked, or to null.
 function askKey(n) {
   return new Promise(resolve => {
-    const bl = n.needs === "bitlocker", pk = n.needs === "private key";
-    const who = bl
-      ? (n.volume ? `the BitLocker volume <b>${esc(n.volume)}</b> of <b>${esc(n.name)}</b>`
-                  : `a BitLocker volume in <b>${esc(n.name)}</b>`)
+    const bl = n.needs === "bitlocker", ap = n.needs === "apfs", pk = n.needs === "private key";
+    const vol = bl || ap;
+    const kind = ap ? "encrypted APFS volume" : "BitLocker volume", article = ap ? "an" : "a";
+    const who = vol
+      ? (n.volume ? `the ${kind} <b>${esc(n.volume)}</b> of <b>${esc(n.name)}</b>`
+                  : `${article} ${kind} in <b>${esc(n.name)}</b>`)
       : `<b>${esc(n.name)}</b>`;
     let lead;
-    if (n.wrong) lead = pk ? `That key does not open ${who}.` : bl ? `That does not open ${who}.`
+    if (n.wrong) lead = pk ? `That key does not open ${who}.` : vol ? `That does not open ${who}.`
                            : `That password does not open ${who}.`;
-    else lead = bl ? `${who.charAt(0).toUpperCase()}${who.slice(1)} is locked.`
+    else lead = vol ? `${who.charAt(0).toUpperCase()}${who.slice(1)} is locked.`
               : pk ? `${who} is sealed to a certificate.` : `${who} is encrypted.`;
     const fileRow = (label, kind) => `<div style="margin-top:8px">${label}</div>
       <div style="display:flex;gap:6px"><input type="text" data-file autocomplete="off" spellcheck="false"
@@ -4125,6 +4128,8 @@ function askKey(n) {
     else if (bl) fields = `<div>Its password or recovery password:</div>
       <input type="password" data-secret autocomplete="off" style="width:100%;box-sizing:border-box">`
       + fileRow("or the path of its startup key (.BEK) file:", "bitlockerkey");
+    else if (ap) fields = `<div>Its password or personal recovery key:</div>
+      <input type="password" data-secret autocomplete="off" style="width:100%;box-sizing:border-box">`;
     else fields = `<div>Its password:</div>
       <input type="password" data-secret autocomplete="off" style="width:100%;box-sizing:border-box">`;
     const wrap = document.createElement("div");
@@ -4133,10 +4138,10 @@ function askKey(n) {
     wrap.innerHTML = `<form style="background:var(--panel);color:var(--fg);border:1px solid var(--line);
         border-radius:8px;padding:16px 18px;min-width:360px;max-width:90vw">
       <div style="margin-bottom:8px">${lead}</div>${fields}
-      ${bl && n.note ? `<div style="margin-top:8px;font-size:12px;opacity:.8">${esc(n.note)}</div>` : ""}
+      ${vol && n.note ? `<div style="margin-top:8px;font-size:12px;opacity:.8">${esc(n.note)}</div>` : ""}
       <div style="margin-top:12px;text-align:right">
         <button type="button" data-cancel>Cancel</button>
-        ${bl ? `<button type="button" data-skip title="Read the rest of the image and leave this volume locked">Leave it locked</button>` : ""}
+        ${vol ? `<button type="button" data-skip title="Read the rest of the image and leave this volume locked">Leave it locked</button>` : ""}
         <button type="submit">Open</button></div>
     </form>`;
     const secret = wrap.querySelector("[data-secret]"), file = wrap.querySelector("[data-file]");
@@ -4144,6 +4149,7 @@ function askKey(n) {
     wrap.querySelector("form").onsubmit = e => {
       e.preventDefault();
       if (pk) return done({ private_key: file.value });
+      if (ap) return done({ secret: secret.value });
       if (!bl) return done({ password: secret.value });
       return done(secret.value ? { secret: secret.value } : { key_file: file.value });
     };
@@ -4159,25 +4165,31 @@ function askKey(n) {
   });
 }
 
-// POST /api/case/ingest; when the server names encrypted images, or BitLocker volumes
-// in images, it cannot open yet, ask for each one and post again with what was given.
+// POST /api/case/ingest; when the server names encrypted images, or BitLocker or
+// encrypted APFS volumes in images, it cannot open yet, ask for each one and post
+// again with what was given.
 async function postIngest(body) {
   const passwords = {}, private_keys = {}, bitlocker = {}, bitlocker_skip = [];
+  const apfs = {}, apfs_skip = [];
   for (;;) {
     const r = await api("/api/case/ingest", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, passwords, private_keys, bitlocker, bitlocker_skip })
+      body: JSON.stringify({ ...body, passwords, private_keys, bitlocker, bitlocker_skip,
+                             apfs, apfs_skip })
     }).catch(() => ({ error: true, message: "request failed" }));
     if (!r.needs_password) return r;
     for (const n of r.needs_password) {
       const got = await askKey(n);
       if (got === null) {
         const what = n.needs === "bitlocker" ? "a BitLocker key"
+          : n.needs === "apfs" ? "an APFS volume's password"
           : n.needs === "private key" ? "its private key" : "its password";
         return { error: true, message: `${n.name} needs ${what}` };
       }
       if (n.needs === "bitlocker") {
         if (got === "skip") bitlocker_skip.push(n.path); else bitlocker[n.path] = got;
+      } else if (n.needs === "apfs") {
+        if (got === "skip") apfs_skip.push(n.path); else apfs[n.path] = got;
       } else if (n.needs === "private key") private_keys[n.path] = got.private_key;
       else passwords[n.path] = got.password;
     }
@@ -4347,6 +4359,8 @@ function showSourceStatus(list) {
     if (s.status === "locked") {
       const what = s.locked_by === "BitLocker"
         ? "holds BitLocker volumes, and nothing that opens them has been given this session"
+        : s.locked_by === "APFS"
+          ? "holds encrypted APFS volumes, and nothing that opens them has been given this session"
         : s.locked_by === "private key"
           ? "is an encrypted disk image sealed to a certificate, and its private key has not been given this session"
           : "is an encrypted disk image and its password has not been given this session";
@@ -4361,13 +4375,14 @@ function showSourceStatus(list) {
   }).join("");
   el.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => {
     const name = b.dataset.unlock;
-    const needs = { BitLocker: "bitlocker", "private key": "private key" }[b.dataset.by] || "password";
+    const needs = { BitLocker: "bitlocker", APFS: "apfs", "private key": "private key" }[b.dataset.by] || "password";
     for (let wrong = false; ; wrong = true) {
       const got = await askKey({ name, needs, wrong });
       if (got === null || got === "skip") return;
       const r = await api("/api/source/unlock", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(needs === "bitlocker" ? { name, bitlocker: got } : { name, ...got })
+        body: JSON.stringify(needs === "bitlocker" ? { name, bitlocker: got }
+          : needs === "apfs" ? { name, apfs: got } : { name, ...got })
       }).catch(() => ({ error: true, message: "request failed" }));
       if (r.error) { toast(r.message || "Unlock failed"); return; }
       if (r.ok) break;

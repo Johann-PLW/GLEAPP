@@ -56,8 +56,11 @@ your user settings, not in any case.
         password. One sealed to a certificate instead opens with that
         certificate's RSA private key: give the path of the key file,
         unencrypted, as PEM or DER. A BitLocker volume inside an image opens with
-        its password, its recovery password or its startup key (`.BEK` file); one
-        you leave locked is not walked and is named in the Source panel. When
+        its password, its recovery password or its startup key (`.BEK` file), and
+        an APFS volume macOS encrypted in software (an external drive, or a Mac
+        without a T2 chip or Apple silicon) with its password or personal recovery
+        key, the prompt showing the passphrase hint the volume stores; one you
+        leave locked is not walked and is named in the Source panel. When
         you click **Create case & ingest**, GLEAPP asks for what is missing, in a
         password field or a key file field, and asks again if it does not open the
         image. What you give is held in memory until GLEAPP is closed and is never
@@ -138,13 +141,15 @@ AD-encrypted set) takes its password from `--password-file <file>`
 (the first line of the file) or `--password-env <variable>` (the name of an
 environment variable holding it), both written before the subcommand like `-c`.
 Either can be given more than once when a case holds several encrypted images;
-each password is tried on each image, and on each BitLocker volume inside one, as
-a password and as a recovery password. An image sealed to a certificate takes the
+each password is tried on each image, on each BitLocker volume inside one as a
+password and as a recovery password, and on each encrypted APFS volume inside one as a
+password and as a personal recovery key. An image sealed to a certificate takes the
 certificate's private key with `--private-key <file>`, and a BitLocker volume its
 startup key with `--bitlocker-key <file>`; both can be repeated. With none of
 these, GLEAPP asks at the terminal, and without a terminal it stops and says which
-option to use, except for a BitLocker volume: that one is left locked, named in a
-warning and not walked, and the rest of the image is read. What you give is held
+option to use, except for a BitLocker or APFS volume: that one is left locked, named
+in a warning (with an APFS volume's passphrase hint) and not walked, and the rest of the
+image is read. What you give is held
 for that one command, so `process`, `report`, `source stage` and `source carve`
 need it again. A password is never taken on the command line itself, where other
 users of the machine and the shell history could read it.
@@ -1305,7 +1310,7 @@ already give you.
 - **Encrypted Apple disk image or sparse bundle, encrypted AFF, or an E01, SMART or
   raw set FTK Imager encrypted with AD encryption**: point at it as above; GLEAPP asks
   for its password, or for one sealed to a certificate, its private key (§1). A
-  BitLocker volume inside an image is asked about the same way.
+  BitLocker or encrypted APFS volume inside an image is asked about the same way.
 - **Not accepted**: logical evidence, EnCase's (`.L01`) and FTK Imager's (`.ad1`),
   which holds copies of files rather than a disk and is refused with that reason,
   including an AD-encrypted set that turns out to hold one.

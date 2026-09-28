@@ -290,11 +290,18 @@ in `_BITLOCKER`), and `_open_image_file` then reads them decrypted in place thro
 qnxprobe's `BitLockerImage`. A volume left locked is not walked and is recorded in
 `volumes_not_read` with the reader's reason; the byte offsets of the ones a walk read
 through go in the source's `bitlocker` meta, so a later session reports the source
-`locked` by BitLocker until a key is given again. The web ingest answers 409 with what
-it cannot open (`needs`: `password`, `private key` or `bitlocker`) and the page posts
-again with it, a key file by its path on this machine, or with the image in
-`bitlocker_skip` to leave its BitLocker volumes locked; `POST /api/source/unlock`
-serves a later session. The command line takes `--password-file`, `--password-env`,
+`locked` by BitLocker until a key is given again. Encrypted APFS volumes (software
+encryption, qnxprobe 1.50) are the same shape: `unlock_apfs` keeps a password or
+personal recovery key in `_APFS`, `_open_image_file` passes what is held to qnxprobe's
+`unlock_apfs` (whose `ApfsImage` carries the derived keys to every walker), a volume
+left locked is recorded in `volumes_not_read` with the reader's note and its passphrase
+hint, and the identifiers of the ones read decrypted go in the source's `apfs` meta
+(`locked_by` `APFS` in a later session). A walked file of a volume locked again is
+refused by the reader rather than read as empty. The web ingest answers 409 with what
+it cannot open (`needs`: `password`, `private key`, `bitlocker` or `apfs`, the last
+with the volume's `hint`) and the page posts again with it, a key file by its path on
+this machine, or with the image in `bitlocker_skip` or `apfs_skip` to leave those
+volumes locked; `POST /api/source/unlock` serves a later session. The command line takes `--password-file`, `--password-env`,
 `--private-key` and `--bitlocker-key`, or asks at a terminal, never an argument value.
 Decryption needs `pycryptodomex` (imported as `Cryptodome`), declared in the
 requirements; the vendored ewfprobe also accepts `pycryptodome`.

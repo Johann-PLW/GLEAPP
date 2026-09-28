@@ -3,7 +3,8 @@
 qnxprobe 1.49 and ewfprobe 0.12.0 read AFF4 and virtual machine disks (VHD, VHDX, VMDK,
 QCOW), an AFF encrypted with a passphrase, an image sealed to a certificate (opened with
 that certificate's private key), and BitLocker volumes inside an image (opened with a
-password, a recovery password or a startup key). These tests hold GLEAPP's own code to
+password, a recovery password or a startup key); qnxprobe 1.50 opens an APFS volume
+macOS encrypted in software with its password. These tests hold GLEAPP's own code to
 each: how a source is routed, where what opens it is kept, and the command line and web
 API that take it.
 
@@ -12,7 +13,10 @@ aff-enc-pass.aff (passphrase ewfprobe-aff-password) and aff-enc-inplace-cert.aff
 its test key aff-enc-test-key.pem come from ewfprobe's tests/fixtures; ftk-ad-cert-ad1.ad1
 (an AD1 FTK Imager 4.7.3.61 encrypted to the certificate of ad-cert-test-key-2048.pem)
 and bitlocker-xts128.img.gz with its startup key bitlocker-xts128.BEK come from the LEAPP
-cores' raw image fixtures. The keys were made for these fixtures and open nothing else.
+cores' raw image fixtures, and apfs-converted.sparseimage.gz (a volume macOS encrypted in
+place, with a passphrase hint) with its apfs-converted.sha256 from qnxprobe's
+tests/fixtures at a45821b. The keys and passwords were made for these fixtures and open
+nothing else.
 """
 
 import gzip
@@ -38,6 +42,8 @@ from fatwriter import build_fat32                      # pylint: disable=import-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 AFF_PASSWORD = "ewfprobe-aff-password"
+APFS_PASSWORD = "qnxprobe-apfs-convert"
+APFS_HINT = "the qnxprobe conversion test"
 _OPTS = {"screen": False, "keyframes": 0, "carve": True}
 
 
@@ -48,6 +54,7 @@ def _isolate(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(archive, "_PASSWORDS", {})
     monkeypatch.setattr(archive, "_PRIVATE_KEYS", {})
     monkeypatch.setattr(archive, "_BITLOCKER", {})
+    monkeypatch.setattr(archive, "_APFS", {})
     from gleapp import hashstore, stash  # pylint: disable=import-outside-toplevel
     hashstore.close()
     stash.close()
@@ -298,6 +305,114 @@ def test_a_bitlocker_volume_is_named_as_locked_and_opens_with_its_startup_key(
         assert archive.cached_copy(c.root, rec, walked).stat().st_size == walked["size"]
     finally:
         c.close()
+
+
+# ---- encrypted APFS ------------------------------------------------------------
+def _apfs_sums() -> dict:
+    lines = (FIXTURES / "apfs-converted.sha256").read_text(encoding="utf-8").splitlines()
+    return {path: digest for digest, path in (ln.split("  ", 1) for ln in lines if ln)}
+
+
+def test_an_encrypted_apfs_volume_is_named_as_locked_and_opens_with_its_password(
+        tmp_path, monkeypatch, capsys):
+    import hashlib  # pylint: disable=import-outside-toplevel
+    image = _copy(tmp_path, "apfs-converted.sparseimage.gz")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+
+    locked = str(tmp_path / "locked")
+    assert cli.main(["-c", locked, "ingest", str(_job(tmp_path, image)),
+                     "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "stays locked and its files are not read" in err and APFS_HINT in err
+    c = open_case(locked)
+    try:
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        refused = json.loads(row["volumes_not_read"])
+        assert len(refused) == 1 and "CONVVOL (apfs, encrypted)" in refused[0]
+        assert f'its passphrase hint, as stored: "{APFS_HINT}"' in refused[0]
+        assert row["walked"] == 0 and row["status"] == "ok" and not row["apfs"]
+    finally:
+        c.close()
+
+    password = tmp_path / "apfs-password.txt"
+    password.write_text(APFS_PASSWORD + "\n", encoding="utf-8")
+    opened = str(tmp_path / "opened")
+    assert cli.main(["-c", opened, "--password-file", str(password), "ingest",
+                     str(_job(tmp_path, image)), "--no-process"]) == 0
+    assert "stays locked" not in capsys.readouterr().err
+    c = open_case(opened)
+    try:
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        assert not row["volumes_not_read"] and len(json.loads(row["apfs"])) == 1
+        rec = archive.source_record(c, image.name)
+        files = {f["rel_path"].split("/CONVVOL/", 1)[-1]: f
+                 for f in c.db.iter_files("source = ?", (image.name,))}
+        for rel, digest in _apfs_sums().items():
+            copy = archive.cached_copy(c.root, rec, files[rel])
+            assert hashlib.sha256(copy.read_bytes()).hexdigest() == digest, rel
+        archive.close_zips()
+        monkeypatch.setattr(archive, "_APFS", {})            # the app was restarted
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        assert (row["status"], row["locked_by"]) == ("locked", "APFS")
+        unread = files[".fseventsd/fseventsd-uuid"]        # not copied out before
+        with pytest.raises(archive.ArchiveUnavailable):     # ciphertext, until unlocked
+            archive.cached_copy(c.root, rec, unread)
+        assert archive.apfs_volumes(image)[0]["hint"] == APFS_HINT
+        assert archive.unlock_apfs(image, "not it") is False
+        assert archive.unlock_apfs(image, APFS_PASSWORD) is True
+        assert {s["name"]: s for s in archive.source_status(c)}[image.name]["status"] == "ok"
+        # the handle opened while it was locked is not the one read now
+        assert archive.cached_copy(c.root, rec, unread).stat().st_size == unread["size"]
+    finally:
+        c.close()
+
+
+def test_the_web_ingest_asks_for_an_apfs_password_or_leaves_the_volume_locked(tmp_path,
+                                                                            monkeypatch):
+    image = _copy(tmp_path, "apfs-converted.sparseimage.gz")
+    cl = _client()
+    cl.post("/api/case/create", json={"path": str(tmp_path / "c"), "name": "c",
+                                      "examiner": "t"})
+    body = {"sources": [{"path": str(image)}], "options": {**_OPTS, "carve": False}}
+    r = cl.post("/api/case/ingest", json=body)
+    assert r.status_code == 409
+    need = r.get_json()["needs_password"]
+    assert [(n["needs"], n["volume"], n["hint"], n["wrong"]) for n in need] == [
+        ("apfs", "CONVVOL in GPT part 1 disk image", APFS_HINT, False)]
+    r = cl.post("/api/case/ingest", json={**body, "apfs": {need[0]["path"]: {"secret": "not it"}}})
+    assert r.status_code == 409 and r.get_json()["needs_password"][0]["wrong"] is True
+
+    # leaving it locked reads the rest of the image and says the volume was not read
+    r = cl.post("/api/case/ingest", json={**body, "apfs_skip": [need[0]["path"]]})
+    assert r.status_code == 200, r.get_json()
+    assert _wait(cl)["stage"] == "done"
+    row = cl.get("/api/sources").get_json()[0]
+    assert "CONVVOL (apfs, encrypted)" in row["volumes_not_read"]
+    cl.post("/api/case/close")
+
+    cl.post("/api/case/create", json={"path": str(tmp_path / "c2"), "name": "c2",
+                                      "examiner": "t"})
+    r = cl.post("/api/case/ingest", json={**body, "apfs": {
+        need[0]["path"]: {"secret": APFS_PASSWORD}}})
+    assert r.status_code == 200, r.get_json()
+    assert _wait(cl)["stage"] == "done"
+    row = cl.get("/api/sources").get_json()[0]
+    assert not row["volumes_not_read"] and row["apfs"]
+
+    archive.close_zips()
+    monkeypatch.setattr(archive, "_APFS", {})               # the app was restarted
+    [row] = cl.get("/api/sources").get_json()
+    assert (row["status"], row["locked_by"]) == ("locked", "APFS")
+    r = cl.post("/api/source/unlock", json={"name": image.name, "apfs": {"secret": "not it"}})
+    assert r.get_json() == {"ok": False, "wrong": True}
+    r = cl.post("/api/source/unlock", json={"name": image.name,
+                                            "apfs": {"secret": APFS_PASSWORD}})
+    assert r.get_json() == {"ok": True, "wrong": False}
+    assert [s["status"] for s in cl.get("/api/sources").get_json()] == ["ok"]
+    cl.post("/api/case/close")
+    for p in (tmp_path / "c2").rglob("*"):
+        if p.is_file():
+            assert APFS_PASSWORD.encode() not in p.read_bytes(), f"the password reached {p.name}"
 
 
 # ---- the web API -----------------------------------------------------------

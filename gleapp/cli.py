@@ -67,15 +67,18 @@ def _ask_three_times(attempt, wrong: str) -> bool:
     return False
 
 
-def _unlock(paths, args: argparse.Namespace, bitlocker=None) -> tuple[list[str], list[str]]:
+def _unlock(paths, args: argparse.Namespace, bitlocker=None,
+            apfs=None) -> tuple[list[str], list[str]]:
     """Open each encrypted image among ``paths`` for this session with the first
     password or private key the command line gives that opens it or, when it gives
     none, one asked for at a terminal (three tries); then the BitLocker volumes in
     each image (only in those of ``bitlocker``, when it is given), with the passwords,
     recovery passwords and startup keys the command line gives or, at a terminal, one
-    asked for per volume. Returns the images still locked and the BitLocker volumes
-    still locked, each as a sentence. What opens them is held in memory only
-    (archive.unlock_image, archive.unlock_bitlocker)."""
+    asked for per volume; then the encrypted APFS volumes (only in those of ``apfs``,
+    when it is given), with the passwords the command line gives or one asked for per
+    volume. Returns the images still locked and the volumes still locked, each as a
+    sentence. What opens them is held in memory only (archive.unlock_image,
+    archive.unlock_bitlocker, archive.unlock_apfs)."""
     from . import archive
 
     def opens(path, password=None, private_key=None) -> bool:
@@ -117,6 +120,8 @@ def _unlock(paths, args: argparse.Namespace, bitlocker=None) -> tuple[list[str],
                 continue
         if bitlocker is None or path in bitlocker:
             volumes += _unlock_bitlocker(path, given, starts, tty)
+        if apfs is None or path in apfs:
+            volumes += _unlock_apfs(path, given, tty)
     return images, volumes
 
 
@@ -162,15 +167,55 @@ def _unlock_bitlocker(path, given, starts, tty: bool) -> list[str]:
             for v in archive.bitlocker_volumes(path) if v["askable"]]
 
 
+def _unlock_apfs(path, given, tty: bool) -> list[str]:
+    """Open the encrypted APFS volumes in the image at ``path`` with ``given``
+    passwords and personal recovery keys, and at a terminal ask for each volume they
+    leave locked, showing the passphrase hint it stores. Returns a sentence for each
+    volume still locked that a password could have opened."""
+    from . import archive
+
+    name = Path(path).name
+    if archive.archive_format(path) not in archive.IMAGE_FORMATS:
+        return []
+    if not any(v["askable"] for v in archive.apfs_volumes(path)):
+        return []
+    for secret in given:
+        archive.unlock_apfs(path, secret)
+    skipped: set[str] = set()
+    while tty:
+        pending = [v for v in archive.apfs_volumes(path)
+                   if v["askable"] and v["label"] not in skipped]
+        if not pending:
+            break
+        label, hint = pending[0]["label"], pending[0]["hint"]
+
+        def attempt(lb=label, hn=hint) -> bool:
+            secret = getpass.getpass(
+                f"Password or personal recovery key for the encrypted APFS volume {lb} "
+                f"of {name}" + (f' (its hint, as stored: "{hn}")' if hn else "")
+                + " (leave empty to leave it locked): ")
+            if not secret:
+                skipped.add(lb)
+                return True
+            return archive.unlock_apfs(path, secret)
+        if not _ask_three_times(attempt, "That does not open it."):
+            skipped.add(label)
+    return [f"{v['label']} of {name} stays locked and its files are not read "
+            f"({v['note']}). Give its password or personal recovery key with "
+            f"--password-file or --password-env"
+            for v in archive.apfs_volumes(path) if v["askable"]]
+
+
 def _unlock_case(case, args: argparse.Namespace) -> None:
-    """Open the case's encrypted image sources, and the BitLocker volumes the ingest
-    found in them, for this session, and say which are left locked: files read from
-    them fail until what opens them is given."""
+    """Open the case's encrypted image sources, and the BitLocker and encrypted APFS
+    volumes the ingest read through in them, for this session, and say which are left
+    locked: files read from them fail until what opens them is given."""
     from . import archive
 
     recs = list(archive.source_records(case).values())
     images, volumes = _unlock([r["path"] for r in recs], args,
-                              bitlocker={r["path"] for r in recs if r["bitlocker"]})
+                              bitlocker={r["path"] for r in recs if r["bitlocker"]},
+                              apfs={r["path"] for r in recs if r["apfs"]})
     for line in images:
         print(f"warning: {line}; files read from it will fail", file=sys.stderr)
     for line in volumes:
@@ -650,14 +695,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "stored name, or 'examiner' for a brand-new case)")
     ap.add_argument("--password-file", metavar="FILE", action="append", default=[],
                     help="for an encrypted image source (an Apple disk image, an "
-                         "encrypted AFF or an FTK Imager AD-encrypted set) or a BitLocker "
-                         "volume in one: a password (for BitLocker, a password or recovery "
-                         "password), the first line of FILE. Repeatable; each opens with "
-                         "the first that opens it. Held in memory for this run only")
+                         "encrypted AFF or an FTK Imager AD-encrypted set), or a BitLocker "
+                         "or encrypted APFS volume in one: a password (for BitLocker, a "
+                         "password or recovery password; for APFS, a password or personal "
+                         "recovery key), the first line of FILE. Repeatable; each opens "
+                         "with the first that opens it. Held in memory for this run only")
     ap.add_argument("--password-env", metavar="NAME", action="append", default=[],
-                    help="for an encrypted image source or a BitLocker volume in one: a "
-                         "password, from the environment variable NAME. Repeatable. "
-                         "Without either, GLEAPP asks at a terminal")
+                    help="for an encrypted image source, or a BitLocker or encrypted APFS "
+                         "volume in one: a password, from the environment variable NAME. "
+                         "Repeatable. Without either, GLEAPP asks at a terminal")
     ap.add_argument("--private-key", metavar="FILE", action="append", default=[],
                     help="for an image source sealed to a certificate (an encrypted AFF, "
                          "an Apple disk image or an FTK Imager AD-encrypted set): the "
