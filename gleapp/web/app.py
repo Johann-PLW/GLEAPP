@@ -120,6 +120,72 @@ def _notices_candidates() -> list[Path]:
     return out
 
 
+def _key_file(path, what: str) -> bytes:
+    """The bytes of a key file the client names by its path on this machine."""
+    try:
+        with open(str(path).strip().strip('"'), "rb") as fh:
+            return fh.read(1 << 20)
+    except OSError as exc:
+        abort(400, description=f"the {what} file could not be read: {exc.strerror or exc}")
+
+
+def _try_bitlocker(path: str, given: dict) -> bool:
+    """Try one BitLocker ``secret`` (a password or recovery password) or ``key_file``
+    (a startup key's path on this machine) on the image at ``path``."""
+    if given.get("key_file"):
+        return archive.unlock_bitlocker(
+            path, startup_key=_key_file(given["key_file"], "startup key"))
+    return bool(given.get("secret")) and archive.unlock_bitlocker(
+        path, secret=str(given["secret"]))
+
+
+def _unlock_sources(sources, data: dict) -> list[dict]:
+    """Open each encrypted image source with what the ingest request's body gives for
+    it, and the BitLocker volumes in each image, and return what is still locked, one
+    entry per source, for the client to ask about: ``needs`` is ``password``, ``private
+    key`` or ``bitlocker`` (with the volume's ``volume`` label and the reader's
+    ``note``), and ``wrong`` is true when something was given and did not open it. An
+    image the body lists in ``bitlocker_skip`` has its BitLocker volumes left locked
+    and is not asked about again; the walk records them as not read."""
+    passwords = data.get("passwords") or {}
+    private_keys = data.get("private_keys") or {}
+    bitlocker = data.get("bitlocker") or {}
+    skip = set(data.get("bitlocker_skip") or [])
+    locked = []
+    for s in sources:
+        try:
+            if not archive.is_unlocked(s.path):
+                needs = ("password" if archive.needs_password(s.path) else
+                         "private key" if archive.needs_private_key(s.path) else "")
+                if needs:
+                    given = (passwords if needs == "password" else private_keys).get(s.path)
+                    if given is None:
+                        ok = False
+                    elif needs == "password":
+                        ok = archive.unlock_image(s.path, given)
+                    else:
+                        ok = archive.unlock_image(
+                            s.path, private_key=_key_file(given, "private key"))
+                    if not ok:
+                        locked.append({"name": s.name, "path": s.path, "needs": needs,
+                                       "wrong": given is not None})
+                        continue
+            if s.path in skip or archive.archive_format(s.path) not in archive.IMAGE_FORMATS:
+                continue
+            if not any(v["askable"] for v in archive.bitlocker_volumes(s.path)):
+                continue
+            tried = bitlocker.get(s.path)
+            wrong = bool(tried) and not _try_bitlocker(s.path, tried)
+            left = [v for v in archive.bitlocker_volumes(s.path) if v["askable"]]
+            if left:
+                locked.append({"name": s.name, "path": s.path, "needs": "bitlocker",
+                               "volume": left[0]["label"], "note": left[0]["note"],
+                               "wrong": wrong})
+        except (OSError, archive.ewfprobe.EwfError) as exc:
+            abort(400, description=f"{s.name} could not be opened: {exc}")
+    return locked
+
+
 def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
     app = Flask(__name__, static_folder="static", template_folder="templates")
     state: dict = {
@@ -287,7 +353,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=("Extraction or disk image "
                                 "(*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
-                                "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.dmg;*.DMG;*.sparseimage;*.sparsebundle;*.img;*.dd;*.raw;*.bin;"
+                                "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.afm;*.aff4;*.dmg;*.DMG;*.sparseimage;*.sparsebundle;"
+                                "*.vhd;*.vhdx;*.vmdk;*.qcow;*.qcow2;*.img;*.dd;*.raw;*.bin;"
                                 "*.000;*.001)",
                                 "All files (*.*)"),
                 )
@@ -297,6 +364,16 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     file_types=(
                         "Reference data (*.db;*.sqlite;*.sqlite3;*.sql;*.json)",
                         "All files (*.*)"),
+                )
+            elif kind == "privatekey":
+                res = win.create_file_dialog(
+                    webview.OPEN_DIALOG,
+                    file_types=("Private key (*.pem;*.der;*.key)", "All files (*.*)"),
+                )
+            elif kind == "bitlockerkey":
+                res = win.create_file_dialog(
+                    webview.OPEN_DIALOG,
+                    file_types=("BitLocker startup key (*.BEK;*.bek)", "All files (*.*)"),
                 )
             elif kind == "basemap":
                 res = win.create_file_dialog(
@@ -321,7 +398,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     webview.OPEN_DIALOG,
                     file_types=(
                         "Evidence file (*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
-                        "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.dmg;*.DMG;*.sparseimage;*.sparsebundle;*.img;*.dd;*.raw;*.bin;*.000;"
+                        "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.afm;*.aff4;*.dmg;*.DMG;*.sparseimage;*.sparsebundle;"
+                        "*.vhd;*.vhdx;*.vmdk;*.qcow;*.qcow2;*.img;*.dd;*.raw;*.bin;*.000;"
                         "*.001;*.json)",
                         "All files (*.*)"),
                 )
@@ -465,23 +543,14 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(400, description=str(exc))
         if not sources:
             abort(400, description="no sources given")
-        # An encrypted image (an Apple disk image or an AD-encrypted acquisition) is
-        # read with its password, held in memory for this session only. Each one not
-        # open yet goes back to the client to ask for, and comes in the body of the
-        # next request, never in a URL or a stored file.
-        passwords = data.get("passwords") or {}
-        locked = []
-        for s in sources:
-            if not archive.needs_password(s.path) or archive.is_unlocked(s.path):
-                continue
-            given = passwords.get(s.path)
-            if given is not None:
-                try:
-                    if archive.unlock_image(s.path, given):
-                        continue
-                except (OSError, archive.ewfprobe.EwfError) as exc:
-                    abort(400, description=f"{s.name} could not be opened: {exc}")
-            locked.append({"name": s.name, "path": s.path, "wrong": given is not None})
+        # An encrypted image (an Apple disk image, an encrypted AFF or an AD-encrypted
+        # acquisition) is read with its password, or with the private key of a
+        # certificate it is sealed to, and a BitLocker volume in an image with its
+        # password, recovery password or startup key. Each is held in memory for this
+        # session only. What is not open yet goes back to the client to ask for, and
+        # comes in the body of the next request, never in a URL or a stored file; a key
+        # file comes as the path of the file on this machine, which is read here.
+        locked = _unlock_sources(sources, data)
         if locked:
             return jsonify({"ok": False, "needs_password": locked}), 409
         if opts.get("stage"):
@@ -1867,18 +1936,32 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.post("/api/source/unlock")
     def source_unlock():
-        """Open an encrypted disk image source with its password, held in memory for
-        this session only. ``ok`` is false, with ``wrong`` true, when it does not open
-        the image."""
+        """Open an encrypted disk image source with its password (``password``) or the
+        private key of a certificate it is sealed to (``private_key``, the key file's
+        path on this machine), or the BitLocker volumes in it (``bitlocker``, a
+        ``secret`` or a ``key_file``), held in memory for this session only. ``ok`` is
+        false, with ``wrong`` true, when it opens nothing."""
         case = C()
         body = request.get_json(force=True) or {}
         rec = archive.source_record(case, str(body.get("name", "")))
         if rec is None:
             abort(404, description="no such source")
-        if not archive.needs_password(rec["path"]):
+        path = rec["path"]
+        bitlocker = body.get("bitlocker") if isinstance(body.get("bitlocker"), dict) else None
+        if bitlocker is not None and not rec["bitlocker"]:
+            abort(400, description=f"{rec['name']} holds no BitLocker volume")
+        if bitlocker is None and not (archive.needs_password(path)
+                                      or archive.needs_private_key(path)):
             abort(400, description=f"{rec['name']} is not an encrypted disk image")
+        ok = False
         try:
-            ok = archive.unlock_image(rec["path"], str(body.get("password") or ""))
+            if bitlocker is not None:
+                ok = _try_bitlocker(path, bitlocker)
+            elif body.get("private_key"):
+                ok = archive.unlock_image(path, private_key=_key_file(body["private_key"],
+                                                                      "private key"))
+            else:
+                ok = archive.unlock_image(path, str(body.get("password") or ""))
         except (OSError, archive.ewfprobe.EwfError) as exc:
             abort(400, description=f"{rec['name']} could not be opened: {exc}")
         return jsonify({"ok": ok, "wrong": not ok})

@@ -106,17 +106,22 @@ FORMAT_ZIP = "zip"
 FORMAT_TAR = "tar"
 FORMAT_TAR_COMPRESSED = "tar-compressed"
 FORMAT_EWF = "ewf"            # a disk image ewfprobe reads: E01, s01, Ex01, AFF, AFD,
-                              # an Apple .dmg (with any .dmgpart segments), a
-                              # .sparseimage, or a .sparsebundle folder, and an E01,
+                              # AFM, AFF4, an Apple .dmg (with any .dmgpart segments), a
+                              # .sparseimage, or a .sparsebundle folder, a virtual
+                              # machine disk (VHD, VHDX, VMDK, QCOW), and an E01,
                               # s01 or raw set FTK Imager encrypted with AD encryption
-# qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01 and
-# Lx01 are logical evidence, so they are not among them. An encrypted Apple disk
-# image (DMG_ENCRYPTED: a .dmg, a split one, a .sparseimage or a sparse bundle) is,
-# and so is an E01, s01 or raw (dd) set FTK Imager encrypted with AD encryption
+# qnxprobe.acquisition_format's labels for the disk images ewfprobe reads. L01, Lx01
+# and AD1 are logical evidence, so they are not among them. An AFM is labelled AFF,
+# since it begins as one. An AFF4 is a ZIP, so it has to be named here to be read as
+# an image rather than opened as an archive. An encrypted Apple disk image
+# (DMG_ENCRYPTED: a .dmg, a split one, a .sparseimage or a sparse bundle) is, and so
+# is an E01, s01 or raw (dd) set FTK Imager encrypted with AD encryption
 # (AD_ENCRYPTED, from its first file or any numbered file of a raw set); both open
-# with their password.
-_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "UDIF", "SPARSEIMAGE", "SPARSEBUNDLE",
-                 "DMG_ENCRYPTED", "AD_ENCRYPTED")
+# with their password, or with the private key of a certificate they are sealed to,
+# and so does an encrypted AFF.
+_ACQUISITIONS = ("EWF", "EWF2", "AFF", "AFD", "AFF4", "UDIF", "SPARSEIMAGE",
+                 "SPARSEBUNDLE", "DMG_ENCRYPTED", "AD_ENCRYPTED",
+                 "VHD", "VHDX", "VMDK", "QCOW")
 FORMAT_RAW = "raw"            # a raw disk image: one file, or a numbered split set
 IMAGE_FORMATS = (FORMAT_EWF, FORMAT_RAW)   # a disk: walked, and carved on request
 CACHE_DIR = "cache"             # on-demand copies for the viewer; bounded, oldest evicted
@@ -139,20 +144,31 @@ class ArchiveUnavailable(Exception):
 
 
 class ImagePasswordNeeded(ArchiveUnavailable):
-    """An encrypted image was opened with no password that opens it this session.
-    ``unlock_image`` takes one."""
+    """An encrypted image was opened with nothing that opens it this session: its
+    password, or for an image sealed only to a certificate, that certificate's
+    private key. ``unlock_image`` takes either."""
 
     def __init__(self, path):
+        what = ("the private key of a certificate it is sealed to"
+                if needs_private_key(path) else "its password")
         super().__init__(f"{Path(path).name} is {encrypted_kind(path)} and opens only "
-                         f"with its password, which has not been given this session")
+                         f"with {what}, which has not been given this session")
         self.path = os.fspath(path)
 
 
-# Passwords of encrypted images, by the image's path. Held by this process
-# only and never written anywhere (not the case, the config, a log or a report), so a
-# new session asks for them again.
+# What opens an encrypted image, by the image's path: its password, or the bytes of
+# the RSA private key of a certificate it is sealed to, and for the BitLocker volumes
+# inside an image, the passwords or recovery passwords and the bytes of the startup
+# key (.BEK) files that open them. Held by this process only and never written
+# anywhere (not the case, the config, a log or a report), so a new session asks for
+# them again.
 _PASSWORDS: dict[str, str | bytes] = {}
+_PRIVATE_KEYS: dict[str, bytes] = {}
+_BITLOCKER: dict[str, tuple[list, list]] = {}      # (secrets, startup keys)
 _PASSWORD_LOCK = threading.Lock()
+# What the vendored reader says a BitLocker volume can be opened with, of the kinds
+# a person can give: anything else (a TPM, a clear key already used) is not asked for.
+_BITLOCKER_ASKABLE = ("password", "recovery password", "startup key")
 
 
 def _password_key(path) -> str:
@@ -160,36 +176,116 @@ def _password_key(path) -> str:
 
 
 def needs_password(path) -> bool:
-    """True when ``path`` is an image that opens only with its password: an encrypted
-    Apple disk image, or an E01, s01 or raw set FTK Imager encrypted with AD
-    encryption (a raw set from any of its numbered files)."""
+    """True when ``path`` is an image that opens with its password: an encrypted
+    Apple disk image, an E01, s01 or raw set FTK Imager encrypted with AD
+    encryption (a raw set from any of its numbered files), or an AFF encrypted with a
+    passphrase. One that a password or a certificate's private key opens counts."""
     return qnxprobe.needs_password(os.fspath(path))
+
+
+def needs_private_key(path) -> bool:
+    """True when ``path`` is an image sealed only to a certificate (an encrypted AFF,
+    an Apple disk image or an AD-encrypted set), which opens with that certificate's
+    RSA private key rather than a password."""
+    return qnxprobe.needs_private_key(os.fspath(path))
 
 
 def encrypted_kind(path) -> str:
     """What an encrypted image is, as a sentence names it."""
-    if qnxprobe.acquisition_format(os.fspath(path)) == "AD_ENCRYPTED":
+    kind = qnxprobe.acquisition_format(os.fspath(path))
+    if kind == "AD_ENCRYPTED":
         return "an acquisition FTK Imager encrypted with AD encryption"
+    if kind in ("AFF", "AFD"):
+        return "an encrypted AFF"
     return "an encrypted Apple disk image"
 
 
 def is_unlocked(path) -> bool:
-    """True when this session holds a password that opens the image at ``path``."""
+    """True when this session holds a password or a private key that opens the
+    image at ``path``."""
+    key = _password_key(path)
     with _PASSWORD_LOCK:
-        return _password_key(path) in _PASSWORDS
+        return key in _PASSWORDS or key in _PRIVATE_KEYS
 
 
-def unlock_image(path, password) -> bool:
-    """Open the encrypted image at ``path`` with ``password``. When it opens, keep the
-    password for this session and return True; when it does not, return False. Anything
-    else that stops the image opening (a damaged header, no cipher package) is raised."""
+def unlock_image(path, password=None, private_key: bytes | None = None) -> bool:
+    """Open the encrypted image at ``path`` with ``password``, or with ``private_key``,
+    the bytes of an unencrypted PEM or DER RSA key file, for one sealed to a
+    certificate. When it opens, keep what opened it for this session and return True;
+    when it does not, return False. Anything else that stops the image opening (a
+    damaged header, a key file that is not an RSA key, no cipher package) is raised."""
     try:
-        ewfprobe.open_ewf(os.fspath(path), password=password).close()
+        ewfprobe.open_ewf(os.fspath(path), password=password,
+                          private_key=private_key).close()
     except ewfprobe.EwfPasswordError:
         return False
     with _PASSWORD_LOCK:
-        _PASSWORDS[_password_key(path)] = password
+        if password is not None:
+            _PASSWORDS[_password_key(path)] = password
+        if private_key is not None:
+            _PRIVATE_KEYS[_password_key(path)] = bytes(private_key)
     return True
+
+
+def _bitlocker_held(path) -> tuple[list, list]:
+    """The BitLocker secrets and startup keys this session holds for ``path``."""
+    with _PASSWORD_LOCK:
+        secrets, keys = _BITLOCKER.get(_password_key(path), ([], []))
+        return list(secrets), list(keys)
+
+
+def _askable(bitlocker) -> bool:
+    """True when a BitLocker volume still locked could open with a password, a
+    recovery password or a startup key, so asking for one could help."""
+    return (bitlocker.fvek is None and not bitlocker.why
+            and any(kind in _BITLOCKER_ASKABLE for kind, _id in bitlocker.protectors))
+
+
+def bitlocker_volumes(path) -> list[dict]:
+    """The BitLocker volumes in the image at ``path``, tried with what this session
+    holds for them: each one's ``label``, ``open``, ``askable`` (still locked, and a
+    password, recovery password or startup key could open it) and the reader's
+    ``note`` on why it is locked. Empty for an image with no BitLocker volume, and for
+    an encrypted image not open this session (``unlock_image`` comes first)."""
+    try:
+        img = _open_image_file(path, bitlocker=False)
+    except (ArchiveUnavailable, *_IMAGE_ERRORS):
+        return []
+    try:
+        secrets, keys = _bitlocker_held(path)
+        _fh, found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
+                                               secrets, keys)
+        return [{"label": b.label, "open": b.fvek is not None, "askable": _askable(b),
+                 "note": "" if b.fvek is not None else b.locked_note()} for b in found]
+    finally:
+        img.close()
+
+
+def unlock_bitlocker(path, secret=None, startup_key: bytes | None = None) -> bool:
+    """Try ``secret`` (a password or recovery password) or ``startup_key`` (the bytes
+    of a .BEK file) on each BitLocker volume in the image at ``path`` that is still
+    locked this session. When it opens at least one, keep it for this session and
+    return True; when it opens none, return False."""
+    img = _open_image_file(path, bitlocker=False)
+    try:
+        secrets, keys = _bitlocker_held(path)
+        _fh, found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
+                                               secrets, keys)
+        tried_secret = [secret] if secret else []
+        tried_key = [bytes(startup_key)] if startup_key else []
+        opened = False
+        for bitlocker in found:
+            if bitlocker.fvek is None and bitlocker.unlock(tried_secret, tried_key):
+                opened = True
+    finally:
+        img.close()
+    if opened:
+        with _PASSWORD_LOCK:
+            held = _BITLOCKER.setdefault(_password_key(path), ([], []))
+            held[0].extend(tried_secret)
+            held[1].extend(tried_key)
+        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+    return opened
 
 
 # ---- format ----------------------------------------------------------------
@@ -466,6 +562,9 @@ def source_record(case, name: str) -> dict | None:
         # describes past the end of the file, which is what a split set missing
         # its later segments, or a truncated image, looks like
         "volumes_short": case.db.get_meta(f"{key}:volumes_short") or "",
+        # the byte offsets of the BitLocker volumes the walk read through, so a later
+        # session can say their keys are needed again
+        "bitlocker": case.db.get_meta(f"{key}:bitlocker") or "",
     }
 
 
@@ -481,24 +580,33 @@ def source_status(case) -> list[dict]:
     """One entry per archive source: the record, how many files it registered
     (``files``, split into ``walked`` and ``carved``), and ``status``: ``ok``,
     ``changed`` (a file is at the recorded path but its size or date differ),
-    ``missing``, or ``locked`` (an encrypted image whose password has not been given
-    this session; ``unlock_image`` takes it)."""
+    ``missing``, or ``locked`` (an encrypted image whose password or private key has
+    not been given this session, which ``unlock_image`` takes, or an image holding
+    BitLocker volumes that no key given this session opens, which ``unlock_bitlocker``
+    takes). ``locked_by`` says which: ``password``, ``private key`` or ``BitLocker``."""
     out = []
     for name, rec in sorted(source_records(case).items()):
+        locked_by = ""
         try:
             size, mtime = _source_stat(rec["path"])
         except OSError:
             status = "missing"
         else:
             same = size == rec["size"] and abs(mtime - rec["mtime"]) < 2
-            locked = same and needs_password(rec["path"]) and not is_unlocked(rec["path"])
+            if same and not is_unlocked(rec["path"]):
+                locked_by = ("password" if needs_password(rec["path"]) else
+                             "private key" if needs_private_key(rec["path"]) else "")
+            if same and not locked_by and rec["bitlocker"] and not any(
+                    _bitlocker_held(rec["path"])):
+                locked_by = "BitLocker"
+            locked = bool(locked_by)
             # A segmented acquisition is several files and the record names one, so a
             # later segment going missing leaves the first one untouched and the source
             # reading fine until something asks for bytes that live in the missing part.
             if same and not locked and rec["format"] in IMAGE_FORMATS and rec["segments"]:
                 try:
                     same = _segment_count(rec["path"], rec["format"]) >= rec["segments"]
-                except _IMAGE_ERRORS:
+                except (ArchiveUnavailable, *_IMAGE_ERRORS):
                     same = False                     # the set can no longer be joined
             status = "locked" if locked else "ok" if same else "changed"
         # Split the count by how each row was actually recovered, rather than
@@ -510,7 +618,8 @@ def source_status(case) -> list[dict]:
         by_origin = {r["origin"] or "": r["n"] for r in case.db.conn.execute(
             "SELECT origin, COUNT(*) n FROM files WHERE source=? GROUP BY origin",
             (name,))}
-        out.append({**rec, "status": status, "files": sum(by_origin.values()),
+        out.append({**rec, "status": status, "locked_by": locked_by if status == "locked"
+                    else "", "files": sum(by_origin.values()),
                     "walked": by_origin.get("walk", 0),
                     "carved": by_origin.get("carve", 0),
                     "recovered": by_origin.get("deleted", 0)})
@@ -644,21 +753,38 @@ class _RawImage:
         return False
 
 
-def _open_image_file(path):
+def _open_image_file(path, *, bitlocker: bool = True):
     """A fresh handle on a disk image: ewfprobe for an acquisition (an E01, s01 or
-    Ex01 set, an AFF, or an AFD), and ``_RawImage`` for a raw image or a numbered
-    split set."""
+    Ex01 set, an AFF, AFD or AFM, an AFF4, an Apple disk image, or a virtual machine
+    disk), and ``_RawImage`` for a raw image or a numbered split set. An encrypted one
+    opens with what this session holds for it, and ``ImagePasswordNeeded`` is raised
+    when that is nothing. The BitLocker volumes the session holds keys for are read
+    decrypted, in place, unless ``bitlocker`` is False."""
     path = os.fspath(path)
     kind = qnxprobe.acquisition_format(path)
-    if kind in qnxprobe.PASSWORD_FORMATS:
+    if kind in _ACQUISITIONS:
         with _PASSWORD_LOCK:
             password = _PASSWORDS.get(_password_key(path))
-        if password is None:
-            raise ImagePasswordNeeded(path)
-        return ewfprobe.open_ewf(path, password=password)
-    if kind in _ACQUISITIONS:
-        return ewfprobe.open_ewf(path)
-    return _RawImage(path)
+            private_key = _PRIVATE_KEYS.get(_password_key(path))
+        try:
+            img = ewfprobe.open_ewf(path, password=password, private_key=private_key)
+        except ewfprobe.EwfPasswordError:
+            raise ImagePasswordNeeded(path) from None
+        # An AD-encrypted set can hold logical evidence rather than a disk, and
+        # which only shows once it is decrypted.
+        inner = {"EWF-L01": "L01", "AD1": "AD1"}.get(getattr(img, "format", None))
+        if inner:
+            img.close()
+            raise ArchiveUnavailable(_logical_refusal(Path(path).name, inner,
+                                                      encrypted=True))
+    else:
+        img = _RawImage(path)
+    if bitlocker:
+        secrets, keys = _bitlocker_held(path)
+        if secrets or keys:
+            img, _found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
+                                                    secrets, keys)
+    return img
 
 
 def _segment_count(path: str, fmt: str) -> int:
@@ -675,28 +801,38 @@ def _segment_count(path: str, fmt: str) -> int:
         if kind == "UDIF":
             # one file, or a .dmg and the .dmgpart files hdiutil segment wrote
             return len(ewfprobe.udif_segments(path))
-        if kind in ("AFF", "SPARSEIMAGE", "SPARSEBUNDLE"):
+        if kind in ("SPARSEIMAGE", "SPARSEBUNDLE"):
             return 1
-        if kind in qnxprobe.PASSWORD_FORMATS:
-            # each file of an encrypted set is decrypted to find the others, so ask
-            # the image already open rather than read the set again
-            return len(_open_image(path)[0].paths)
-        return len(ewfprobe.ewf_segments(path))
+        if kind in ("EWF", "EWF2"):
+            return len(ewfprobe.ewf_segments(path))
+        # Each file of an encrypted set is decrypted to find the others, an AFM
+        # names its raw files, an AFF4 its stripes and a virtual disk its extents
+        # and parents only once read, so ask the image already open rather than
+        # read the set again.
+        return len(_open_image(path)[0].paths)
     return len(qnxprobe.split_segments(path)) or 1
+
+
+def _logical_refusal(name: str, kind: str, encrypted: bool = False) -> str:
+    """Why logical evidence is not ingested, and how to reach its files."""
+    maker = "FTK Imager" if kind == "AD1" else "EnCase"
+    locked = ", encrypted with AD encryption" if encrypted else ""
+    export = "" if kind == "Lx01" else f" (for an {kind}, ewfprobe.py export --entry)"
+    return (f"{name} is {maker} logical evidence ({kind}){locked}: it holds copies of "
+            f"files, not a disk, and GLEAPP reads disk images. Export its "
+            f"files{export} and add them as a folder.")
 
 
 def container_refusal(path) -> str | None:
     """Why GLEAPP does not ingest ``path``, when it is a container GLEAPP recognises
-    and cannot read, else None: EnCase logical evidence (L01 or Lx01), which holds
-    copies of files rather than a disk. Registered as a single file it would yield
-    nothing without saying why. An encrypted Apple disk image or AD-encrypted
-    acquisition is read, with its password (``unlock_image``)."""
+    and cannot read, else None: EnCase logical evidence (L01 or Lx01) or FTK Imager's
+    (AD1), which holds copies of files rather than a disk. Registered as a single
+    file it would yield nothing without saying why. An encrypted acquisition is read,
+    with what opens it (``unlock_image``); one that turns out to hold logical evidence
+    is refused when it is opened."""
     kind = qnxprobe.acquisition_format(os.fspath(path))
-    name = Path(path).name
-    if kind in ("L01", "Lx01"):
-        return (f"{name} is EnCase logical evidence ({kind}): it holds copies of files, "
-                "not a disk, and GLEAPP reads disk images. Export its files (for an "
-                "L01, ewfprobe.py export --entry) and add them as a folder.")
+    if kind in ("L01", "Lx01", "AD1"):
+        return _logical_refusal(Path(path).name, kind)
     return None
 
 
@@ -1194,7 +1330,8 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
     if fmt is None:
         raise ValueError(container_refusal(path)
                          or f"{path.name} is not a zip, a tar, a disk acquisition "
-                            "(E01, s01, Ex01, AFF, DMG) or a raw disk image")
+                            "(E01, s01, Ex01, AFF, AFF4, DMG), a virtual machine disk "
+                            "(VHD, VHDX, VMDK, QCOW) or a raw disk image")
     if fmt == FORMAT_ZIP:
         return _ingest_zip(case, src, path, count=count, progress=progress)
     if fmt in IMAGE_FORMATS:
@@ -1330,6 +1467,15 @@ def _prime_catalog(walker) -> None:
         pass
 
 
+def _not_walked(img, base: int, size) -> str:
+    """Why a volume the reader can name has no walker: the locked BitLocker volume's
+    own reason and what would open it, or that the reader walks no such filesystem."""
+    bitlocker = qnxprobe.BitLocker.open(img, base, size)
+    if bitlocker is not None:
+        return bitlocker.locked_note()
+    return "the vendored reader names this filesystem and does not walk it"
+
+
 def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                        progress) -> int:
     """Register the media in the filesystems an acquisition holds, by walking them.
@@ -1374,10 +1520,19 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                  for lb, b, s, m in qnxprobe.short_regions(
                      media_size, [(lb or f"lba{b // ss}", b, s)
                                   for b, s, _k, lb in vols if s])]
+        # Where the BitLocker volumes this walk read through are, so a later session
+        # knows their keys are needed again before a row read from one can be read
+        # back. An opened one reads as the filesystem inside it; one left locked is
+        # not walked, and is recorded below as a volume not read.
+        bitlocker = sorted(int(b.base) for b in getattr(img, "bitlocker_found", ())
+                           if b.fvek is not None)
         for base, size, fskind, label in vols:
             vol = label or f"lba{base // ss}"
             try:
                 walker = qnxprobe.walker_for(fskind, img, base, size)
+                if walker is None:
+                    refused.append(f"{vol} ({fskind}): {_not_walked(img, base, size)}")
+                    continue
                 _prime_catalog(walker)
                 # FAT and exFAT keep a wall-clock reading and no zone, so their
                 # mtime comes back as zero and the readings arrive here instead,
@@ -1474,6 +1629,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         [{"base": b, "size": s, "kind": k, "label": lb} for b, s, k, lb in vols]))
     if refused:
         case.db.set_meta(f"{key}:volumes_not_read", json.dumps(refused))
+    if bitlocker:
+        case.db.set_meta(f"{key}:bitlocker", json.dumps(bitlocker))
     if short:
         case.db.set_meta(f"{key}:volumes_short", json.dumps(short))
     _finish(case, src, image_path, fmt=fmt, root="", stage=stage,

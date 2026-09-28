@@ -251,13 +251,17 @@ would be a table GLEAPP does not own.
 A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered segments
 beside it) or as a raw image: one file (`.img`, `.dd`, `.raw`, any name) or a numbered
 split set (`.001`, `.002`, ...; FTK Imager's default). `archive_format` recognizes an
-acquisition ewfprobe reads (E01 and SMART s01, Ex01, AFF, any .aff of an AFD folder,
-and an Apple .dmg, with any .dmgpart segments, .sparseimage or .sparsebundle folder)
-by `qnxprobe.acquisition_format`, which reads the signature, before the zip and tar
+acquisition ewfprobe reads (E01 and SMART s01, Ex01, AFF, any .aff of an AFD folder, an
+AFM, an AFF4, an Apple .dmg, with any .dmgpart segments, .sparseimage or .sparsebundle
+folder, and a VHD, VHDX, VMDK or QCOW virtual machine disk) by
+`qnxprobe.acquisition_format`, which reads the signature, before the zip and tar
 checks, so the extension is never consulted and the first segment of a set is enough to
-open the whole thing. EnCase logical evidence (L01, Lx01) holds files, not a disk:
+open the whole thing. An AFF4 is a ZIP container, so a kind missing from
+`_ACQUISITIONS` is not merely unread: before AFF4 was listed it registered as a zip.
+Logical evidence (EnCase's L01 and Lx01, FTK Imager's AD1) holds files, not a disk:
 `case.parse_source_spec` refuses it with that reason rather than registering one opaque
-file. A raw image has no signature, so it is recognized by what it holds: qnxprobe's own
+file, and `_open_image_file` refuses an AD-encrypted set that decrypts to one. A raw
+image has no signature, so it is recognized by what it holds: qnxprobe's own
 partition parsers and `identify_fs` find a volume it can name (`_is_raw_image`). That
 check runs BEFORE the tar check, and `_is_tar` now requires at least one member, for a
 measured reason: a raw HFS+ or ext volume begins with 1,024 zero bytes, and 512 zero bytes
@@ -266,20 +270,37 @@ nothing, zero rows and no error, while every other raw image registered as one "
 file. Measured on a 268 MB HFS+ volume and its E01 wrap: 4 media walked from the E01, 0
 from the raw file.
 
-**An encrypted image opens with its password, and the password is never stored.**
+**An encrypted image opens with what locked it, and that is never stored.**
 `DMG_ENCRYPTED` (an encrypted `.dmg`, split `.dmg`, `.sparseimage` or sparse bundle,
 AES-128 or AES-256) and `AD_ENCRYPTED` (an E01, SMART or raw set FTK Imager encrypted
 with AD encryption, recognised from its first file or any numbered file of a raw set)
-are in `_ACQUISITIONS`, and `qnxprobe.PASSWORD_FORMATS` names both. `archive.unlock_image` checks a password
-against the image and keeps it in `_PASSWORDS`, keyed by the image's path, for the life of
-the process; `_open_image_file` raises `ImagePasswordNeeded` without one, and
-`source_status` reports such a source as `locked`. The web ingest answers 409 with the
-images it cannot open and the page posts again with the passwords; `POST
-/api/source/unlock` serves a later session. The command line takes `--password-file` or
-`--password-env`, or asks at a terminal, never an argument value. Decryption needs
-`pycryptodomex` (imported as `Cryptodome`), declared in the requirements; the vendored
-ewfprobe also accepts `pycryptodome`. `tests/test_encrypted_sources.py` checks the
-password never reaches the case folder or the settings folder.
+are in `_ACQUISITIONS`, and so is an encrypted AFF, which reads as `AFF`: the kind does
+not say whether an image is encrypted, so `_open_image_file` opens every acquisition
+with whatever this session holds for its path, and ewfprobe's refusal is what raises
+`ImagePasswordNeeded`. Opening only the two `PASSWORD_FORMATS` with a password, as
+`_open_image_file` did before, left a passphrase AFF taking its password and then
+failing to open (measured with qnxprobe 1.49 vendored). An
+image sealed to a certificate opens with that certificate's RSA private key instead
+(`needs_private_key`). `archive.unlock_image` checks a password or a key file's bytes
+against the image and keeps it in `_PASSWORDS` or `_PRIVATE_KEYS`, keyed by the image's
+path, for the life of the process, and `source_status` reports a source neither opens
+as `locked`, with `locked_by` saying which. BitLocker volumes inside an image are
+opened with `unlock_bitlocker` (a password, recovery password or startup key's bytes,
+in `_BITLOCKER`), and `_open_image_file` then reads them decrypted in place through
+qnxprobe's `BitLockerImage`. A volume left locked is not walked and is recorded in
+`volumes_not_read` with the reader's reason; the byte offsets of the ones a walk read
+through go in the source's `bitlocker` meta, so a later session reports the source
+`locked` by BitLocker until a key is given again. The web ingest answers 409 with what
+it cannot open (`needs`: `password`, `private key` or `bitlocker`) and the page posts
+again with it, a key file by its path on this machine, or with the image in
+`bitlocker_skip` to leave its BitLocker volumes locked; `POST /api/source/unlock`
+serves a later session. The command line takes `--password-file`, `--password-env`,
+`--private-key` and `--bitlocker-key`, or asks at a terminal, never an argument value.
+Decryption needs `pycryptodomex` (imported as `Cryptodome`), declared in the
+requirements; the vendored ewfprobe also accepts `pycryptodome`.
+`tests/test_encrypted_sources.py` checks the password never reaches the case folder or
+the settings folder, and `tests/test_image_keys_and_containers.py` that a private key
+never reaches the case folder.
 
 Either form holds filesystems, so its files have names, paths and dates of their own, and reading
 them is what a walk is for. `_volumes()` finds every volume through qnxprobe's own GPT and

@@ -62,9 +62,12 @@ case.</p>
           of extraction archives</em>. A compressed tar is always copied out.</li>
           <li><strong>Disk image</strong>: an <code>.E01</code>, <code>.s01</code> or
           <code>.Ex01</code> with its segments beside it, an <code>.aff</code> (for an
-          AFD folder, any <code>.aff</code> in it), an Apple <code>.dmg</code> (with any
+          AFD folder, any <code>.aff</code> in it), an <code>.afm</code> with its raw
+          files, an <code>.aff4</code>, an Apple <code>.dmg</code> (with any
           <code>.dmgpart</code> files beside it), <code>.sparseimage</code> or
-          <code>.sparsebundle</code> folder, or a raw image (one <code>.img</code>/<code>.dd</code>, or any
+          <code>.sparsebundle</code> folder, a virtual machine disk (<code>.vhd</code>,
+          <code>.vhdx</code>, <code>.vmdk</code>, <code>.qcow2</code>, with any parent or
+          extent files beside it), or a raw image (one <code>.img</code>/<code>.dd</code>, or any
           segment of a split set such as <code>.001</code>, <code>.002</code>). Raw
           images are identified by content, not extension. A split set with a missing
           segment is refused and the gap is named.
@@ -78,14 +81,20 @@ case.</p>
               media (filesystem records and carving)</em> to run it during ingest, or
               run it later from the Source panel.</li>
               <li>An encrypted Apple disk image or sparse bundle (AES-128 or AES-256,
-              as <code>hdiutil</code> writes them), or an E01, SMART or raw set FTK
-              Imager encrypted with AD encryption (point at its first file, or at any
-              numbered file of a raw set), is read with its password. When you click <strong>Create case &amp; ingest</strong>, GLEAPP
-              asks for it in a password field, and asks again if it does not open the
-              image. The password is held in memory until GLEAPP is closed and is never
-              written into the case, your settings, a log or a report. In a later
-              session the Source banner shows the image as encrypted with an
-              <strong>Unlock&hellip;</strong> button. Until it is unlocked, a case that
+              as <code>hdiutil</code> writes them), an AFF encrypted with a passphrase,
+              or an E01, SMART or raw set FTK Imager encrypted with AD encryption (point
+              at its first file, or at any numbered file of a raw set), is read with its
+              password. One sealed to a certificate instead opens with that
+              certificate's RSA private key: give the path of the key file, unencrypted,
+              as PEM or DER. A BitLocker volume inside an image opens with its password,
+              its recovery password or its startup key (<code>.BEK</code> file); one you
+              leave locked is not walked and is named in the Source panel. When you
+              click <strong>Create case &amp; ingest</strong>, GLEAPP asks for what is
+              missing, in a password field or a key file field, and asks again if it
+              does not open the image. What you give is held in memory until GLEAPP is
+              closed and is never written into the case, your settings, a log or a
+              report. In a later session the Source banner shows the image as locked
+              with an <strong>Unlock&hellip;</strong> button. Until it is unlocked, a case that
               reads the image in place keeps its thumbnails, hashes and categories, and
               full-size viewing and export wait for it.</li>
             </ul>
@@ -149,15 +158,21 @@ your hash stash and imported basemaps live in your user data folders instead
 looks for a folder named <code>case</code> in the current directory. The <code>maps</code>
 commands, <code>hashset --global</code> and <code>stash</code> (except
 <code>stash --add</code>) do not use a case.</p>
-<p>An encrypted image (an Apple disk image, or an FTK Imager AD-encrypted set) takes
-its password from
+<p>An encrypted image (an Apple disk image, an encrypted AFF, or an FTK Imager
+AD-encrypted set) takes its password from
 <code>--password-file &lt;file&gt;</code> (the first line of the file) or
 <code>--password-env &lt;variable&gt;</code> (the name of an environment variable holding
 it), both written before the subcommand like <code>-c</code>. Either can be given more
 than once when a case holds several encrypted images; each password is tried on each
-image. With neither, GLEAPP asks at the terminal, and without a terminal it stops and says
-which option to use. The password is held for that one command, so <code>process</code>,
-<code>report</code>, <code>source stage</code> and <code>source carve</code> need it again.
+image, and on each BitLocker volume inside one, as a password and as a recovery password.
+An image sealed to a certificate takes the certificate's private key with
+<code>--private-key &lt;file&gt;</code>, and a BitLocker volume its startup key with
+<code>--bitlocker-key &lt;file&gt;</code>; both can be repeated. With none of these,
+GLEAPP asks at the terminal, and without a terminal it stops and says which option to
+use, except for a BitLocker volume: that one is left locked, named in a warning and not
+walked, and the rest of the image is read. What you give is held for that one command, so
+<code>process</code>, <code>report</code>, <code>source stage</code> and
+<code>source carve</code> need it again.
 A password is never taken on the command line itself, where other users of the machine
 and the shell history could read it.</p>
 
@@ -1266,13 +1281,20 @@ already give you.</p>
     <code>.dmgpart</code> files beside it; a missing one is refused and named. For a
     sparse bundle, point at the <code>.sparsebundle</code> folder: on a Mac the file
     dialog lists it as one item, and on Windows or Linux use the folder button.</li>
+  <li><strong>AFM and AFF4</strong>: point at the <code>.afm</code>, with its raw files
+    beside it, or at the <code>.aff4</code> (for a striped AFF4, at any of its files).</li>
+  <li><strong>Virtual machine disk</strong>: point at the <code>.vhd</code>,
+    <code>.vhdx</code>, <code>.vmdk</code> or <code>.qcow2</code>. A differencing disk
+    needs its parent beside it, and a VMDK descriptor its extents.</li>
   <li><strong>Raw image</strong>: one file, or any segment of a numbered split set.</li>
-  <li><strong>Encrypted Apple disk image or sparse bundle, or an E01, SMART or raw set
-    FTK Imager encrypted with AD encryption</strong>: point at it as above; GLEAPP asks
-    for its password (&sect;1).</li>
-  <li><strong>Not accepted</strong>: VHD and VMDK, and EnCase logical evidence
-    (<code>.L01</code>), which holds copies of files rather than a disk and is refused
-    with that reason.</li>
+  <li><strong>Encrypted Apple disk image or sparse bundle, encrypted AFF, or an E01,
+    SMART or raw set FTK Imager encrypted with AD encryption</strong>: point at it as
+    above; GLEAPP asks for its password, or for one sealed to a certificate, its private
+    key (&sect;1). A BitLocker volume inside an image is asked about the same way.</li>
+  <li><strong>Not accepted</strong>: logical evidence, EnCase's (<code>.L01</code>) and
+    FTK Imager's (<code>.ad1</code>), which holds copies of files rather than a disk and
+    is refused with that reason, including an AD-encrypted set that turns out to hold
+    one.</li>
   <li>An acquisition is recognized by its own signature and a raw image by what it holds,
     so the extension does not matter.</li>
 </ul>
@@ -1633,9 +1655,10 @@ verbatim under <code>gleapp/vendor/</code> (each with its own license file,
     FAT32, exFAT and more), finds the partitions, and joins the numbered segments
     of a split raw image.</li>
   <li><strong><a href="https://github.com/abrignoni/ewfprobe">ewfprobe</a></strong>
-    presents an EnCase/EWF (<code>.E01</code>) acquisition as a seekable disk
-    image, reconstructing chunks across segments; qnxprobe imports it to open
-    an <code>.E01</code>.</li>
+    presents an EnCase/EWF (<code>.E01</code>, <code>.s01</code>), EWF2
+    (<code>.Ex01</code>), AFF, AFM, AFF4 or Apple disk image acquisition, or a virtual
+    machine disk, as a seekable disk image, reconstructing chunks across segments;
+    qnxprobe imports it to open one.</li>
   <li><strong><a href="https://github.com/abrignoni/mediacarve">mediacarve</a></strong>
     scans unallocated (or whole-disk) space for image/video signatures when a
     carve is requested.</li>
