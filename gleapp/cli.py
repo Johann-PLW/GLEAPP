@@ -38,49 +38,143 @@ def _cli_passwords(args: argparse.Namespace) -> list:
     return out
 
 
-def _unlock(paths, args: argparse.Namespace) -> list[str]:
-    """Open each encrypted image among ``paths`` for this session, with the
-    first password the command line gives that opens it or, when it gives none, one
-    asked for at a terminal (three tries). Returns the names still locked. The
-    passwords are held in memory only (archive.unlock_image)."""
+def _cli_key_files(args: argparse.Namespace, attr: str, what: str) -> list[bytes]:
+    """The bytes of each file the repeatable option ``attr`` names."""
+    out = []
+    for path in getattr(args, attr, None) or []:
+        out.append(_read_key_file(path, what))
+    return out
+
+
+def _read_key_file(path: str, what: str) -> bytes:
+    try:
+        return Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f"the {what} file could not be read: "
+                         f"{exc.strerror or exc}") from None
+
+
+def _ask_three_times(attempt, wrong: str) -> bool:
+    """``attempt()`` up to three times at a terminal, until it answers True."""
+    for _ in range(3):
+        try:
+            if attempt():
+                return True
+        except ValueError as exc:               # a key file that cannot be read
+            print(exc, file=sys.stderr)
+            continue
+        print(wrong, file=sys.stderr)
+    return False
+
+
+def _unlock(paths, args: argparse.Namespace, bitlocker=None) -> tuple[list[str], list[str]]:
+    """Open each encrypted image among ``paths`` for this session with the first
+    password or private key the command line gives that opens it or, when it gives
+    none, one asked for at a terminal (three tries); then the BitLocker volumes in
+    each image (only in those of ``bitlocker``, when it is given), with the passwords,
+    recovery passwords and startup keys the command line gives or, at a terminal, one
+    asked for per volume. Returns the images still locked and the BitLocker volumes
+    still locked, each as a sentence. What opens them is held in memory only
+    (archive.unlock_image, archive.unlock_bitlocker)."""
     from . import archive
 
-    def opens(path, password) -> bool:
+    def opens(path, password=None, private_key=None) -> bool:
         try:
-            return archive.unlock_image(path, password)
+            return archive.unlock_image(path, password, private_key)
         except (OSError, archive.ewfprobe.EwfError) as exc:   # not a password matter
             raise ValueError(f"{Path(path).name} could not be opened: {exc}") from None
 
     given = _cli_passwords(args)
-    left = []
+    keys = _cli_key_files(args, "private_key", "private key")
+    starts = _cli_key_files(args, "bitlocker_key", "startup key")
+    tty = sys.stdin is not None and sys.stdin.isatty()
+    images, volumes = [], []
     for path in paths:
-        if not archive.needs_password(path) or archive.is_unlocked(path):
-            continue
         name = Path(path).name
-        if any(opens(path, pw) for pw in given):
-            continue
-        if not given and sys.stdin is not None and sys.stdin.isatty():
-            for _ in range(3):
-                if opens(path, getpass.getpass(f"Password for {name}: ")):
-                    break
-                print("That password does not open the image.", file=sys.stderr)
-            else:
-                left.append(name)
-            continue
-        left.append(name)
-    return left
+        if not archive.is_unlocked(path) and archive.needs_password(path):
+            ok = (any(opens(path, pw) for pw in given)
+                  or any(opens(path, private_key=k) for k in keys))
+            if not ok and not (given or keys) and tty:
+                ok = _ask_three_times(
+                    lambda p=path, n=name: opens(p, getpass.getpass(f"Password for {n}: ")),
+                    "That password does not open the image.")
+            if not ok:
+                images.append(f"{name} is {archive.encrypted_kind(path)} and opens only "
+                              f"with its password; give it with --password-file or "
+                              f"--password-env, or run at a terminal to be asked for it")
+                continue
+        elif not archive.is_unlocked(path) and archive.needs_private_key(path):
+            ok = any(opens(path, private_key=k) for k in keys)
+            if not ok and not keys and tty:
+                ok = _ask_three_times(
+                    lambda p=path, n=name: opens(p, private_key=_read_key_file(
+                        input(f"Private key file for {n}: ").strip(), "private key")),
+                    "That key does not open the image.")
+            if not ok:
+                images.append(f"{name} is {archive.encrypted_kind(path)} sealed to a "
+                              f"certificate and opens only with its private key; give it "
+                              f"with --private-key")
+                continue
+        if bitlocker is None or path in bitlocker:
+            volumes += _unlock_bitlocker(path, given, starts, tty)
+    return images, volumes
+
+
+def _unlock_bitlocker(path, given, starts, tty: bool) -> list[str]:
+    """Open the BitLocker volumes in the image at ``path`` with ``given`` passwords
+    and recovery passwords and ``starts`` startup keys, and at a terminal ask for each
+    volume they leave locked. Returns a sentence for each volume still locked that a
+    password, recovery password or startup key could have opened."""
+    from . import archive
+
+    name = Path(path).name
+    if archive.archive_format(path) not in archive.IMAGE_FORMATS:
+        return []
+    if not any(v["askable"] for v in archive.bitlocker_volumes(path)):
+        return []
+    for secret in given:
+        archive.unlock_bitlocker(path, secret=secret)
+    for key in starts:
+        archive.unlock_bitlocker(path, startup_key=key)
+    skipped: set[str] = set()
+    while tty:
+        pending = [v for v in archive.bitlocker_volumes(path)
+                   if v["askable"] and v["label"] not in skipped]
+        if not pending:
+            break
+        label = pending[0]["label"]
+
+        def attempt(lb=label) -> bool:
+            secret = getpass.getpass(f"BitLocker password or recovery password for {lb} "
+                                     f"of {name} (leave empty to give a startup key file): ")
+            if secret:
+                return archive.unlock_bitlocker(path, secret=secret)
+            key = input("Startup key (.BEK) file (leave empty to leave it locked): ").strip()
+            if not key:
+                skipped.add(lb)
+                return True
+            return archive.unlock_bitlocker(path, startup_key=_read_key_file(key, "startup key"))
+        if not _ask_three_times(attempt, "That does not open it."):
+            skipped.add(label)
+    return [f"{v['label']} of {name} stays locked and its files are not read "
+            f"({v['note']}). Give its password or recovery password with --password-file "
+            f"or --password-env, or its startup key with --bitlocker-key"
+            for v in archive.bitlocker_volumes(path) if v["askable"]]
 
 
 def _unlock_case(case, args: argparse.Namespace) -> None:
-    """Open the case's encrypted image sources for this session, and say which are
-    left locked: files read from them fail until their password is given."""
+    """Open the case's encrypted image sources, and the BitLocker volumes the ingest
+    found in them, for this session, and say which are left locked: files read from
+    them fail until what opens them is given."""
     from . import archive
 
-    left = _unlock([r["path"] for r in archive.source_records(case).values()], args)
-    for name in left:
-        print(f"warning: {name} is an encrypted disk image and its password was not "
-              f"given (--password-file, --password-env, or at a terminal); files read "
-              f"from it will fail", file=sys.stderr)
+    recs = list(archive.source_records(case).values())
+    images, volumes = _unlock([r["path"] for r in recs], args,
+                              bitlocker={r["path"] for r in recs if r["bitlocker"]})
+    for line in images:
+        print(f"warning: {line}; files read from it will fail", file=sys.stderr)
+    for line in volumes:
+        print(f"warning: {line}", file=sys.stderr)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -103,12 +197,12 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         for s in sources:
             if s.kind == "archive":
                 s.stage = True
-    left = _unlock([s.path for s in sources], args)
-    if left:
+    images, volumes = _unlock([s.path for s in sources], args)
+    if images:
         case.close()
-        raise ValueError(f"{', '.join(left)}: an encrypted disk image opens only with its "
-                         f"password; give it with --password-file or --password-env, or "
-                         f"run at a terminal to be asked for it")
+        raise ValueError("; ".join(images))
+    for line in volumes:
+        print(f"warning: {line}", file=sys.stderr)
     _unlock_case(case, args)
     _p(f"Sources ({len(sources)}):")
     for s in sources:
@@ -555,14 +649,23 @@ def build_parser() -> argparse.ArgumentParser:
                     help="examiner name for the audit log (default: keep the case's "
                          "stored name, or 'examiner' for a brand-new case)")
     ap.add_argument("--password-file", metavar="FILE", action="append", default=[],
-                    help="for an encrypted image source (an Apple disk image or an FTK "
-                         "Imager AD-encrypted set): a password, the first "
-                         "line of FILE. Repeatable; each image opens with the first that "
-                         "opens it. Held in memory for this run only")
+                    help="for an encrypted image source (an Apple disk image, an "
+                         "encrypted AFF or an FTK Imager AD-encrypted set) or a BitLocker "
+                         "volume in one: a password (for BitLocker, a password or recovery "
+                         "password), the first line of FILE. Repeatable; each opens with "
+                         "the first that opens it. Held in memory for this run only")
     ap.add_argument("--password-env", metavar="NAME", action="append", default=[],
-                    help="for an encrypted image source: a password, from the "
-                         "environment variable NAME. Repeatable. Without either, GLEAPP "
-                         "asks at a terminal")
+                    help="for an encrypted image source or a BitLocker volume in one: a "
+                         "password, from the environment variable NAME. Repeatable. "
+                         "Without either, GLEAPP asks at a terminal")
+    ap.add_argument("--private-key", metavar="FILE", action="append", default=[],
+                    help="for an image source sealed to a certificate (an encrypted AFF, "
+                         "an Apple disk image or an FTK Imager AD-encrypted set): the "
+                         "certificate's RSA private key, unencrypted, as PEM or DER. "
+                         "Repeatable. Held in memory for this run only")
+    ap.add_argument("--bitlocker-key", metavar="FILE", action="append", default=[],
+                    help="for a BitLocker volume in an image source: its startup key "
+                         "(.BEK) file. Repeatable. Held in memory for this run only")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="create an empty case")
@@ -577,13 +680,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--cluster-threshold", type=int, default=8)
 
     s = sub.add_parser("ingest", help="ingest a folder, a full-file-system extraction archive "
-                                      "(zip or tar), a disk image (E01, s01, Ex01, AFF, DMG, raw, "
-                                      "or a split raw "
+                                      "(zip or tar), a disk image (E01, s01, Ex01, AFF, AFF4, "
+                                      "DMG, VHD, VHDX, VMDK, QCOW, raw, or a split raw "
                                       "set), or a JSON spec, then process")
     s.add_argument("source", help="folder path, extraction .zip or .tar "
                                  "(plain, .gz, .bz2 or .xz), a disk image (.E01, .s01, "
-                                 ".Ex01, .aff, .dmg with any .dmgpart files, "
-                                 ".sparseimage, a .sparsebundle folder, a raw "
+                                 ".Ex01, .aff, .afm, .aff4, .dmg with any .dmgpart files, "
+                                 ".sparseimage, a .sparsebundle folder, a .vhd, .vhdx, "
+                                 ".vmdk or .qcow2, a raw "
                                  ".img/.dd, or any segment of a numbered split set), "
                                  "OR .json spec file")
     s.add_argument("--no-process", action="store_true", help="register files only")
