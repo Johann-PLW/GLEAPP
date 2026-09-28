@@ -1511,7 +1511,10 @@ records its SHA-256.
 ### Quick start
 
 1. **Make a map file (once).** Do this on any computer with internet, not the
-   review workstation.
+   review workstation. The simplest way is **GLEAPP Map Downloader**
+   (<https://github.com/abrignoni/GLEAPP-MapDownloader>): download it for your
+   system, pick an area and a detail level in its window, and click
+   **Download**. It needs nothing else installed. Or use Protomaps' own tool:
    - Download the `pmtiles` tool from
      <https://github.com/protomaps/go-pmtiles/releases> and unzip it (on
      Windows you get `pmtiles.exe`). Nothing to install.
@@ -1577,7 +1580,12 @@ it was, which is not the same claim as where the device was.
 Two formats are accepted:
 
 - **`.pmtiles`** (recommended): a region cut from a Protomaps planet build.
-  Install the `pmtiles` tool from
+  GLEAPP Map Downloader
+  (<https://github.com/abrignoni/GLEAPP-MapDownloader>) cuts one from a window,
+  reading only the tiles inside the area, with builds for Windows, macOS and
+  Linux. Both it and the `pmtiles` tool read Protomaps' server, which sees the
+  area you ask for, so run them on a computer that is not the review
+  workstation. To use the `pmtiles` tool instead, install it from
   <https://github.com/protomaps/go-pmtiles/releases>, pick a recent build
   (`https://build.protomaps.com/YYYYMMDD.pmtiles`), and cut your area with a
   bounding box in decimal degrees, west, south, east, north:

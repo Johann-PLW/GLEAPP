@@ -1511,7 +1511,10 @@ pass <code>--no-maps</code> to <code>gleapp report</code>, to leave them out.</p
 <h3>Quick start</h3>
 <ol>
   <li><strong>Make a map file (once).</strong> Do this on any computer with internet, not the
-    review workstation.
+    review workstation. The simplest way is <strong>GLEAPP Map Downloader</strong>
+    (<code>github.com/abrignoni/GLEAPP-MapDownloader</code>): download it for your system,
+    pick an area and a detail level in its window, and click <strong>Download</strong>. It
+    needs nothing else installed. Or use Protomaps' own tool:
     <ul>
       <li>Download the <code>pmtiles</code> tool from
         <code>github.com/protomaps/go-pmtiles/releases</code> and unzip it (on Windows you get
@@ -1551,7 +1554,11 @@ continent is far larger.</p>
 </ul>
 
 <p>Two file types are accepted. A <strong>.pmtiles</strong> region is the recommended
-one: install the <code>pmtiles</code> tool from
+one. GLEAPP Map Downloader (<code>github.com/abrignoni/GLEAPP-MapDownloader</code>) cuts
+one from a window, reading only the tiles inside the area, with builds for Windows, macOS
+and Linux. Both it and the <code>pmtiles</code> tool read Protomaps' server, which sees
+the area you ask for, so run them on a computer that is not the review workstation. To use
+the <code>pmtiles</code> tool instead, install it from
 <code>github.com/protomaps/go-pmtiles/releases</code>, pick a recent Protomaps planet
 build (<code>https://build.protomaps.com/YYYYMMDD.pmtiles</code>), and cut your area
 with a bounding box, west, south, east, north in decimal degrees, for example

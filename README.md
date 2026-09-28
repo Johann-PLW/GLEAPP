@@ -491,7 +491,15 @@ file once, GLEAPP serves it from the local server, the gallery draws the map wit
 MapLibre, and the report names the file (and its SHA-256) the maps were drawn on, so a
 reader can obtain the same file and see the same map years later.
 
-**Get a region as a `.pmtiles` file** (recommended). Install the `pmtiles` tool from
+**Get a region as a `.pmtiles` file** (recommended). The simplest way is
+[GLEAPP Map Downloader](https://github.com/abrignoni/GLEAPP-MapDownloader), a separate
+program for the computer with internet access, not the review workstation: pick an area
+and a detail level in its window and it saves the `.pmtiles` file, reading only the tiles
+inside the area from the Protomaps planet build. Its releases carry builds for Windows,
+macOS and Linux that need nothing else installed. Like the `pmtiles` tool below, it reads
+Protomaps' server, which sees the area you ask for.
+
+Or cut the file yourself with Protomaps' own tool. Install `pmtiles` from
 https://github.com/protomaps/go-pmtiles/releases, pick a recent Protomaps planet build
 (`https://build.protomaps.com/YYYYMMDD.pmtiles`, a date within the last few days), and cut
 your area with a bounding box in decimal degrees, west, south, east, north:
