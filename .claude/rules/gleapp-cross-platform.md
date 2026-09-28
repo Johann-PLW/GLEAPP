@@ -355,7 +355,8 @@ So a walk is the primary read and a carve reaches the deleted material a walk ca
 **A carve can be asked for later, and can be scoped.** `gleapp source carve <name>` carves
 a source already ingested, so the choice is not stuck at ingest time; the pipeline runs over
 just the new rows because `process()` takes a where clause. `--unallocated-only` reads only
-the space a volume reports free, which is where the 2.1% of hits in the table above live.
+the space no volume claims, which is where the 2.1% of hits in the table above live: the
+runs each volume reports free, plus everything outside the volumes the reader can name.
 
 **A volume that cannot report its free space drops the scope for the WHOLE image.** Reading
 part of a disk while reporting the carve finished is worse than reading all of it, so
@@ -378,14 +379,34 @@ naming each image rather than its size, because two of these are the same size t
 
 | image | volumes | image size | scoped to | runs |
 | --- | --- | ---: | ---: | ---: |
-| jfalkenunencrypted | fat32, ntfs, ntfs | 238.5 GiB | 177.1 GiB (74%) | 3,500 |
-| sadamsdrive00 | fat32, ntfs, ntfs | 232.9 GiB | 176.3 GiB (76%) | 1,372 |
-| PC-MUS-001 | fat32, ntfs, ntfs | 238.5 GiB | 149.1 GiB (63%) | 3,025 |
-| macOS-BigSur | fat32, apfs | 80.0 GiB | 57.3 GiB (72%) | 5,163 |
+| jfalkenunencrypted | fat32, ntfs, ntfs | 238.5 GiB | 177.1 GiB (74%) | 3,502 |
+| sadamsdrive00 | fat32, ntfs, ntfs | 232.9 GiB | 176.3 GiB (76%) | 1,374 |
+| PC-MUS-001 | fat32, ntfs, ntfs | 238.5 GiB | 149.1 GiB (63%) | 3,028 |
+| macOS-BigSur | fat32, apfs | 80.0 GiB | 57.4 GiB (72%) | 5,164 |
 | AF-Case2 | ntfs | 40.0 GiB | 24.2 GiB (60%) | 888 |
 | NTFS-HiddenFiles | ntfs | 0.1 GiB | 0.1 GiB (92%) | 2 |
 
-None of them falls back now. Each took under a second.
+None of them falls back now. Each took under a second. (Re-measured 2026-09-28, after the
+space outside the volumes joined the scope.)
+
+**Space outside every volume is unclaimed too, and an image with no volume is unclaimed from
+end to end.** Until 2026-09-28 `_unclaimed_space()` returned only the runs the volumes
+reported free. So an image holding no volume the reader can name (a disk with no filesystem,
+media stored raw, an encrypted image of either) returned an empty list, which means "every
+byte is claimed", and the gallery's carve, always scoped, read nothing: 0 of the 3 pictures
+in a volume-less test E01, while an unscoped carve found all 3, and the case recorded "0
+runs of space no volume claims, 0 bytes". A partitioned disk lost the same space at a
+smaller scale: the partition table and alignment before the first partition, the Microsoft
+reserved partition (no filesystem the reader recognises), and the tail past the last
+partition were never in the scope. Now all of it is in the scope whatever its size, and an
+image with no volume scopes to itself, `[(0, media_size)]`, not None: None still means a
+volume could not answer. On the images above that adds between 19 and 24 MiB to each Windows
+disk and 128 MiB of unpartitioned space to macOS-BigSur, and nothing to the two
+partitionless NTFS images. It is not always empty: carving only that space on the nine corpus
+disks that have any found 79 PNGs in PC-MUS-001's Microsoft reserved partition, which holds
+11.6 MB of non-zero data, and none elsewhere; Szechuan's reserved partition (17.8 MB) and
+the space before one USB drive's partition (31 MB) also hold non-zero data, with no media
+signature in it.
 
 **Name the image, never its size.** `jfalkenunencrypted` and `PC-MUS-001` are both exactly
 256,060,514,304 bytes, so "the 238.5 GiB Windows acquisition" names two different disks whose

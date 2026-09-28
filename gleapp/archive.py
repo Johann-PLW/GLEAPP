@@ -1644,9 +1644,30 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
 def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     """[(offset, length)] of the space no volume claims, or None if it cannot say.
 
+    Two kinds of space are unclaimed. Inside a volume, it is the runs the volume
+    reports free. Outside every volume the reader can name, it is all of it: the
+    partition table and alignment at the start of a partitioned disk, a partition
+    whose filesystem the reader does not recognise (a Microsoft reserved partition
+    holds none), and space past the last partition. So an image with no
+    volume the reader can name at all, a disk with no filesystem or media stored
+    raw, is claimed by nothing and is unclaimed from end to end. That is an answer
+    and it is the whole image; it is not None, which is kept for a volume that
+    could not answer. Until 2026-09-28 only the free runs were returned, so such an
+    image scoped to an empty list and the gallery's carve of it read nothing, while
+    an unscoped carve of the same image found every picture in it. Measured on the
+    corpus acquisitions, the space outside the named volumes is between 17 and 24
+    MiB on each of five Windows disks (most of it the 16 MiB Microsoft reserved
+    partition), 128 MiB of unpartitioned space at the end of macOS-BigSur, 30 MiB
+    and 16 KiB before the partition on two USB drives, and none on the
+    partitionless AF-Case2 and NTFS-HiddenFiles.
+
     An empty list is an answer and not a silence: every volume reported, and
     between them they claim the whole disk, so an unallocated-only carve has
-    nothing to read. Only None means scan everything.
+    nothing to read. Only None means scan everything. Runs that touch are joined.
+    ``min_bytes`` is handed to each walker, which drops a free run shorter than
+    that; space outside the volumes is kept whatever its size, because it is a
+    handful of runs per disk and an image with no volume can itself be small (the
+    encrypted fixture in the tests is 20 KiB and holds two photos).
 
     A signature found inside an allocated run belongs to a file the directory
     tree already names, so scanning only what a volume reports free is both far
@@ -1663,8 +1684,10 @@ def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     so none of the six acquisitions measured falls back: they scope to between
     60% and 92% of themselves, each in under a second.
     """
+    media_size = img.media_size
     out = []
-    for base, size, fskind, _label in vols:
+    covered = 0                                      # the end of the claimed space so far
+    for base, size, fskind, _label in sorted(vols, key=lambda v: v[0]):
         try:
             walker = qnxprobe.walker_for(fskind, img, base, size)
             runs = walker.free_extents(min_bytes=min_bytes)
@@ -1673,7 +1696,20 @@ def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
         except Exception:                            # pylint: disable=broad-except
             return None                              # nor can it be read at all
         out.extend(runs)
-    return sorted(out)
+        if base > covered:
+            out.append((covered, base - covered))    # no volume claims this
+        # a partitionless volume records no size and claims the rest of the image
+        covered = max(covered, media_size if size is None else min(base + size, media_size))
+    if covered < media_size:
+        out.append((covered, media_size - covered))
+    joined: list[tuple[int, int]] = []
+    for at, n in sorted(out):
+        if joined and at <= joined[-1][0] + joined[-1][1]:
+            prev_at, prev_n = joined[-1]
+            joined[-1] = (prev_at, max(prev_n, at + n - prev_at))
+        else:
+            joined.append((at, n))
+    return joined
 
 
 def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
@@ -1718,11 +1754,14 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
         if spans is not None:
             scanned = sum(n for _o, n in spans)
             case.db.set_meta(f"{_meta_key(src.name)}:carve_scope",
-                             f"{len(spans)} runs of space no volume claims, "
-                             f"{scanned:,} bytes")
+                             f"{len(spans)} run{'' if len(spans) == 1 else 's'} of "
+                             f"space no volume claims, {scanned:,} bytes")
+        # A scoped carve can be the whole image (one with no volume the reader can
+        # name), so it reports progress the way an unscoped one does.
         hits = (mediacarve.carve(img, progress=scan_progress) if spans is None
                 else itertools.chain.from_iterable(
-                    mediacarve.carve(img, start=at, end=at + n) for at, n in spans))
+                    mediacarve.carve(img, start=at, end=at + n, progress=scan_progress)
+                    for at, n in spans))
         for hit in hits:
             if max_bytes and hit.length > max_bytes:
                 tally.skipped_size += 1
@@ -2297,8 +2336,10 @@ def carve_source(case, name: str, *, unallocated_only: bool = False,
     By default the scan covers the whole disk, so on a used drive most of what it
     returns is that embedded material rather than deleted files: on PC-MUS-001,
     384,386 hits of which 8,154 lay in unclaimed space. Pass
-    ``unallocated_only`` and the scan is scoped to the runs each volume reports
-    free, which is the part a walk cannot reach; the bytes covered are recorded
+    ``unallocated_only`` and the scan is scoped to the space no volume claims: the
+    runs each volume reports free and any space outside every volume the reader can
+    name, which is the part a walk cannot reach (all of an image with no such
+    volume); the bytes covered are recorded
     in the case meta so a report can say what was read. The scope is all or
     nothing on purpose: ``_unclaimed_space`` returns None as soon as one volume
     cannot report its free space, and None means scan everything, because

@@ -1425,6 +1425,10 @@ partition on a dual-boot disk is enough to do that.
 - A whole-image carve is not a mistake, it is a different question. It is the
   only way to reach a resident NTFS file as a carved hit, and on a used disk
   most of what it adds is resources embedded inside live files.
+- Space outside every volume the reader can name is unclaimed too: the start of
+  a partitioned disk, a partition whose filesystem it does not recognise, and
+  whatever lies past the last partition. An image with no volume it can name at
+  all is scanned from end to end.
 - If any volume cannot report its free space, the whole image is scanned. If
   every volume reports and together they claim every byte, nothing is carved:
   a full disk does the smallest scan rather than the largest.

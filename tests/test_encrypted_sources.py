@@ -100,6 +100,14 @@ def test_the_web_ingest_asks_for_the_password_and_then_reads_the_image(tmp_path)
     settings = [p for p in Path(os.environ["GLEAPP_CONFIG_DIR"]).rglob("*") if p.is_file()]
     for p in case_files + settings:
         assert PASSWORD.encode() not in p.read_bytes(), f"the password reached {p.name}"
+    # carve=true runs the scoped carve, and a disk with no filesystem is claimed by
+    # nothing, so both photos come back. Until 2026-09-28 this found none.
+    case = open_case(tmp_path / "c")
+    try:
+        carved = [r for r in case.db.iter_files() if r["origin"] == "carve"]
+    finally:
+        case.close()
+    assert len(carved) == 2, f"the web carve of a volume-less image found {len(carved)}"
 
 
 def test_a_locked_source_is_unlocked_through_the_api(tmp_path, monkeypatch):

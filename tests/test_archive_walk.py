@@ -499,6 +499,116 @@ def test_a_volume_that_raises_does_not_silently_narrow_the_scan(monkeypatch, tmp
     img.close()
     case.close()
 
+
+def _noise(seed: int, fmt: str) -> bytes:
+    """A picture of random pixels. A solid colour compresses below the carver's
+    floor (a 32 by 24 PNG of one colour is 109 bytes, under its 128-byte floor for
+    PNG), and a picture the carver skips proves nothing about a scope."""
+    import numpy as np                                 # pylint: disable=import-outside-toplevel
+    from PIL import Image                              # pylint: disable=import-outside-toplevel
+    buf = io.BytesIO()
+    pixels = np.random.default_rng(seed).integers(0, 256, (72, 96, 3), dtype="uint8")
+    Image.fromarray(pixels).save(buf, fmt)
+    return buf.getvalue()
+
+
+def _no_volume_image(tmp_path):
+    """An acquisition of a disk with no filesystem on it: three pictures on block
+    boundaries in raw space, the shape of a raw media dump."""
+    raw = bytearray(64 * 1024)
+    for pic in (_noise(1, "JPEG"), _noise(2, "PNG"), _noise(3, "JPEG")):
+        raw += pic
+        raw += bytes(-len(raw) % 4096) + bytes(64 * 1024)
+    folder = tmp_path / "ev"
+    folder.mkdir(parents=True, exist_ok=True)
+    return Path(write_ewf(folder, "acq", bytes(raw))[0])
+
+
+def test_an_image_with_no_volume_is_unclaimed_from_end_to_end(tmp_path):
+    """No volume the reader can name means nothing claims any of the disk.
+
+    That is an answer, the whole image, and not None: None says a volume could
+    not answer, and here there is no volume to ask. Until 2026-09-28 the answer
+    was an empty list, the reply for a disk whose volumes claim every byte.
+    """
+    img = archive.ewfprobe.open_ewf(str(_no_volume_image(tmp_path)))
+    try:
+        vols = archive._volumes(img)                 # pylint: disable=protected-access
+        assert vols == [], f"the fixture must hold no volume the reader can name; {vols}"
+        got = archive._unclaimed_space(img, vols)    # pylint: disable=protected-access
+        assert got == [(0, img.media_size)], got
+    finally:
+        img.close()
+
+
+def test_the_gallery_carve_of_an_image_with_no_volume_finds_its_pictures(tmp_path):
+    """The carve the web launcher runs (unallocated_only) on a disk with no volume.
+
+    Every byte is unclaimed, so the scoped carve must find what an unscoped one
+    finds, and the case must record that the whole image was read. It found
+    nothing until 2026-09-28 and recorded "0 runs ... 0 bytes".
+    """
+    image = _no_volume_image(tmp_path)
+    key = archive._meta_key("acq.E01")               # pylint: disable=protected-access
+    case, _ = _ingest(tmp_path, image, name="novol")
+    scoped = archive.carve_source(case, "acq.E01", unallocated_only=True)
+    scope = case.db.get_meta(f"{key}:carve_scope")
+    size = int(case.db.get_meta(f"{key}:media_size"))
+    case.close()
+    case2, _ = _ingest(tmp_path, image, name="novol2")
+    whole = archive.carve_source(case2, "acq.E01")
+    case2.close()
+    assert whole == 3, f"the unscoped carve must find the three pictures; found {whole}"
+    assert scoped == whole, (
+        f"nothing claims any of this image, so the scoped carve must read all of it; "
+        f"scoped {scoped}, whole {whole}")
+    assert scope == f"1 run of space no volume claims, {size:,} bytes", scope
+
+
+def test_space_outside_the_volume_is_carved_and_the_volume_keeps_its_scope(tmp_path):
+    """A partition table leaves space no volume claims: the start of the disk
+    before the first partition and whatever lies past the last one. A picture in
+    either is in space no filesystem accounts for, so an unallocated-only carve
+    must read it, while the live pictures inside the volume stay outside the
+    scope because the walk already named them.
+    """
+    head_pic, tail_pic = _noise(4, "JPEG"), _noise(5, "PNG")
+    vol = build_fat32([("HOLIDAY", "JPG", _noise(6, "JPEG"), (2023, 6, 1, 12, 30, 0)),
+                       ("SCREEN", "PNG", _noise(7, "PNG"), (2022, 1, 2, 3, 4, 6))])
+    vol += bytes(-len(vol) % 512)
+    start = 2048                                     # the usual 1 MiB alignment
+    disk = bytearray(start * 512)
+    disk[446:462] = bytes([0x00, 0, 0, 0, 0x0C, 0, 0, 0]) + start.to_bytes(4, "little") \
+        + (len(vol) // 512).to_bytes(4, "little")
+    disk[510:512] = b"\x55\xaa"
+    disk[64 * 1024:64 * 1024 + len(head_pic)] = head_pic
+    disk += vol
+    tail = bytearray(128 * 1024)
+    tail[4096:4096 + len(tail_pic)] = tail_pic
+    disk += tail
+    folder = tmp_path / "ev"
+    folder.mkdir(parents=True, exist_ok=True)
+    image = Path(write_ewf(folder, "acq", bytes(disk))[0])
+
+    img = archive.ewfprobe.open_ewf(str(image))
+    try:
+        vols = archive._volumes(img)                 # pylint: disable=protected-access
+        assert [(b, k) for b, _s, k, _l in vols] == [(start * 512, "fat32")], vols
+    finally:
+        img.close()
+    case, _ = _ingest(tmp_path, image, name="gaps", stage=True)
+    try:
+        archive.carve_source(case, "acq.E01", unallocated_only=True)
+        got = {hashlib.sha256(Path(r["path"]).read_bytes()).hexdigest()
+               for r in case.db.iter_files() if r["origin"] == "carve"}
+    finally:
+        archive.close_zips()
+        case.close()
+    want = {hashlib.sha256(p).hexdigest() for p in (head_pic, tail_pic)}
+    assert got == want, (
+        "the scoped carve must find the pictures outside the volume and only those; "
+        f"missing {len(want - got)}, extra {len(got - want)}")
+
 # ---- the readings a FAT volume stores ---------------------------------------
 
 def test_a_walked_fat_file_carries_the_reading_the_volume_stored(tmp_path):
