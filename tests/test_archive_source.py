@@ -99,7 +99,12 @@ def test_media_is_staged_registered_and_processed_when_staged(tmp_path):
         assert Path(r["path"]).is_file() and c.staged_dir in Path(r["path"]).parents
         assert "Dump/data/media/0/DCIM/Photo_A.jpg" in rows            # both case variants survive
         assert rows["Dump/data/data/com.app/cache/noext"]["kind"] == "image"   # sniffed from the archive
-        assert len(rows[DEEP]["path"]) < 200 and Path(rows[DEEP]["path"]).is_file()
+        # Measure only what GLEAPP names, <slug>/<2 hex>/<sha1>.<ext>; the tmp prefix before
+        # staged_dir is the machine's. Slug at most 60, then 2 and 40, extension at most 9.
+        deep = Path(rows[DEEP]["path"])
+        rel = deep.relative_to(c.staged_dir)
+        assert len(rel.parts) == 3 and len(rel.as_posix()) <= 60 + 1 + 2 + 1 + 40 + 9, rel
+        assert deep.is_file()
         assert Path(rows["Dump/odd/ic\x01on.png"]["path"]).is_file()  # the control char never hit disk
         assert rows["Dump/stamped/ts.png"]["mtime"] == EXT_TS
         dos = rows["Dump/data/media/0/DCIM/photo_a.jpg"]["mtime"]
