@@ -1424,7 +1424,9 @@ $("#flagNewGo").onclick = async () => {
   const name = $("#flagNewInput").value.trim();
   if (!name) return;
   const fl = await save("/api/flags", { name });
-  state.flags = (state.flags || []).concat([fl]);
+  // reload from the server, as the flag editor does: it also rebuilds the left pane's
+  // Flag filter, which otherwise lacked the new flag until the case was reopened
+  await refreshFlags();
   $("#flagNewInput").value = "";
   renderFlagList();
   await save("/api/flag", { ids: flagDlgIds, add: [fl.code] });
