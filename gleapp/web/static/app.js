@@ -3880,32 +3880,49 @@ function showLauncher(ctx) {
 /* The launcher follows a background import started from its ☰ Menu (a map, reference
    data, a Project VIC hash set). The bars that follow those jobs belong to the case view,
    behind the launcher, so nothing on this screen showed one was running, and Create case
-   was refused with "a job is already running". It shows on the ingest screen's own bar,
-   and Create waits for it. */
+   was refused with "a job is already running". A bar pinned to the bottom of the window
+   follows it, above any dialog (the Maps dialog stays open while a map imports), and
+   Create waits for it. */
 let launcherJobTimer = null, launcherJobShown = false;
+function launcherJobBar() {
+  let bar = $("#launchJob");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "launchJob";
+    bar.innerHTML = '<span class="txt"></span><div class="track"><i></i></div><span class="pct"></span>';
+    document.body.appendChild(bar);
+  }
+  return bar;
+}
 async function watchLauncherJob() {
   clearTimeout(launcherJobTimer);
-  if ($("#launcher").style.display === "none") return;
+  const bar = launcherJobBar();
+  if ($("#launcher").style.display === "none") { bar.style.display = "none"; return; }
   let j = null;
   try { j = await api("/api/job"); } catch (e) { /* try again below */ }
   if (j && j.running) {
     const pct = j.total ? Math.floor(100 * j.done / j.total) : null;
-    const bar = $("#jobProg");
-    bar.style.display = "block";
+    bar.classList.remove("err");
     bar.classList.toggle("indeterminate", pct === null);
     bar.querySelector("i").style.width = pct === null ? "" : pct + "%";
-    $("#jobMsg").textContent = (j.message || "Working…") + (pct === null ? "" : ` · ${pct}%`)
-      + " · Create case waits until this finishes";
+    bar.querySelector(".txt").textContent = j.message || "Working…";
+    bar.querySelector(".pct").textContent = (pct === null ? "" : `${pct}% · `)
+      + "Create case waits until this finishes";
+    bar.style.display = "flex";
     $("#createGo").disabled = true;
     launcherJobShown = true;
     launcherJobTimer = setTimeout(watchLauncherJob, 800);
   } else if (launcherJobShown) {
     launcherJobShown = false;
-    $("#jobProg").style.display = "none";
-    $("#jobProg").classList.remove("indeterminate");
-    $("#jobMsg").textContent = j && j.stage === "error"
-      ? `Failed: ${j.error || "unknown error"}` : (j && j.message) || "";
+    const failed = j && j.stage === "error";
+    bar.classList.remove("indeterminate");
+    bar.classList.toggle("err", failed);
+    bar.querySelector("i").style.width = failed ? "0" : "100%";
+    bar.querySelector(".txt").textContent = failed
+      ? `Failed: ${j.error || "unknown error"}` : (j && j.message) || "Finished";
+    bar.querySelector(".pct").textContent = "";
     $("#createGo").disabled = false;
+    launcherJobTimer = setTimeout(() => { bar.style.display = "none"; }, failed ? 10000 : 5000);
   } else if (!j) {
     launcherJobTimer = setTimeout(watchLauncherJob, 1500);
   }
