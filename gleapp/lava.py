@@ -193,6 +193,7 @@ class _Writer:
         self.media_dir = self.dest / "media"
         self.html_media_dir = self.dest / "_HTML" / "media"
         self.logs_dir = self.dest / "_HTML" / "_Script_Logs"
+        self._clear_previous_media()
         for folder in (self.media_dir, self.html_media_dir, self.logs_dir):
             folder.mkdir(parents=True, exist_ok=True)
         db_path = self.dest / LAVA_DB_NAME
@@ -216,6 +217,29 @@ class _Writer:
         self.basemap: tuple[str, str] = ("", "")
         self.map_cache: dict = {}
         self.map_record: dict | None = None
+
+    def _clear_previous_media(self) -> None:
+        """Empty the media folders an earlier export into this folder left.
+
+        The database is rebuilt on every export, so media kept from an earlier one
+        is media the new report does not list: a narrower re-export would hand over
+        every file the wider one held. Only a folder that already holds a LAVA
+        export is cleared; media folders beside no LAVA database or manifest are
+        someone else's, and the export refuses rather than delete them.
+        """
+        present = [d for d in (self.media_dir, self.html_media_dir)
+                   if d.is_dir() and any(d.iterdir())]
+        if not present:
+            return
+        if not ((self.dest / LAVA_DB_NAME).exists()
+                or (self.dest / LAVA_JSON_NAME).exists()):
+            raise FileExistsError(
+                f"{self.dest.name} has a media folder but no LAVA export in it; "
+                "choose an empty folder")
+        for folder in present:
+            # a hardlinked copy is a second name for the evidence file, and
+            # removing it removes only that name
+            shutil.rmtree(folder)
 
     # -- LAVA's own tables -------------------------------------------------
     def _create_lava_tables(self) -> None:
@@ -1612,8 +1636,8 @@ def _write_screen_output(case: Case, dest: Path, *, writer: "_Writer",
     summary = [
         ("Files in the case", f'{stats["total"]:,}'),
         ("Files in this report", f"{len(rows):,}"),
-        ("Media files written", f"{writer.media_written:,}"),
-        ("Media bytes written", f"{writer.media_bytes:,}"),
+        ("Media files in the report", f"{writer.media_written:,}"),
+        ("Media bytes in the report", f"{writer.media_bytes:,}"),
         ("HEIC/HEIF placed as JPEG", f"{writer.heif_converted:,}"),
         ("Media column holds",
          "GLEAPP thumbnails" if thumbs else "the files themselves"),
