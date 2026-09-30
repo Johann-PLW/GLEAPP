@@ -1,7 +1,8 @@
 """Find similar, similar content (content.py): the bundled model, index and ranking.
 
 The index is filled with hand-made vectors so the ranking, the cutoff and the combined
-Find similar reply can be checked exactly without running the model.
+Find similar reply can be checked exactly without running the model. One test does run
+it, to check that the installed OpenCV reads the bundled model and computes it right.
 """
 
 from __future__ import annotations
@@ -62,6 +63,38 @@ def test_the_bundled_model_is_the_recorded_file():
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     assert h.hexdigest() == content.MODEL_SHA256
+
+
+# The stored vector (content._vector) for _fixed_input(), as ONNX Runtime 1.30.0 computes
+# it, at the eight values most sensitive to the model's cubic Resize. The same model with
+# that Resize made linear moves each of them by 2.9e-3 or more; OpenCV 5.0.0 matched all
+# 768 values to within 2.5e-7 (measured 2026-09-30, macOS arm64).
+_ORT_VALUES = {123: -0.038436, 155: -0.0320167, 213: 0.0668716, 269: -0.0570372,
+               405: -0.0018007, 558: 0.037907, 592: -0.0569444, 648: -0.0375552}
+
+
+def _fixed_input() -> np.ndarray:
+    yy, xx = np.mgrid[0:224, 0:224].astype(np.float64)
+    chans = [np.sin(xx / 9.0 + c) * np.cos(yy / 13.0 - c) + (xx - yy) / 224.0 for c in range(3)]
+    return np.stack(chans)[None].astype(np.float32)
+
+
+def test_the_installed_opencv_reads_the_bundled_model():
+    """Every OpenCV 4.x imports fine and cannot read this model: 4.8 stops on its Expand
+    node and 4.9 through 4.14 on its cubic Resize. On such an install every content pass
+    failed, so requirements.txt asks for 5.0. The values are checked against ONNX Runtime
+    so an OpenCV that reads the model but computes it differently fails too."""
+    import cv2
+    try:
+        net = cv2.dnn.readNetFromONNX(str(content.model_path()))  # pylint: disable=no-member
+    except cv2.error as exc:  # pylint: disable=catching-non-exception,no-member
+        version = cv2.__version__  # pylint: disable=no-member
+        pytest.fail(f"OpenCV {version} cannot read the content model, which needs "
+                    f"OpenCV 5.0 or newer: {' '.join(str(exc).split())[-120:]}")
+    net.setInput(_fixed_input())
+    v = content._vector(net.forward()[0].astype(np.float32))  # pylint: disable=protected-access
+    assert v.shape == (content.DIM,)
+    assert {i: float(v[i]) for i in _ORT_VALUES} == pytest.approx(_ORT_VALUES, abs=1e-4)
 
 
 def test_build_needs_the_model(tmp_path, monkeypatch):

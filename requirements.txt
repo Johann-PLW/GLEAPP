@@ -34,8 +34,11 @@ py7zr>=0.21
 # and manylinux x86_64 and aarch64 (PyPI, 2026-09-27).
 pycryptodomex>=3.20
 imagehash>=4.3
-numpy>=1.24
-opencv-python-headless>=4.8
+# OpenCV 4.x cannot load the bundled content model (gleapp/models/dinov2_small.onnx):
+# 4.8 stops on its Expand node and 4.9 through 4.14 on its cubic Resize. 5.0 loads it
+# and requires numpy 2. Measured 2026-09-30, see tests/test_content.py.
+numpy>=2.0
+opencv-python-headless>=5.0
 Flask>=3.0
 tzdata>=2024.1
 # The native desktop window (gleappGUI.py, `gleapp desktop`). The package is

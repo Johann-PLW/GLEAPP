@@ -77,6 +77,18 @@ if __name__ == "__main__":
                 print(f"selfcheck failed importing {name}", file=sys.stderr)
                 sys.exit(1)
             print(f"ok {name}")
+        # Importing cv2 does not prove it can read the Find similar content model:
+        # every OpenCV 4.x imports fine and then fails on the model's Expand or cubic
+        # Resize node, so a build on 4.x would fail every content pass.
+        try:
+            import cv2
+            from gleapp import content
+            cv2.dnn.readNetFromONNX(str(content.model_path()))  # pylint: disable=no-member
+        except Exception:  # pylint: disable=broad-exception-caught
+            traceback.print_exc()
+            print("selfcheck failed loading the content model", file=sys.stderr)
+            sys.exit(1)
+        print("ok content model")
         print("selfcheck passed")
         sys.exit(0)
     if wants_web(sys.argv[1:]):

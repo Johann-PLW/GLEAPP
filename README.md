@@ -188,7 +188,7 @@ FFmpeg pinned to its LGPL build:
 
 ```bash
 micromamba create -p ./build-env -c conda-forge python=3.12 \
-    "py-opencv=*=headless*" "ffmpeg=*=lgpl*"
+    "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*"
 grep -v opencv requirements.txt > /tmp/req.txt
 ./build-env/bin/python -m pip install -r /tmp/req.txt -e .[build]
 ```

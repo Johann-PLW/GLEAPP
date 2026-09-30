@@ -637,6 +637,33 @@ fault the process kept a core busy and did not end on SIGTERM; it needed SIGKILL
 met it: it installs the newest pillow-heif and runs the suite on Linux and Windows.
 `tools/make_test_media.py` imports pillow-heif before `cv2`, the order that works.
 
+## OpenCV 4.x cannot read the content model, so the floor is 5.0
+
+`gleapp/models/dinov2_small.onnx`, Find similar's content model (shipped 2026-09-25), is read
+through OpenCV's DNN module, and no OpenCV 4.x can read it. Measured 2026-09-30 on macOS
+arm64 with every `opencv-python-headless` release the old `>=4.8` floor admitted: 4.8.0.74
+through 4.8.1.78 stop on the model's Expand node, 4.9.0.80 through 4.14.0.94 on its cubic
+Resize ("'interpolation' is cubic"), and only 5.0.0.93 reads it, matching ONNX Runtime 1.30.0
+to within 2.5e-7 on all 768 values of the stored vector. On 4.x `import cv2` still works and
+`content.model_ready()` only checks that the file exists, so every content pass raised, the
+Find similar indexer thread ended on it, and in the app the only sign was the error in
+the Find similar section.
+The one test that ran the model, `test_a_source_added_while_the_indexer_works_is_indexed_too`,
+did so incidentally and failed as a 60 s wait for 6 indexed files that stopped at 3. The 4.x
+line is still released (4.14.0.94 came out after 5.0.0.93, with the same wheel platforms), and
+pip left an installed 4.x alone because it met `>=4.8`.
+
+`requirements.txt` and `pyproject.toml` now ask for `opencv-python-headless>=5.0` and
+`numpy>=2.0`, which 5.0 requires. The macOS builds take OpenCV from conda-forge, where the
+requirements do not reach, so both workflows (and the README recipe) ask for
+`py-opencv[version='>=5',build='headless*']`: a micromamba dry run on osx-arm64 with `libopencv<5`
+forced resolved 4.13.0 under the old spec and refused under the new one, and without it both specs
+resolved 5.0.0 with the LGPL FFmpeg on osx-arm64 and osx-64. Two guards:
+`test_the_installed_opencv_reads_the_bundled_model` loads the model and checks eight values of
+the stored vector against ONNX Runtime (the same model with its Resize made linear moves each by
+2.9e-3 or more and fails it), and `--selfcheck` loads the model, so a frozen build on 4.x fails
+its smoke test.
+
 ## The suite stops every app's background threads when a test ends
 
 `create_app` starts a snapshot loop, and an ingest through the app starts the Find
