@@ -1490,7 +1490,7 @@ async function showMeta(id) {
     ["File path", dispPath],
     ["Also under", alsoAt],
     ["App cache", f.cache_desc || ""],
-    ["Stored at", f.orig_path && f.path && f.path !== f.orig_path ? f.path : ""],
+    ["Stored at", f.orig_path && f.path && f.path !== f.orig_path && f.path_exists ? f.path : ""],
     ["MIME", f.mime || ""],
     ["VIC MediaID", f.media_id ?? ""],
     ["VIC record MediaID", vic.mediaId],

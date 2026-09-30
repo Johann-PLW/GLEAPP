@@ -1391,6 +1391,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         if not r:
             abort(404)
         d = row_dict(r)
+        # a zip read in place records where a staged copy would go, never made
+        d["path_exists"] = bool(r["path"]) and Path(r["path"]).exists()
         d["keyframes"] = [
             {"id": k["id"], "ts": k["ts"], "thumb": f"/thumb/{k['thumb']}"}
             for k in case.db.keyframes_for(file_id)
