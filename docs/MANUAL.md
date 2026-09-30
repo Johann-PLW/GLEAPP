@@ -853,8 +853,8 @@ download it from NIST and import it once.
 **In short:** download from NIST, import the full release once, merge a
 delta each quarter, then **Re-check** a case.
 
-**1. Download from NIST.** <https://www.nsrl.nist.gov/> → **Download RDS**
-(files at <https://s3.amazonaws.com/rds.nsrl.nist.gov/RDS/>). Four sets:
+**1. Download from NIST.** <https://www.nsrl.nist.gov/> → **Current RDS Hash
+Sets**, which links the zips (they download from `s3.amazonaws.com`). Four sets:
 
 | Set | Use for |
 |---|---|
@@ -864,16 +864,21 @@ delta each quarter, then **Re-check** a case.
 | **Legacy** | pre-2000 software: skip unless you work vintage systems |
 
 Each set publishes a **full** SQLite `.db` once a year (March):
-`RDS_YYYY.03.x_<set>.zip`, tens of GB unzipped, and a **quarterly delta**:
+`RDS_YYYY.03.x_<set>.zip`, and a **quarterly delta**:
 `RDS_YYYY.MM.x_<set>_delta.zip`, a `<set>_delta.sql` of the changes since.
-Unzip what you download. The full and delta zips also hold a `.schema.sql`, the
-schema of the database; GLEAPP does not need it, and refuses it if it is picked
-in place of the `.db`. All four sets also come as a smaller *minimal*
-database (distinct SHA-256 only): a full `RDS_YYYY.MM.x_<set>_minimal.zip` and
-quarterly `RDS_YYYY.MM.x_<set>_minimal_delta.zip` updates, as listed on NIST's
+Unzip what you download, and check the free space first: the 2026.03.1 `.db`
+unzips to 47 GB for Android, 59 GB for iOS, 135 GB for Legacy and 457 GB for
+Modern (the sizes each zip records). The full and delta zips also hold a
+`.schema.sql`, the schema of the database; GLEAPP does not need it, and refuses
+it if it is picked in place of the `.db`. All four sets also come as a smaller
+*minimal* database: a full `RDS_YYYY.MM.x_<set>_minimal.zip` and quarterly
+`RDS_YYYY.MM.x_<set>_minimal_delta.zip` updates, as listed on NIST's
 [Current RDS Hash Sets](https://www.nist.gov/itl/csd/secure-systems-and-applications/national-software-reference-library-nsrl/nsrl-download-0)
-page.
-For a minimal database, set **Store** to *SHA-256 only* in step 2.
+page. It keeps fewer file rows (the 2026.03.1 `.db` unzips to 40 GB for Android
+and 182 GB for Modern) but the same `md5`, `sha1` and `sha256` columns, and for
+every 2026.03.1 set NIST's readme counts as many distinct SHA-256 values in the
+minimal database as in the full one. It imports the same way, with the same
+**Store** choice.
 
 **2. First import, a full release.** **☰ Menu → Reference → Reference data
 (NSRL)**, then **Add a set**:
@@ -893,7 +898,11 @@ GLEAPP never reads it again, **except** keep it as the base for the next
 delta.
 
 **3. Quarterly update, a delta.** A delta is merged onto the *previous full*
-`.db` for the same set (the base is never modified). In **Add a set**:
+`.db` for the same set (the base is never modified). A minimal database updates
+the same way, from its `<set>_minimal_delta.sql` onto the previous minimal `.db`;
+NIST's [RDSv3 document](https://s3.amazonaws.com/rds.nsrl.nist.gov/RDS/RDSv3_Docs/RDSv3.pdf)
+says to update a minimal database only with a minimal delta of the same set. In
+**Add a set**:
 
 - choose **Quarterly delta**;
 - **Delta script**: the unzipped `<set>_delta.sql`;
@@ -901,10 +910,10 @@ delta.
 - **Name** it for the new quarter (e.g. `NSRL Modern 2026.06.1`), same choices,
   **Import**.
 
-GLEAPP writes the merged `RDS_YYYY.MM.x_<set>.db` next to the base and imports
-it. Remove the previous quarter's set with its **✕**. Keep the new merged
-`.db` as the base for the next delta. Each year, download the new March full
-release and start over.
+GLEAPP writes the merged `RDS_YYYY.MM.x_<set>.db` (`..._<set>_minimal.db` for a
+minimal set) next to the base and imports it. Remove the previous quarter's set
+with its **✕**. Keep the new merged `.db` as the base for the next delta. Each
+year, download the new March full release and start over.
 
 **4. Use it.** Open a case and click **Re-check** under *Known hashes* (or re-run
 Process). NSRL matches get the green `NSRL` badge, are auto-categorized
