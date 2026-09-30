@@ -195,6 +195,21 @@ def test_viewer_reads_from_the_zip_and_survives_a_moved_source(tmp_path):
         state["close_current"]()
 
 
+def test_file_detail_says_whether_the_stored_path_exists(tmp_path):
+    z = _build(tmp_path)
+    for name, stage in (("ref", False), ("stg", True)):
+        c, _ = _ingest(tmp_path, z, name, stage=stage, do_process=False)
+        fid = _rows(c)[IMG]["id"]
+        c.close()
+        client, state = _client(tmp_path / name)
+        try:
+            d = client.get(f"/api/file/{fid}").get_json()
+            assert d["path"] != d["orig_path"]
+            assert d["path_exists"] is stage          # read in place: no staged copy made
+        finally:
+            state["close_current"]()
+
+
 def test_stage_and_unstage_round_trip(tmp_path):
     z = _build(tmp_path)
     c, _ = _ingest(tmp_path, z, "case")
