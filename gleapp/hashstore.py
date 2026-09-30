@@ -7,10 +7,11 @@ each case consults it during the known-hash matching stage (see
 
 Accepted inputs (``import_path`` auto-detects):
 
-* **SQLite database** - e.g. an NSRL RDSv3 ``.db`` built from the published
-  ``.sql`` dumps.  Any table/view carrying ``md5`` / ``sha1`` / ``sha256``
-  columns works (``METADATA`` for the NSRL schema); rows are streamed in
-  batches so multi-million-row sets import without exhausting memory.
+* **SQLite database** - e.g. an NSRL RDSv3 full release ``.db``, or one that
+  ``apply_delta`` has updated with a quarterly ``_delta.sql``.  Any table/view
+  carrying ``md5`` / ``sha1`` / ``sha256`` columns works (``METADATA`` for
+  the NSRL schema); rows are streamed in batches so multi-million-row sets
+  import without exhausting memory.
 * **Project VIC JSON**, **CAID CSV/JSON**, **plain hash lists** - reuses the
   parsers in ``hashdb``.
 
