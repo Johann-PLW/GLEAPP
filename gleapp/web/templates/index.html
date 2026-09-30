@@ -441,6 +441,9 @@
   .srclist .s span{flex:1;word-break:break-all}
   .prog{height:8px;background:var(--panel2);border-radius:5px;overflow:hidden;margin:10px 0}
   .prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+  /* no total yet (a map being copied, a hash set being read): slide rather than claim a number */
+  .prog.indeterminate i{position:relative;width:35%;left:-35%;transition:none;
+    animation:bootSlide 1.1s ease-in-out infinite}
   /* the one shared background-job bar, pinned to the bottom of the sidebar -
      its own footer strip (border-top + padding), never inline with whatever
      filter section happens to be last, so it never reads as part of it */

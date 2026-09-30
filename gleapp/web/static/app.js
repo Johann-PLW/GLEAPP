@@ -3178,6 +3178,7 @@ $("#refGo").onclick = async () => {
   if (r.error) return toast(r.message || "Import failed");
   $("#refDlg").style.display = "none";
   toast(`Importing ${r.name} — this runs in the background`);
+  watchLauncherJob();                  // opened from the launcher: its bar follows it
   trackJob("#rehashInfo", "#taskProg", "Importing reference data", async (ok, j) => {
     if (!ok) return;
     toast(j.message || "Reference data imported");
@@ -3254,6 +3255,7 @@ $("#vicGo").onclick = async () => {
   if (r.error) return toast(r.message || "Import failed");
   $("#vicDlg").style.display = "none";
   toast(`Importing ${r.name} — this runs in the background`);
+  watchLauncherJob();                  // opened from the launcher: its bar follows it
   trackJob("#rehashInfo", "#taskProg", "Importing Project VIC hash set", async (ok, j) => {
     if (!ok) return;
     toast(j.message || "Project VIC hash set imported");
@@ -3873,6 +3875,40 @@ function showLauncher(ctx) {
   renderRecent();
   Lr.logo = ctx.agency_logo || null;
   setSettingsLogoPreview(Lr.logo);
+  watchLauncherJob();                  // an import may already be running
+}
+/* The launcher follows a background import started from its ☰ Menu (a map, reference
+   data, a Project VIC hash set). The bars that follow those jobs belong to the case view,
+   behind the launcher, so nothing on this screen showed one was running, and Create case
+   was refused with "a job is already running". It shows on the ingest screen's own bar,
+   and Create waits for it. */
+let launcherJobTimer = null, launcherJobShown = false;
+async function watchLauncherJob() {
+  clearTimeout(launcherJobTimer);
+  if ($("#launcher").style.display === "none") return;
+  let j = null;
+  try { j = await api("/api/job"); } catch (e) { /* try again below */ }
+  if (j && j.running) {
+    const pct = j.total ? Math.floor(100 * j.done / j.total) : null;
+    const bar = $("#jobProg");
+    bar.style.display = "block";
+    bar.classList.toggle("indeterminate", pct === null);
+    bar.querySelector("i").style.width = pct === null ? "" : pct + "%";
+    $("#jobMsg").textContent = (j.message || "Working…") + (pct === null ? "" : ` · ${pct}%`)
+      + " · Create case waits until this finishes";
+    $("#createGo").disabled = true;
+    launcherJobShown = true;
+    launcherJobTimer = setTimeout(watchLauncherJob, 800);
+  } else if (launcherJobShown) {
+    launcherJobShown = false;
+    $("#jobProg").style.display = "none";
+    $("#jobProg").classList.remove("indeterminate");
+    $("#jobMsg").textContent = j && j.stage === "error"
+      ? `Failed: ${j.error || "unknown error"}` : (j && j.message) || "";
+    $("#createGo").disabled = false;
+  } else if (!j) {
+    launcherJobTimer = setTimeout(watchLauncherJob, 1500);
+  }
 }
 const RECENT_SHOWN = 3;
 function renderRecent() {
@@ -4618,6 +4654,7 @@ async function importBasemap() {
   if (r.error) return toast(r.message || "Import refused");
   toast("Importing basemap…");
   liveTick = 0; liveJob();                                    // the bottom bar follows the copy
+  watchLauncherJob();                                         // and the launcher's, before a case
   const wait = setInterval(async () => {
     const j = await api("/api/job").catch(() => null);
     if (j && !j.running) { clearInterval(wait); refreshMapsList(); }
