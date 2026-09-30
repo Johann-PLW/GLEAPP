@@ -77,6 +77,7 @@ jobs:
       # pango needs one with it, and PyInstaller collapses two dylibs of the same
       # name into one. v2026.5.0 shipped a macOS app that could not import cv2 for
       # that reason. Taking both from conda-forge leaves one shared harfbuzz.
+      # OpenCV 4.x cannot load the bundled content model, hence version >=5.
       - name: macOS, OpenCV and Pillow from conda-forge
         if: runner.os == 'macOS'
         shell: bash
@@ -84,7 +85,7 @@ jobs:
           curl -sL "https://micro.mamba.pm/api/micromamba/osx-$(uname -m | sed s/x86_64/64/)/latest" \
             | tar -xj bin/micromamba
           ./bin/micromamba create -y -p ./build-env -c conda-forge --no-rc \
-            python=3.12 "py-opencv=*=headless*" "ffmpeg=*=lgpl*" pillow
+            python=3.12 "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*" pillow
           echo "$PWD/build-env/bin" >> "$GITHUB_PATH"
 
       - name: Install build dependencies
