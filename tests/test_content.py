@@ -74,7 +74,7 @@ _ORT_VALUES = {123: -0.038436, 155: -0.0320167, 213: 0.0668716, 269: -0.0570372,
 
 
 def _fixed_input() -> np.ndarray:
-    yy, xx = np.mgrid[0:224, 0:224].astype(np.float64)
+    yy, xx = np.meshgrid(np.arange(224.0), np.arange(224.0), indexing="ij")
     chans = [np.sin(xx / 9.0 + c) * np.cos(yy / 13.0 - c) + (xx - yy) / 224.0 for c in range(3)]
     return np.stack(chans)[None].astype(np.float32)
 
