@@ -1,6 +1,8 @@
 """Global known-hash store, shared by every case.
 
-Lives at ``config_dir()/hashsets/hashsets.gleapp``.  A large reference set such
+Lives at ``appconfig.data_dir()/hashsets/hashsets.gleapp``: under
+%LOCALAPPDATA%\\GLEAPP on Windows, and in the same folder as the per-user config
+elsewhere (see ``appconfig``).  A large reference set such
 as the NSRL RDS is imported once here instead of into every ``case.gleapp``;
 each case consults it during the known-hash matching stage (see
 ``hashdb.match_file``).

@@ -1,8 +1,14 @@
-"""Per-user application config (recent cases, window state).
+"""Per-user application config (recent cases and examiner settings).
 
 Stored outside any case so the desktop app can offer "recent cases" on launch.
-Location: ``$GLEAPP_CONFIG_DIR`` if set, else %APPDATA%\\GLEAPP on Windows /
-~/.config/gleapp elsewhere.
+
+``config_dir()`` holds ``config.json``: ``$GLEAPP_CONFIG_DIR`` if set, else
+%APPDATA%\\GLEAPP on Windows, ~/Library/Application Support/GLEAPP on macOS,
+and $XDG_CONFIG_HOME/GLEAPP (default ~/.config/GLEAPP) elsewhere.
+
+``data_dir()`` holds the larger data (the global hash store, the hash stash and
+basemaps): ``$GLEAPP_CONFIG_DIR`` if set, else %LOCALAPPDATA%\\GLEAPP on
+Windows and the same folder as ``config_dir()`` elsewhere.
 """
 
 from __future__ import annotations
