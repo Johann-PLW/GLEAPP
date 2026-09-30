@@ -1974,7 +1974,7 @@ function renderCatEd() {
     const code = +b.dataset.del;
     const used = state.files.filter(f => f.category === code).length;
     let q = `?`;
-    if (used && !confirm(
+    if (used && !await askConfirm(
       `${used} loaded file(s) use this category.\nOK = keep their label but hide the category.\nCancel = abort.`))
       return;
     await save("/api/categories/" + code + q, null, "DELETE");
@@ -2039,7 +2039,7 @@ function renderFlagEd() {
   $("#flagRows").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     const code = +b.dataset.del;
     const used = state.files.filter(f => (f.flags || []).some(x => x.code === code)).length;
-    if (used && !confirm(`${used} loaded file(s) carry this flag.\nDelete it anyway?`)) return;
+    if (used && !await askConfirm(`${used} loaded file(s) carry this flag.\nDelete it anyway?`)) return;
     await save("/api/flags/" + code, null, "DELETE");
     await refreshFlags(); renderFlagEd(); refreshAllTiles();
   });
@@ -2704,10 +2704,10 @@ async function applyTz(tz) {
   await load({ keepScroll: true });
   if (state.metaOpen && state.focus != null) showMeta(state.focus);
 }
-$("#ftz").addEventListener("change", () => {
+$("#ftz").addEventListener("change", async () => {
   const v = $("#ftz").value;
   if (v === OTHER_TZ) {
-    const name = prompt("IANA timezone name (e.g. Europe/Berlin, America/Bogota):", state.tz);
+    const name = await askText("IANA timezone name (e.g. Europe/Berlin, America/Bogota):", state.tz);
     $("#ftz").value = state.tz;
     if (name) applyTz(name.trim());
     return;
@@ -2975,7 +2975,7 @@ function renderCaseSets(sets) {
     el.querySelectorAll(".cs .x").forEach(x => x.onclick = async () => {
       const row = x.closest(".cs");
       const id = +row.dataset.id;
-      if (!confirm("Remove this hash set and clear the flags it added?")) return;
+      if (!await askConfirm("Remove this hash set and clear the flags it added?")) return;
       row.style.opacity = ".4";
       const r = await api("/api/hashset/remove", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -3084,7 +3084,7 @@ function renderRefStore(sets, total) {
     : `<span class="muted">Nothing imported yet.</span>`;
   list.querySelectorAll(".cs .x").forEach(x => x.onclick = async () => {
     const row = x.closest(".cs"), id = +row.dataset.id;
-    if (!confirm("Remove this reference set from the shared store?\n\nEvery case stops matching against it.")) return;
+    if (!await askConfirm("Remove this reference set from the shared store?\n\nEvery case stops matching against it.")) return;
     row.style.opacity = ".4";
     const r = await api("/api/hashset/global/remove", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -3202,7 +3202,7 @@ async function renderVicSets() {
     : `<span class="muted">No Project VIC hash set imported yet.</span>`;
   list.querySelectorAll(".cs .x").forEach(x => x.onclick = async () => {
     const row = x.closest(".cs"), id = +row.dataset.id;
-    if (!confirm("Remove this Project VIC hash set from the shared store?\n\nEvery case stops matching against it.")) return;
+    if (!await askConfirm("Remove this Project VIC hash set from the shared store?\n\nEvery case stops matching against it.")) return;
     row.style.opacity = ".4";
     const r = await api("/api/hashset/global/remove", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -3322,14 +3322,14 @@ async function refreshSnapList() {
   });
 }
 async function deleteSnap(name) {
-  if (!confirm("Delete this snapshot?\n\n" + name + "\n\nThis can't be undone.")) return;
+  if (!await askConfirm("Delete this snapshot?\n\n" + name + "\n\nThis can't be undone.")) return;
   const r = await save("/api/snapshot/delete", { name });
   if (r.error) return toast("Delete failed: " + (r.message || "unknown error"));
   toast("Snapshot deleted");
   refreshSnapList();
 }
 async function restoreSnap(name) {
-  if (!confirm(
+  if (!await askConfirm(
     "Restore this snapshot?\n\n" + name + "\n\n" +
     "The current state is saved as a \"pre-restore\" snapshot first, so this is undoable. " +
     "The case will reload.")) return;
@@ -3677,8 +3677,8 @@ $("#stashSetPath").onclick = async () => {
   const p = await pick("stashfile", "Path to the shared stash file (e.g. on a network drive):");
   if (p) stashSetPath(p);
 };
-$("#stashResetPath").onclick = () => {
-  if (confirm("Switch back to your own per-user stash file?\n\n"
+$("#stashResetPath").onclick = async () => {
+  if (await askConfirm("Switch back to your own per-user stash file?\n\n"
     + "The shared file is left untouched; your local stash is used again "
     + "(it may be empty or out of date — Merge the shared file in if you want).")) {
     stashSetPath("");
@@ -3828,6 +3828,49 @@ function fmtAgo(ts) {
   if (s < 86400) return Math.round(s / 3600) + "h ago";
   return Math.round(s / 86400) + "d ago";
 }
+/* GLEAPP's own confirm and prompt. The browser's built-in ones title themselves with
+   the page's local address ("127.0.0.1:61319 says"), which means nothing to an examiner,
+   so every question GLEAPP asks goes through this window instead. askConfirm resolves
+   true or false; askText resolves the text typed, or null when cancelled. Enter answers
+   OK and Esc cancels, as in the built-in ones. */
+function askDlg(message, input) {
+  return new Promise(resolve => {
+    let d = $("#askDlg");
+    if (!d) {
+      d = document.createElement("div");
+      d.id = "askDlg";
+      d.innerHTML = '<div class="box"><div class="msg"></div><input type="text" class="inp">'
+        + '<div class="btns"><button class="btn sm" data-r="0">Cancel</button>'
+        + '<button class="btn sm ok" data-r="1">OK</button></div></div>';
+      document.body.appendChild(d);
+    }
+    const inp = d.querySelector(".inp");
+    d.querySelector(".msg").textContent = message;
+    inp.style.display = input == null ? "none" : "";
+    inp.value = input == null ? "" : input;
+    const done = ok => {
+      d.style.display = "none";
+      document.removeEventListener("keydown", key, true);
+      d.onclick = null;
+      resolve(input == null ? ok : (ok ? inp.value : null));
+    };
+    const key = e => {                  // the gallery's own shortcuts must not see these keys
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(true); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+    };
+    document.addEventListener("keydown", key, true);
+    d.onclick = e => {
+      if (e.target === d) return done(false);
+      const b = e.target.closest("[data-r]");
+      if (b) done(b.dataset.r === "1");
+    };
+    d.style.display = "block";
+    (input == null ? d.querySelector(".ok") : inp).focus();
+    if (input != null) inp.select();
+  });
+}
+const askConfirm = message => askDlg(message, null);
+const askText = (message, value = "") => askDlg(message, value);
 async function pick(kind, label) {
   if (Lr.native) {
     try {
@@ -3841,7 +3884,7 @@ async function pick(kind, label) {
       toast("File dialog unavailable — type the path instead");
     }
   }
-  return prompt(label || ({ folder: "Folder path:",
+  return await askText(label || ({ folder: "Folder path:",
     archive: "Path to the extraction archive or disk image (zip, tar, tar.gz/bz2/xz, E01, Ex01, AFF, AFF4, DMG, VHD, VHDX, VMDK, QCOW2, raw .img/.dd or any segment of a split set):",
     basemap: "Path to a basemap file (.pmtiles or .mbtiles):",
     casefile: "Path to the case.gleapp file:",
@@ -3890,7 +3933,7 @@ function renderRecent() {
 }
 $("#recentMore").onclick = () => { Lr.recentExpanded = !Lr.recentExpanded; renderRecent(); };
 $("#recentClear").onclick = async () => {
-  if (!confirm("Clear the recent-cases list?\n\n"
+  if (!await askConfirm("Clear the recent-cases list?\n\n"
     + "This only forgets these cases were opened here - nothing on disk is "
     + "deleted, and each case still opens fine from its own folder.")) return;
   await api("/api/recent/clear", { method: "POST" });
@@ -4296,7 +4339,7 @@ function renderSourcePanel(list) {
   });
   el.querySelectorAll("[data-unstage]").forEach(b => b.onclick = async () => {
     const name = b.dataset.unstage;
-    if (!confirm(`Delete the copies of ${name} from the case and read from the archive on demand?\n\n`
+    if (!await askConfirm(`Delete the copies of ${name} from the case and read from the archive on demand?\n\n`
       + "The archive must still hold every registered file, or this is refused.")) return;
     const r = await post("/api/source/unstage", { name });
     if (r.error) { toast(r.message || "Refused"); return; }
@@ -4327,7 +4370,7 @@ function renderCarveSection(list) {
   }).join("");
   el.querySelectorAll("[data-carve]").forEach(b => b.onclick = async () => {
     const name = b.dataset.carve;
-    if (!confirm(`Carve ${name} for deleted media?\n\n`
+    if (!await askConfirm(`Carve ${name} for deleted media?\n\n`
       + "This scans the whole of the space no volume claims for image and video "
       + "signatures, then processes what it finds. It can take a while on a large "
       + "acquisition. Carved files have no name, path or date of their own.")) return;
@@ -4395,7 +4438,7 @@ function showSourceStatus(list) {
   el.querySelectorAll("[data-relink]").forEach(b => b.onclick = async () => {
     const name = b.dataset.relink;
     let p = Lr.native ? await pick("archive") : null;
-    if (!p) p = prompt(`Where is ${name} now? Full path to the archive:`);
+    if (!p) p = await askText(`Where is ${name} now? Full path to the archive:`);
     if (!p) return;
     const r = await api("/api/source/relink", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -4451,7 +4494,7 @@ async function reattachSource(name) {
     const pool = bad.length ? bad : folderSources;
     if (pool.length === 1) name = pool[0].name;
     else {
-      name = prompt("Reattach which source?\n\n" + pool.map(s => s.name).join("\n"), pool[0].name);
+      name = await askText("Reattach which source?\n\n" + pool.map(s => s.name).join("\n"), pool[0].name);
       if (!name) return;
     }
   }
@@ -4605,7 +4648,7 @@ async function refreshMapsList() {
     refreshMapsList();
   });
   box.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
-    if (!confirm(`Remove basemap ${b.dataset.rm}?\n\nThe imported copy is deleted; your original file is untouched.`)) return;
+    if (!await askConfirm(`Remove basemap ${b.dataset.rm}?\n\nThe imported copy is deleted; your original file is untouched.`)) return;
     const r = await save("/api/basemaps/remove", { name: b.dataset.rm });
     if (r.error) return toast(r.message || "Could not remove");
     refreshMapsList();

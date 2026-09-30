@@ -287,6 +287,15 @@
   #caseSets .cs .x:hover,#refList .cs .x:hover,#vicList .cs .x:hover{color:var(--danger)}
   .linkish:hover{text-decoration:underline}
   #stashWipeDlg{z-index:101}   /* above #stashDlg (bumped to 100 for the launcher) since it nests inside it */
+  /* GLEAPP's own confirm / prompt (askDlg in app.js): above every dialog and the launcher */
+  #askDlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:170;display:none}
+  #askDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(460px,94vw);
+    max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  #askDlg .msg{white-space:pre-wrap;font-size:13px;line-height:1.5}
+  #askDlg .inp{width:100%;margin-top:10px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:5px;padding:6px}
+  #askDlg .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  #askDlg .ok{border-color:var(--accent)}
   #snapDlg .box,#histDlg .box,#stashDlg .box,#mapsDlg .box,#logoDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:82vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #histDlg .box{width:min(720px,94vw)}
   #snapDlg h2,#histDlg h2,#stashDlg h2,#mapsDlg h2,#logoDlg h2{margin:0 0 8px;font-size:15px}
