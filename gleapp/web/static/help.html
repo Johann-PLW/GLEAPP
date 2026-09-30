@@ -895,9 +895,13 @@ software; skip unless you work vintage systems). Each set publishes a
 <code>&lt;set&gt;_delta.sql</code> of changes since). Unzip what you download. The full and
 delta zips also hold a <code>.schema.sql</code>, the schema of the database; GLEAPP does not
 need it, and refuses it if it is picked in place of the <code>.db</code>.
-<strong>Modern</strong> also offers a much smaller <em>minimal</em> database
-(distinct SHA-256 only); for that, set <strong>Store</strong> to
-<em>SHA-256 only</em> in step&nbsp;2.</p>
+All four sets also come as a smaller <em>minimal</em> database
+(distinct SHA-256 only): a full <code>RDS_YYYY.MM.x_&lt;set&gt;_minimal.zip</code> and
+quarterly <code>RDS_YYYY.MM.x_&lt;set&gt;_minimal_delta.zip</code> updates, as listed on
+NIST's <em>Current RDS Hash Sets</em> page, linked from
+<code>https://www.nsrl.nist.gov/</code>.
+For a minimal database, set <strong>Store</strong> to <em>SHA-256 only</em> in
+step&nbsp;2.</p>
 
 <p><strong>2. First import (a full release).</strong> <strong>&#9776; Menu &rarr;
 Reference &rarr; Reference data (NSRL)</strong>, then <strong>Add a set</strong>: leave

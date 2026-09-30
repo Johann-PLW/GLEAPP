@@ -551,9 +551,10 @@ def _sqlite3_cli() -> str | None:
 def _run_sql_python(db_path: Path, script: str | Path) -> None:
     """Apply a ``.sql`` script with the stdlib ``sqlite3`` module.
 
-    Streams the file one statement at a time (NSRL RDSv3 dumps and deltas run
-    to hundreds of MB), tracking single-quoted strings so an apostrophe in a
-    file path or package name doesn't split a statement. The script's own
+    Streams the file one statement at a time, since a script can be large
+    (NIST's RDSv3 document says an NSRL delta will likely contain millions of
+    lines), tracking single-quoted strings so an apostrophe in a file path or
+    package name doesn't split a statement. The script's own
     ``BEGIN``/``COMMIT`` are honoured (autocommit connection).
     """
     conn = sqlite3.connect(str(db_path), isolation_level=None)
