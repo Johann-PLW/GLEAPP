@@ -3178,6 +3178,7 @@ $("#refGo").onclick = async () => {
   if (r.error) return toast(r.message || "Import failed");
   $("#refDlg").style.display = "none";
   toast(`Importing ${r.name} — this runs in the background`);
+  watchLauncherJob();                  // opened from the launcher: its bar follows it
   trackJob("#rehashInfo", "#taskProg", "Importing reference data", async (ok, j) => {
     if (!ok) return;
     toast(j.message || "Reference data imported");
@@ -3254,6 +3255,7 @@ $("#vicGo").onclick = async () => {
   if (r.error) return toast(r.message || "Import failed");
   $("#vicDlg").style.display = "none";
   toast(`Importing ${r.name} — this runs in the background`);
+  watchLauncherJob();                  // opened from the launcher: its bar follows it
   trackJob("#rehashInfo", "#taskProg", "Importing Project VIC hash set", async (ok, j) => {
     if (!ok) return;
     toast(j.message || "Project VIC hash set imported");
@@ -3873,6 +3875,57 @@ function showLauncher(ctx) {
   renderRecent();
   Lr.logo = ctx.agency_logo || null;
   setSettingsLogoPreview(Lr.logo);
+  watchLauncherJob();                  // an import may already be running
+}
+/* The launcher follows a background import started from its ☰ Menu (a map, reference
+   data, a Project VIC hash set). The bars that follow those jobs belong to the case view,
+   behind the launcher, so nothing on this screen showed one was running, and Create case
+   was refused with "a job is already running". A bar pinned to the bottom of the window
+   follows it, above any dialog (the Maps dialog stays open while a map imports), and
+   Create waits for it. */
+let launcherJobTimer = null, launcherJobShown = false;
+function launcherJobBar() {
+  let bar = $("#launchJob");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "launchJob";
+    bar.innerHTML = '<span class="txt"></span><div class="track"><i></i></div><span class="pct"></span>';
+    document.body.appendChild(bar);
+  }
+  return bar;
+}
+async function watchLauncherJob() {
+  clearTimeout(launcherJobTimer);
+  const bar = launcherJobBar();
+  if ($("#launcher").style.display === "none") { bar.style.display = "none"; return; }
+  let j = null;
+  try { j = await api("/api/job"); } catch (e) { /* try again below */ }
+  if (j && j.running) {
+    const pct = j.total ? Math.floor(100 * j.done / j.total) : null;
+    bar.classList.remove("err");
+    bar.classList.toggle("indeterminate", pct === null);
+    bar.querySelector("i").style.width = pct === null ? "" : pct + "%";
+    bar.querySelector(".txt").textContent = j.message || "Working…";
+    bar.querySelector(".pct").textContent = (pct === null ? "" : `${pct}% · `)
+      + "Create case waits until this finishes";
+    bar.style.display = "flex";
+    $("#createGo").disabled = true;
+    launcherJobShown = true;
+    launcherJobTimer = setTimeout(watchLauncherJob, 800);
+  } else if (launcherJobShown) {
+    launcherJobShown = false;
+    const failed = j && j.stage === "error";
+    bar.classList.remove("indeterminate");
+    bar.classList.toggle("err", failed);
+    bar.querySelector("i").style.width = failed ? "0" : "100%";
+    bar.querySelector(".txt").textContent = failed
+      ? `Failed: ${j.error || "unknown error"}` : (j && j.message) || "Finished";
+    bar.querySelector(".pct").textContent = "";
+    $("#createGo").disabled = false;
+    launcherJobTimer = setTimeout(() => { bar.style.display = "none"; }, failed ? 10000 : 5000);
+  } else if (!j) {
+    launcherJobTimer = setTimeout(watchLauncherJob, 1500);
+  }
 }
 const RECENT_SHOWN = 3;
 function renderRecent() {
@@ -4618,6 +4671,7 @@ async function importBasemap() {
   if (r.error) return toast(r.message || "Import refused");
   toast("Importing basemap…");
   liveTick = 0; liveJob();                                    // the bottom bar follows the copy
+  watchLauncherJob();                                         // and the launcher's, before a case
   const wait = setInterval(async () => {
     const j = await api("/api/job").catch(() => null);
     if (j && !j.running) { clearInterval(wait); refreshMapsList(); }
