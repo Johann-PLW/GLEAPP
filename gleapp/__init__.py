@@ -18,4 +18,4 @@ Core capabilities
 * A local web review gallery (Flask)
 """
 
-__version__ = "2026.5.2"
+__version__ = "2026.5.3"
