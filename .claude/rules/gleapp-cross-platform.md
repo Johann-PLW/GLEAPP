@@ -252,6 +252,32 @@ ContentComponent; androidx/media 1.11.1 lines 473 and 505) and recorded as writt
 file's `mdhd` language is never rewritten, since mapping an RFC 5646 tag to ISO 639-2
 would be a table GLEAPP does not own.
 
+## No Python function runs inside SQLite on the case connection
+
+Every thread shares a case's one connection (`CaseDB.conn`). In v2026.5.3 it carried
+a Python SQL function, `is_exo_cache_name`, which the sidebar's container counts and
+the three container Type filters called once per container row. A query
+calling it holds SQLite's connection mutex and waits for the interpreter lock on each
+row; a thread binding a parameter holds the interpreter lock (the sqlite3 module does
+not release it while binding) and waits for that mutex. On a case of 149,824 rows,
+119,604 of them containers, opening the gallery froze the server (issue 254). A test
+case of 6,000 container rows read from one thread while another wrote froze on 10 runs
+of 10; macOS `sample` showed the reader in `func_callback` > `PyGILState_Ensure` and
+the writer in `bind_param` > `vdbeUnbind`.
+
+The answer is stored instead. `files.exo_cache` is 1 when the row's name is one an
+ExoPlayer cache writes, decided by `db.exo_cache_flag` (exoprobe's rule) in
+`upsert_file` and again whenever `update_file` or `upsert_file` writes `orig_path`,
+`rel_path` or `path`. A row with NULL there was written by a build without the column;
+`CaseDB.fill_exo_cache` decides those on every open, and a partial index on the NULL
+rows makes that free when there are none (2.1 s on the first open of that case, 0.005 s
+after). The schema version stays 18: the column is additive and found by its presence.
+Raw SQL that changes `kind` is unaffected, since the flag is about the name and the
+filters add `kind = 'archive'` themselves; raw SQL that rewrites a name must keep its
+last component or refresh the flag. `tests/test_container_kinds.py` runs the reads
+against a writer in a child process under a timeout, and fails if anything in `gleapp/`
+registers a function, collation or aggregate on a connection. Do not add one.
+
 ## A disk image is a fourth source, E01 or raw, and it is WALKED, not carved
 
 A computer acquisition arrives as an EnCase/EWF set (`image.E01` plus numbered segments

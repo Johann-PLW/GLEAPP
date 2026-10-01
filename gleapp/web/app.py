@@ -2625,7 +2625,8 @@ def _doc_sql(a: str) -> str:
 
 
 def _cache_sql(a: str) -> str:
-    return f"is_exo_cache_name(COALESCE(NULLIF({a}.orig_path, ''), {a}.rel_path, {a}.path))"
+    # a stored answer, never a Python function called from SQL: see CaseDB.__init__
+    return f"({a}.exo_cache IS 1)"
 
 
 def _archive_sql(a: str) -> str:

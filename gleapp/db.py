@@ -178,9 +178,14 @@ CREATE TABLE IF NOT EXISTS files (
                                           -- them, as stored. FAT and exFAT keep a wall clock and
                                           -- no zone, so mtime above is null for them and this
                                           -- carries the reading as text instead. Never an instant.
-    cache_info    TEXT                    -- JSON: for a file joined from an app's ExoPlayer cache,
+    cache_info    TEXT,                   -- JSON: for a file joined from an app's ExoPlayer cache,
                                           -- the cache it came from, its key, and whether the join
                                           -- is complete. See gleapp/exocache.py.
+    exo_cache     INTEGER                 -- 1 when the row's name is one an ExoPlayer cache writes
+                                          -- (a piece, its index, a .uid file), else 0. Decided in
+                                          -- Python when the row is written, see exo_cache_flag();
+                                          -- NULL only on a row a build without the column wrote,
+                                          -- and opening the case fills those.
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_md5      ON files(md5);
@@ -335,6 +340,23 @@ FILE_PATH_SQL = ("COALESCE(NULLIF(orig_path, ''), "
                  "CASE WHEN media_id IS NULL THEN rel_path END)")
 
 
+# The name that says whether a row is an ExoPlayer cache file: the path in the
+# evidence when one was recorded, else the row's own.
+EXO_NAME_SQL = "COALESCE(NULLIF(orig_path, ''), rel_path, path)"
+
+
+def exo_cache_flag(orig_path: Any, rel_path: Any, path: Any) -> int:
+    """``files.exo_cache`` for a row with these names: 1 when the name EXO_NAME_SQL
+    picks is one an ExoPlayer cache writes, by exoprobe's own rule."""
+    name = orig_path if orig_path not in (None, "") else (
+        rel_path if rel_path is not None else path)
+    return 1 if name and exoprobe.is_cache_name(name) else 0
+
+
+# the columns exo_cache_flag reads; a write to any of them refreshes the flag
+_EXO_NAME_COLUMNS = frozenset(("orig_path", "rel_path", "path"))
+
+
 class CaseDB:
     def __init__(self, path: str | Path):
         self.path = str(path)
@@ -343,13 +365,12 @@ class CaseDB:
         # through ``self.lock``; SQLite's own mutex covers the rest.
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        # the gallery's filters tell an app's ExoPlayer cache pieces from the archives
-        # and documents they are kept beside; the names follow a pattern SQL cannot
-        # match, so the rule is exoprobe's own
-        self.conn.create_function(
-            "is_exo_cache_name", 1,
-            lambda name: 1 if name and exoprobe.is_cache_name(name) else 0,
-            deterministic=True)
+        # No Python function, collation or aggregate is ever registered on this
+        # connection. A query that calls one holds SQLite's connection mutex and
+        # waits for the interpreter lock on every row, while another thread binding
+        # a parameter holds the interpreter lock and waits for that mutex: the
+        # server froze on a case with 119,604 container rows (issue #254). What
+        # SQL cannot work out is stored in a column instead, see files.exo_cache.
         self.lock = threading.RLock()
         # examiner changes since the last backup snapshot (drives auto-save UI)
         self.dirty = False
@@ -410,6 +431,7 @@ class CaseDB:
             ("container_id", "INTEGER"), ("hashset_vic", "TEXT"),
             ("hashset_sources", "TEXT"), ("hashset_mask", "INTEGER"),
             ("grp_head", "INTEGER NOT NULL DEFAULT 1"), ("cache_info", "TEXT"),
+            ("exo_cache", "INTEGER"),
         ):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} {decl}")
@@ -424,6 +446,12 @@ class CaseDB:
             "CREATE INDEX IF NOT EXISTS idx_files_container ON files(container_id)")
         self._ensure_group_heads()
         self._ensure_sort_indexes()
+        # the rows whose exo_cache is not decided yet, so finding them costs
+        # nothing on a case that has none (every open asks)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_exo_unset ON files(id) "
+            "WHERE exo_cache IS NULL")
+        self.fill_exo_cache()
         cat_cols = {r["name"] for r in self.conn.execute(
             "PRAGMA table_info(categories)")}
         if "locked" not in cat_cols:
@@ -505,6 +533,33 @@ class CaseDB:
             self.conn.execute("INSERT OR REPLACE INTO meta(key, value) "
                               "VALUES ('grp_heads', 'fresh')")
             self.conn.commit()
+
+    def fill_exo_cache(self) -> int:
+        """Decide ``exo_cache`` for every row that has none and return how many
+        there were. Those are the rows of a case made before the column, once, and
+        any row a build without the column added to this case since. Measured on a
+        case of 149,824 rows made by v2026.5.3 (macOS arm64): the first open took
+        2.1 s with the column added and filled, the next 0.005 s."""
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT id, {EXO_NAME_SQL} AS name FROM files "
+                "WHERE exo_cache IS NULL").fetchall()
+            if rows:
+                self.conn.executemany(
+                    "UPDATE files SET exo_cache = ? WHERE id = ?",
+                    [(exo_cache_flag(r["name"], None, None), r["id"]) for r in rows])
+                self.conn.commit()
+        return len(rows)
+
+    def _refresh_exo_cache(self, file_id: int) -> None:
+        """Set one row's ``exo_cache`` again after a write to a name it is read from."""
+        row = self.conn.execute(
+            "SELECT orig_path, rel_path, path FROM files WHERE id = ?",
+            (file_id,)).fetchone()
+        if row is not None:
+            self.conn.execute(
+                "UPDATE files SET exo_cache = ? WHERE id = ?",
+                (exo_cache_flag(row["orig_path"], row["rel_path"], row["path"]), file_id))
 
     def _migrate_tags_to_flags(self) -> None:
         """One-time (schema v17): fold the old freeform ``tags`` table into
@@ -751,8 +806,12 @@ class CaseDB:
                         f"UPDATE files SET {cols} WHERE id=?",
                         (*fields.values(), row["id"]),
                     )
+                    if _EXO_NAME_COLUMNS & fields.keys():
+                        self._refresh_exo_cache(row["id"])
                 return int(row["id"])
             fields.setdefault("ingested_at", time.time())
+            fields["exo_cache"] = exo_cache_flag(
+                fields.get("orig_path"), fields.get("rel_path"), path)
             # set explicitly: a case made before schema v18 still has DEFAULT 0
             if fields.get("category") is None:
                 fields["category"] = UNCATEGORIZED_CATEGORY
@@ -773,6 +832,8 @@ class CaseDB:
             self.conn.execute(
                 f"UPDATE files SET {cols} WHERE id=?", (*fields.values(), file_id)
             )
+            if _EXO_NAME_COLUMNS & fields.keys():
+                self._refresh_exo_cache(file_id)
 
     def iter_files(self, where: str = "", params: Iterable[Any] = ()) -> list[sqlite3.Row]:
         sql = "SELECT * FROM files"
