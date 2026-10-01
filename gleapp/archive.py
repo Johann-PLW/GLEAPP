@@ -82,7 +82,7 @@ from pathlib import Path, PurePosixPath
 from . import storage_views
 from .ingest import (ARCHIVE_EXTS, IMAGE_EXTS, VIDEO_EXTS, _kind_from_magic,
                      is_appledouble, is_appledouble_name, is_exoplayer_cache_name,
-                     is_search_index_name)
+                     is_document, is_search_index_name)
 from .vendor import ewfprobe, mediacarve, qnxprobe
 
 _SLUG = re.compile(r"[^A-Za-z0-9._-]+")
@@ -1356,8 +1356,22 @@ def _register(case, src, dest: Path, name: str, rel: str, kind: str, ext: str, s
     )
 
 
+def _only_documents(src) -> bool:
+    """A pass that registers only the documents a source holds (a PDF, HTML page, MHTML
+    or web archive, see gleapp/docmedia.py), for a case ingested without them: see
+    ``pipeline.add_documents``. Everything else was registered by the first ingest."""
+    return bool(getattr(src, "only_documents", False))
+
+
 def _finish(case, src, path: Path, *, fmt: str, root: str, stage: bool, reason: str,
             tally: _Tally, timestamps: str) -> None:
+    if _only_documents(src):
+        # the source's record (counts, mode, timestamps) describes its first ingest;
+        # this pass added documents to it and says so on its own
+        case.db.commit()
+        case.db.audit_log(case.examiner, "add-documents",
+                          f"{path.name} ({fmt}): registered {tally.registered} document(s)")
+        return
     size, mtime = _source_stat(path)
     key = _meta_key(src.name)
     sha = _sidecar_sha256(path)
@@ -1441,6 +1455,7 @@ def _ingest_zip(case, src, zip_path: Path, *, count: int, progress) -> int:
                 tally.skipped_size += 1
                 continue
             ext = PurePosixPath(name).suffix.lower()
+            is_doc = False
             if ext in IMAGE_EXTS:
                 kind = "image"
             elif ext in VIDEO_EXTS:
@@ -1460,9 +1475,15 @@ def _ingest_zip(case, src, zip_path: Path, *, count: int, progress) -> int:
                         kind = "other"
             if kind == "other":
                 with zf.open(info) as fh:
-                    kind = _kind_from_magic(fh.read(16))
+                    head = fh.read(16)
+                kind = _kind_from_magic(head)
+                if kind == "other" and getattr(src, "documents", False) and is_document(name, head):
+                    kind = "archive"
+                    is_doc = True
                 if kind == "other" and not src.include_other and not is_search_index_name(name):
                     continue
+            if _only_documents(src) and not is_doc:
+                continue
             if name in drop:
                 tally.mirrored += 1
                 continue
@@ -1649,6 +1670,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 name = f"{vol}/{path}"
                 ext = PurePosixPath(path).suffix.lower()
                 head = b""
+                is_doc = False
                 if ext in IMAGE_EXTS:
                     kind = "image"
                 elif ext in VIDEO_EXTS:
@@ -1672,8 +1694,13 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                     kind = "other"
                 if kind == "other":
                     kind = _kind_from_magic(head)
+                    if kind == "other" and getattr(src, "documents", False) and is_document(path, head):
+                        kind = "archive"
+                        is_doc = True
                     if kind == "other" and not src.include_other and not is_search_index_name(path):
                         continue
+                if _only_documents(src) and not is_doc:
+                    continue
                 dest = _staged_path(staged_dir, slug, name)
                 # collect() carries only the modified time. NTFS holds created and
                 # accessed beside it, as instants, so ask the walker for those two.
@@ -1946,6 +1973,7 @@ def _ingest_tar(case, src, tar_path: Path, fmt: str, *, count: int, progress) ->
             ext = PurePosixPath(name).suffix.lower()
             fin = None
             head = b""
+            is_doc = False
             if ext in IMAGE_EXTS:
                 kind = "image"
             elif ext in VIDEO_EXTS:
@@ -1966,8 +1994,13 @@ def _ingest_tar(case, src, tar_path: Path, fmt: str, *, count: int, progress) ->
                 kind = "other"
             if kind == "other":
                 kind = _kind_from_magic(head)
+                if kind == "other" and getattr(src, "documents", False) and is_document(name, head):
+                    kind = "archive"
+                    is_doc = True
                 if kind == "other" and not src.include_other and not is_search_index_name(name):
                     continue
+            if _only_documents(src) and not is_doc:
+                continue
             dest = _staged_path(staged_dir, slug, name)
             mtime = float(member.mtime)
             if stage:
@@ -1989,6 +2022,10 @@ def _ingest_tar(case, src, tar_path: Path, fmt: str, *, count: int, progress) ->
     # The wrapper folder, and which members are other storage views of the same file,
     # are only known once every name has streamed past.
     root = common_root(names)
+    if _only_documents(src):
+        # the names that went past are the documents alone, whose common folder can be
+        # deeper than the extraction's; the first ingest recorded the real one
+        root = (source_record(case, src.name) or {}).get("root") or ""
     if root:
         case.db.conn.execute(
             "UPDATE files SET rel_path = substr(orig_path, ?) WHERE source = ? "

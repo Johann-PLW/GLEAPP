@@ -11,7 +11,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
 const state = {
   files: [], total: 0, page: 1, pageSize: 200,
   sel: new Set(), lastClick: null, focus: null,
-  similarOf: null, vstack: null, stack: null, ctxIds: [],
+  similarOf: null, vstack: null, stack: null, container: null, containerName: "", ctxIds: [],
   back: null,                     // where "Back to all" returns: {page, focus, top, left}
   cats: [],                     // [{code,name,color,notable,position,active}]
   keyframeCache: new Map(),
@@ -229,6 +229,7 @@ function filterParams() {
   if ($("#fsrc").value) p.set("source", $("#fsrc").value);
   if ($("#forigin").value) p.set("origin", $("#forigin").value);
   if ($("#finarch").checked) p.set("in_archive", "1");
+  if ($("#findoc").checked) p.set("in_document", "1");
   if ($("#fdup").value) p.set("hasdup", $("#fdup").value);
   if ($("#ffaces").checked) p.set("faces", "1");
   if ($("#fgps").checked) p.set("has_gps", "1");
@@ -238,6 +239,7 @@ function filterParams() {
   if ($("#ferr").checked) p.set("error", "1");
   if (state.vstack) p.set("vstack", state.vstack);
   if (state.stack) p.set("stack", state.stack);
+  if (state.container) p.set("container", state.container);
   if (+$("#fskin").value > 0) p.set("min_skin", (+$("#fskin").value / 100).toFixed(2));
   // the list view always shows every row, duplicates included - collapsing is a
   // grid-only convenience
@@ -268,7 +270,7 @@ let loadSeq = 0;
 async function load(opts = {}) {
   const seq = ++loadSeq;
   state.similarOf = null;
-  if (!state.vstack && !state.stack) $("#simBanner").style.display = "none";
+  if (!state.vstack && !state.stack && !state.container) $("#simBanner").style.display = "none";
   const scroll = { mainT: $("#main").scrollTop, mainL: $("#main").scrollLeft,
                    gridT: $("#grid").scrollTop, gridL: $("#grid").scrollLeft };
   const t0 = performance.now();
@@ -301,7 +303,8 @@ async function load(opts = {}) {
   }
 }
 function reload() {
-  state.page = 1; state.vstack = null; state.stack = null; state.back = null;
+  state.page = 1; state.vstack = null; state.stack = null; state.container = null;
+  state.back = null;
   state.sel.clear(); load();
 }
 
@@ -310,13 +313,13 @@ function reload() {
    than to the top of page 1. Only the first hop is kept: a search launched from
    inside another one still returns to the original spot. */
 function rememberPlace(fileId) {
-  if (state.similarOf || state.vstack || state.stack) return;
+  if (state.similarOf || state.vstack || state.stack || state.container) return;
   state.back = { page: state.page, focus: fileId != null ? fileId : state.focus,
                  top: $("#main").scrollTop, left: $("#main").scrollLeft };
 }
 function backToPlace() {
   const b = state.back;
-  state.back = null; state.vstack = null; state.stack = null;
+  state.back = null; state.vstack = null; state.stack = null; state.container = null;
   if (b) state.page = b.page;
   return load(b ? { place: b } : {});
 }
@@ -1353,7 +1356,7 @@ async function categorize(ids, cat) {
   // a collapsed tile stands for its whole duplicate group, so the category goes
   // to every copy in it; anywhere each file has its own tile, just that file
   const withGroup = $("#fcollapse").checked && state.view !== "list"
-    && !state.stack && !state.vstack && !state.similarOf;
+    && !state.stack && !state.vstack && !state.container && !state.similarOf;
   const r = await save("/api/categorize", { ids, category: cat, with_group: withGroup });
   ids.forEach(id => { const f = state.files.find(x => x.id === id); if (f) f.category = cat; });
   refreshTiles(ids);
@@ -1385,7 +1388,7 @@ function advancePast(justDone, cat) {
     const fcat = $("#fcat").value;
     const dropsOut = fcat !== "any" && +fcat !== cat;
     state.sel.clear(); state.focus = null; syncSel();
-    return dropsOut && !state.similarOf && !state.vstack && !state.stack
+    return dropsOut && !state.similarOf && !state.vstack && !state.stack && !state.container
       ? " · page done, press Refresh for the next files" : " · page done";
   }
   const id = order[next];
@@ -1498,10 +1501,22 @@ async function showMeta(id) {
     const ap = f.alt_paths ? JSON.parse(f.alt_paths) : null;
     if (ap && ap.length) alsoAt = ap.join("   ·   ");
   } catch (e) {}
+  // a file pulled out of an archive or document, and a container's own contents
+  const cont = f.container;
+  const foundIn = cont ? (cont.path || cont.name) : "";
+  const mem = f.kind === "archive" ? f.members : null;
+  const memText = mem ? `${mem.media} image(s) and video(s)`
+    + (mem.containers ? `, ${mem.containers} nested archive(s) or document(s)` : "") : "";
+  const contWord = c => c && c.is_document ? "document"
+    : c && c.is_cache ? "app cache piece" : "archive";
   const rows = [
-    ["Source", f.source], ["Type", f.kind],
+    ["Source", f.source], ["Type", f.kind === "archive" ? `${contWord(mem)} (container)` : f.kind],
     ["Original name", f.orig_name || ""],
     ["File path", dispPath],
+    ["Found in", foundIn],
+    ["Where in it", f.container ? f.container.where : ""],
+    ["Copy", f.container ? f.container.copy : ""],
+    ["Items extracted", mem ? memText : ""],
     ["Also under", alsoAt],
     ["App cache", f.cache_desc || ""],
     ["Stored at", f.orig_path && f.path && f.path !== f.orig_path && f.path_exists ? f.path : ""],
@@ -1539,7 +1554,9 @@ async function showMeta(id) {
     ? `<img src="/thumb/${f.thumb}" alt=""
          onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'noimg',textContent:'no preview'}))">
        <button class="btn sm full" id="mFull">View full size</button>`
-    : `<div class="noimg">no preview<br><small>${esc(f.error || "not processed")}</small></div>`;
+    : `<div class="noimg">no preview<br><small>${esc(f.error || (f.kind === "archive"
+        ? `a ${contWord(f.members)}: its images and videos are listed separately`
+        : "not processed"))}</small></div>`;
   const nm = (f.orig_name || f.rel_path || f.path || "").split(/[\\/]/).pop();
   m.innerHTML = `
     <div class="preview">${preview}</div>
@@ -1562,6 +1579,10 @@ async function showMeta(id) {
         <button class="btn sm" id="mSim">Find similar</button>
         <button class="btn sm" id="mHex">Hex view</button>
       </div>
+      ${cont ? `<div class="row"><button class="btn sm" id="mCont"
+          title="Show every image and video that came out of ${esc(cont.name)}">Show everything from this ${contWord(cont)}</button></div>` : ""}
+      ${mem && mem.media ? `<div class="row"><button class="btn sm" id="mCont"
+          title="Show the images and videos that came out of this ${contWord(mem)}">Show its ${mem.media} item(s)</button></div>` : ""}
 
       ${f.keyframes && f.keyframes.length ? `<div class="muted" style="margin-top:8px">Key frames</div>
         <div class="film">${f.keyframes.map(k =>
@@ -1604,13 +1625,22 @@ async function showMeta(id) {
   if ($("#mMapFull")) $("#mMapFull").onclick = () => openSingleMapView(f);
   if ($("#mVstack")) $("#mVstack").onclick = () => {
     rememberPlace(f.id);
-    state.vstack = f.vstack_id; state.page = 1; load();
+    state.vstack = f.vstack_id; state.container = null; state.page = 1; load();
     $("#simBanner").style.display = "flex";
     $("#simId").textContent = `visual-match group (${f.vstack.length})`;
   };
+  if ($("#mCont")) $("#mCont").onclick = () => {
+    const cid = cont ? cont.id : f.id;
+    const name = cont ? cont.name : nm;
+    rememberPlace(f.id);
+    state.container = cid; state.containerName = name;
+    state.stack = null; state.vstack = null; state.page = 1; load();
+    $("#simBanner").style.display = "flex";
+    $("#simId").textContent = `everything from ${name}`;
+  };
   if ($("#mStack")) $("#mStack").onclick = () => {
     rememberPlace(f.id);
-    state.stack = f.stack_id; state.page = 1; load();
+    state.stack = f.stack_id; state.container = null; state.page = 1; load();
     $("#simBanner").style.display = "flex";
     $("#simId").textContent = `exact-duplicate group (${f.stack.length})`;
   };
@@ -1919,11 +1949,13 @@ $("#ctx").addEventListener("click", e => {
     if (!f0) return;
     if (f0.vstack_id) {
       rememberPlace(f0.id);
-      state.vstack = f0.vstack_id; state.stack = null; state.page = 1; load();
+      state.vstack = f0.vstack_id; state.stack = null; state.container = null;
+      state.page = 1; load();
       $("#simId").textContent = `visual-match group (${f0.vstack_count})`;
     } else if (f0.stack_id) {
       rememberPlace(f0.id);
-      state.stack = f0.stack_id; state.vstack = null; state.page = 1; load();
+      state.stack = f0.stack_id; state.vstack = null; state.container = null;
+      state.page = 1; load();
       $("#simId").textContent = `exact-duplicate group (${f0.stack_count})`;
     } else {
       return;
@@ -2172,7 +2204,7 @@ document.addEventListener("keydown", e => {
 
 /* ---------- filter wiring ---------- */
 // #fsort has its own handler (it maps to state.sortCol/Dir), so it's not here
-["#fq", "#fkind", "#fcat", "#fflag", "#fsrc", "#forigin", "#finarch", "#fdup", "#ffaces", "#fgps",
+["#fq", "#fkind", "#fcat", "#fflag", "#fsrc", "#forigin", "#finarch", "#findoc", "#fdup", "#ffaces", "#fgps",
  "#fhit", "#fhashset", "#fhidegood", "#ferr", "#fskin", "#fcollapse"].forEach(s => {
   const el = $(s);
   el.addEventListener(s === "#fq" ? "input" : "change", debounce(reload, 250));
@@ -2192,7 +2224,7 @@ const SEC_ACTIVE = {
   err:    () => $("#ferr").checked,
   loc:    () => $("#fgps").checked,
   carve:  () => !!$("#forigin").value,
-  arch:   () => $("#finarch").checked,
+  arch:   () => $("#finarch").checked || $("#findoc").checked,
 };
 // Each active filter drives a removable chip under "N filters" - "Clear"
 // still resets everything, but one filter can now come off on its own.
@@ -2243,14 +2275,20 @@ const FILTER_DEFS = [
     label: () => "Has GPS",
     clear: () => { $("#fgps").checked = false; } },
   { active: () => $("#finarch").checked,
-    label: () => "Extracted from an archive",
+    label: () => "Pulled from an archive",
     clear: () => { $("#finarch").checked = false; } },
+  { active: () => $("#findoc").checked,
+    label: () => "Pulled from a document",
+    clear: () => { $("#findoc").checked = false; } },
   { active: () => !!state.vstack,
     label: () => "Viewing a visual-match group",
     clear: () => { state.vstack = null; } },
   { active: () => !!state.stack,
     label: () => "Viewing an exact-duplicate group",
     clear: () => { state.stack = null; } },
+  { active: () => !!state.container,
+    label: () => `Everything from ${esc(state.containerName || "one archive or document")}`,
+    clear: () => { state.container = null; } },
 ];
 function countActiveFilters() {
   return FILTER_DEFS.filter(f => f.active()).length;
@@ -2266,11 +2304,11 @@ function renderFilterChips() {
 $("#fchips").addEventListener("click", e => {
   const btn = e.target.closest("button[data-i]");
   if (!btn) return;
-  const inGroup = !!(state.vstack || state.stack);
+  const inGroup = !!(state.vstack || state.stack || state.container);
   FILTER_DEFS[+btn.dataset.i].clear();
   refreshSections();
   // dropping a group view returns to where the group was opened from
-  if (inGroup && !state.vstack && !state.stack && state.back) return backToPlace();
+  if (inGroup && !state.vstack && !state.stack && !state.container && state.back) return backToPlace();
   reload();
 });
 function refreshSections() {
@@ -2434,7 +2472,7 @@ async function refreshContext() {
   try { await refreshFlags(); } catch (e) {}
   updateScreenInfo(c.screening);
   refreshSimIndexInfo();
-  updateArchInfo(c.archives);
+  updateArchInfo(c.archives); updateContainerCounts(c.containers);
   updateKnownHash(c.known_hash);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
   (c.sources || []).forEach(s => {
@@ -2455,6 +2493,7 @@ $("#btnClearFilters").onclick = () => {
   $("#fsrc").value = "";
   $("#forigin").value = "";
   $("#finarch").checked = false;
+  $("#findoc").checked = false;
   $("#fdup").value = "";
   $("#fhashset").value = "";
   ["#ffaces", "#fgps", "#fhit", "#fhidegood", "#ferr"].forEach(s => $(s).checked = false);
@@ -2462,7 +2501,7 @@ $("#btnClearFilters").onclick = () => {
   $("#fskin").value = "0"; $("#fskinv").textContent = "Any";
   state.sortCol = "file_path"; state.sortDir = "asc";
   reflectGridSort();
-  state.vstack = null; state.stack = null; state.similarOf = null;
+  state.vstack = null; state.stack = null; state.container = null; state.similarOf = null;
   $("#simBanner").style.display = "none";
   // also drop the list-view per-column filters
   state.colFilters = {};
@@ -2780,17 +2819,59 @@ $("#fusestash").addEventListener("change", async () => {
 });
 
 /* ---------- nested archives (.zip / .tar / .gz inside a source) ---------- */
+$("#btnDocs").onclick = async () => {
+  const r = await api("/api/extract-documents", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  if (r.error) return toast(r.message || "Could not start");
+  $("#btnDocs").disabled = true;
+  toast("Looking for documents in the sources…");
+  // the counts are right as soon as the extraction itself is done; processing and
+  // hash matching run on after it, and can take minutes on a large case
+  let countsShown = false;
+  const onTick = j => {
+    if (!countsShown && j.extracted) { countsShown = true; refreshContext(); }
+  };
+  trackJob("#docsInfo", "#taskProg", "Extracting media from documents", (ok, j) => {
+    if (ok) {
+      const added = j.stats?.expanded ?? 0;
+      const missing = (j.stats?.unavailable || []).length
+        ? ` · not available: ${j.stats.unavailable.join(", ")}` : "";
+      $("#btnDocs").disabled = false;
+      $("#docsInfo").textContent = (added
+        ? `${j.stats.documents} document(s) opened, ${added} picture(s) and video(s) added.`
+        : "No new media in documents") + missing;
+      refreshContext();
+    } else $("#btnDocs").disabled = false;
+  }, onTick);
+};
+
+// plain counts, as the other sections show theirs; the checkbox under each button
+// filters to the files, and the Type dropdown shows the containers themselves
+function updateContainerCounts(c) {
+  const box = $("#docsCounts");
+  if (!box || !c) return;
+  const count = (n, one, many) => `${(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
+  box.textContent = `${count(c.documents, "document", "documents")}`
+    + ` · ${count(c.document_items, "file pulled out", "files pulled out")}`;
+  const ab = $("#archCounts");
+  if (ab) {
+    ab.textContent = `${count(c.archives, "archive", "archives")}`
+      + ` · ${count(c.archive_items, "file pulled out", "files pulled out")}`;
+  }
+}
+
 function updateArchInfo(a) {
   const sec = document.querySelector('.fsec[data-sec="arch"]');
   const el = $("#archInfo");
   if (!el) return;
-  if (sec) sec.hidden = !(a && a.total);
-  if (!a || !a.total) { el.innerHTML = ""; return; }
+  // shown for every open case: its documents button works on any source
+  if (sec) sec.hidden = false;
+  if (!a || !a.total) { el.innerHTML = `<div id="archCounts"></div>`; return; }
   const pending = a.total - a.expanded;
   const label = pending > 0 ? "Expand archives" : "Re-check archives";
-  el.innerHTML = `${a.total.toLocaleString()} archive${a.total === 1 ? "" : "s"}`
-    + (a.expanded ? ` · ${a.expanded.toLocaleString()} expanded` : "")
-    + ` <button class="btn sm" id="btnExpand">${label}</button>`
+  el.innerHTML = `<div id="archCounts"></div>`
+    + `<button class="btn sm" id="btnExpand" title="Opens each zip, 7z, tar or gz found in the sources and adds the pictures and videos inside.">${label}</button>`
     + `<div id="expandInfo" class="fnote"></div>`;
   $("#btnExpand").onclick = async () => {
     const r = await api("/api/expand-archives", {
@@ -2850,7 +2931,7 @@ function updateScreenInfo(scr) {
    the sidebar (#taskProg) - its own label and percentage, not just a moving
    fill, and its own footer strip so it never reads as part of whatever
    filter section happens to be open above it. */
-function trackJob(infoSel, barSel, label, done) {
+function trackJob(infoSel, barSel, label, done, onTick) {
   const info = $(infoSel);
   const bar = barSel ? $(barSel) : null;
   const barTxt = bar ? bar.querySelector(".jbtxt") : null;
@@ -2880,6 +2961,7 @@ function trackJob(infoSel, barSel, label, done) {
       return finish(false, j);
     }
     if (j.stage === "done" || !j.running) return finish(true, j);
+    if (onTick) onTick(j);
     const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
     info.textContent = j.total
       ? `${j.message || label} — ${j.done.toLocaleString()}/${j.total.toLocaleString()} (${pct}%)`
@@ -3781,6 +3863,7 @@ $("#btnAddEvidence").onclick = () => {
   $("#aeCarve").checked = false;
   $("#aeExpand").checked = false;
   $("#aeExpandWarn").style.display = "none";
+  $("#aeDocs").checked = false;
   $("#aeKf").value = 6; $("#aeKfv").textContent = "6";
   $("#aeGo").disabled = false;
   $("#addEvDlg").style.display = "block";
@@ -3801,7 +3884,8 @@ $("#aeGo").onclick = async () => {
     spec: specs[0] || null, sources: folders,
     options: { screen: $("#aeScreen").checked, keyframes: +$("#aeKf").value,
                stage: $("#aeStage").checked, carve: $("#aeCarve").checked,
-               expand_archives: $("#aeExpand").checked }
+               expand_archives: $("#aeExpand").checked,
+               expand_documents: $("#aeDocs").checked }
   });
   if (ing.error) { $("#aeGo").disabled = false; return toast(ing.message || "Could not start ingest"); }
   $("#addEvDlg").style.display = "none";
@@ -4212,7 +4296,8 @@ $("#createGo").onclick = async () => {
     spec: specs[0] || null, sources: folders,
     options: { screen: $("#optScreen").checked, keyframes: +$("#optKf").value,
                stage: $("#optStage").checked, carve: $("#optCarve").checked,
-               expand_archives: $("#optExpand").checked }
+               expand_archives: $("#optExpand").checked,
+               expand_documents: $("#optDocs").checked }
   });
   if (ing.error) return fail(ing.message || "Ingest failed");
   pollJob();
@@ -4783,7 +4868,7 @@ $("#mapViewClose").onclick = closeMapView;
     if (c.vic) $("#btnVic").style.display = "";
     updateScreenInfo(c.screening);
     refreshSimIndexInfo();
-    updateArchInfo(c.archives);
+    updateArchInfo(c.archives); updateContainerCounts(c.containers);
     updateKnownHash(c.known_hash);
     if (c.errors > 0) {
       $("#errCount").textContent = `(${c.errors.toLocaleString()})`;

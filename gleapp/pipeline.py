@@ -26,7 +26,7 @@ from PIL import Image
 from . import archive, dedupe, detect, exocache, hashdb, imaging, lzc, nested, winsearch  # noqa: F401  (imaging: decoder setup)
 from .case import Case, Source
 from .hashing import crypto_hashes, perceptual_hashes
-from .ingest import scan, sniff_kind
+from .ingest import _head, is_document, scan, sniff_kind
 from .media import extract_video_isolated, make_image_thumb
 from .metadata import extract_image
 
@@ -57,7 +57,7 @@ class RunStats:
 
 
 def ingest_sources(case: Case, sources: list[Source], *, progress=None,
-                   expand_archives: bool = True) -> int:
+                   expand_archives: bool = True, expand_documents: bool = False) -> int:
     """Discover files from each source and register them in the DB.
 
     ``progress(n)`` (optional) is called every ~200 files with the running
@@ -67,8 +67,21 @@ def ingest_sources(case: Case, sources: list[Source], *, progress=None,
     ``expand_archives`` opens each archive found inside a source and registers the
     media in it. Off, the archives are still registered as containers and can be
     opened later with :func:`gleapp.nested.expand_containers` (Expand archives).
+
+    ``expand_documents`` keeps each PDF, HTML page, MHTML and Safari web archive as
+    a container and extracts the media inside it (``gleapp/docmedia.py``), whether
+    or not the other archives are opened. A source can also ask for it on its own
+    (``"documents": true`` in a job file).
     """
     from . import projectvic
+
+    if expand_documents:
+        for src in sources:
+            src.documents = True
+    documents = any(getattr(s, "documents", False) for s in sources)
+    if documents:
+        # a later Expand archives opens a PDF found inside a zip the same way
+        case.db.set_meta(nested.DOCUMENTS_META, "1")
 
     n = 0
     for src in sources:
@@ -88,6 +101,7 @@ def ingest_sources(case: Case, sources: list[Source], *, progress=None,
             include_other=src.include_other,
             follow_symlinks=src.follow_symlinks,
             max_bytes=src.max_bytes,
+            documents=src.documents,
         ):
             case.db.upsert_file(
                 d.path,
@@ -118,10 +132,11 @@ def ingest_sources(case: Case, sources: list[Source], *, progress=None,
     # open it now so its media is processed in the same pass, unless the caller
     # asked not to (a full-filesystem extraction can hold many thousands).
     added = 0
-    if expand_archives:
+    if expand_archives or documents:
         added = nested.expand_containers(
             case, progress=(lambda k: progress(n + k)) if progress else None,
-            include_other=any(getattr(s, "include_other", False) for s in sources))
+            include_other=any(getattr(s, "include_other", False) for s in sources),
+            documents=documents, only_documents=not expand_archives)
 
     # An app's ExoPlayer cache splits each video into pieces kept as containers
     # above; join each item's pieces into one file (gleapp/exocache.py). A cache
@@ -139,6 +154,75 @@ def ingest_sources(case: Case, sources: list[Source], *, progress=None,
     except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         pass
     return n + added
+
+
+def _folder_roots(case: Case) -> dict[str, Path]:
+    """Where each folder source of the case was, from its registered rows: a folder
+    ingest keeps each file's absolute ``path`` and its ``rel_path`` within the source,
+    so the one minus the other is the folder. Archive sources are not folders."""
+    archives = set(archive.source_records(case))
+    roots: dict[str, Path] = {}
+    names = [r[0] for r in case.db.conn.execute("SELECT DISTINCT source FROM files")]
+    for name in names:
+        if not name or name in archives:
+            continue
+        # a file GLEAPP wrote under the case (an extracted or joined one) is not
+        # where the source was; the first row a folder walk registered is
+        for r in case.db.conn.execute(
+                "SELECT path, rel_path FROM files WHERE source = ? AND container_id IS NULL "
+                "AND media_id IS NULL AND cache_info IS NULL LIMIT 50", (name,)):
+            path, rel = r["path"] or "", r["rel_path"] or ""
+            if rel and path.endswith(rel):
+                roots[name] = Path(path[: len(path) - len(rel)] or ".")
+                break
+    return roots
+
+
+def add_documents(case: Case, *, progress=None) -> dict:
+    """Extract the media inside the documents of a case ingested without them.
+
+    Goes back over every source the case holds (a folder, an extraction archive or
+    a disk image), registers each PDF, HTML page, MHTML and web archive in it as a
+    container, the way an ingest with ``expand_documents`` does, and opens them
+    (gleapp/docmedia.py). A document already in the case is not registered twice,
+    and one already opened is not opened again, so a second run adds nothing.
+    Returns ``{"documents": n, "added": n, "unavailable": [source names]}``; a source
+    no longer where the case recorded it is skipped and named there.
+    """
+    case.db.set_meta(nested.DOCUMENTS_META, "1")
+    before = case.db.conn.execute(
+        "SELECT COUNT(*) FROM files WHERE kind = 'archive'").fetchone()[0]
+    unavailable: list[str] = []
+
+    for name, root in _folder_roots(case).items():
+        if not root.exists():
+            unavailable.append(name)
+            continue
+        for d in scan(root, documents=True):
+            if d.kind != "archive" or not is_document(d.path, _head(d.path)):
+                continue            # already registered by the first ingest, or not a document
+            case.db.upsert_file(d.path, rel_path=d.rel_path, source=name, kind=d.kind,
+                                ext=d.ext, size=d.size, mtime=d.mtime, ctime=d.ctime,
+                                atime=d.atime or None)
+        case.db.commit()
+
+    for name, rec in archive.source_records(case).items():
+        src = Source(name=name, path=rec["path"], kind="archive",
+                     stage=rec.get("mode") == archive.MODE_STAGED, documents=True)
+        src.only_documents = True       # read by archive._only_documents
+        try:
+            archive.ingest_archive(case, src)
+        except (archive.ArchiveUnavailable, OSError, ValueError):
+            unavailable.append(name)
+
+    documents = case.db.conn.execute(
+        "SELECT COUNT(*) FROM files WHERE kind = 'archive'").fetchone()[0] - before
+    added = nested.expand_containers(case, progress=progress, documents=True,
+                                     only_documents=True)
+    case.db.audit_log(case.examiner, "add-documents",
+                      f"{documents} document(s) found, {added} item(s) extracted"
+                      + (f"; not available: {', '.join(unavailable)}" if unavailable else ""))
+    return {"documents": documents, "added": added, "unavailable": unavailable}
 
 
 def _process_one(case_root, thumb_dir, row, *, force: bool, keyframes: int, screen: bool,

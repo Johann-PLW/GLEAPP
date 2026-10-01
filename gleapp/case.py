@@ -60,6 +60,8 @@ class Source:
                                   # walking the filesystems the acquisition holds
     unallocated_only: bool = False  # carve: scan only the space no volume claims,
                                   # which is the only part a walk cannot reach
+    documents: bool = False       # keep PDF / HTML / MHTML / web archive files as
+                                  # containers so the media inside them is extracted
 
     @property
     def max_bytes(self) -> int | None:
@@ -171,6 +173,7 @@ def _norm_source(entry: object, base: Path) -> Source | None:
             stage=bool(low.get("stage", False)),
             carve=bool(low.get("carve", False)),
             unallocated_only=bool(low.get("unallocated_only", False)),
+            documents=bool(low.get("documents", False)),
         )
     return None
 

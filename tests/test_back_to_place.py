@@ -32,7 +32,8 @@ def test_only_the_first_hop_is_remembered():
     js = APPJS.read_text(encoding="utf-8")
     body = _body(js, "function rememberPlace")
     # already inside a search or group: a second search keeps the original spot
-    assert "if (state.similarOf || state.vstack || state.stack) return;" in body
+    assert ("if (state.similarOf || state.vstack || state.stack || state.container) return;"
+            in body)
     for key in ("page: state.page", "top:", "left:"):
         assert key in body
 

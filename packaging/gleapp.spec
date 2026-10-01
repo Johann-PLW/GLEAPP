@@ -32,7 +32,7 @@ hiddenimports = ["gleapp.desktop", "gleapp.cli", "gleapp.web.app", "gleapp.proje
                  "texture2ddecoder", "liblzfse", "zstandard", "gleapp.lzc",
                  "gleapp.nested", "gleapp.hashstore", "gleapp.hashdb", "gleapp.stash",
                  "gleapp.timeutil", "tzdata", "py7zr", "gleapp.simindex",
-                 "gleapp.content"]
+                 "gleapp.content", "gleapp.docmedia", "pypdf"]
 if sys.platform == "win32":
     # pythonnet, for WebView2. Absent elsewhere, and PyInstaller logs a missing hidden
     # import as an ERROR even though the build succeeds.
@@ -43,7 +43,9 @@ for mod in ("webview", "cv2", "imagehash", "PIL", "pi_heif",
             "texture2ddecoder", "liblzfse", "zstandard", "clr_loader", "pythonnet",
             # 7-Zip reading: py7zr plus its native codec extensions
             "py7zr", "pyppmd", "pybcj", "inflate64", "brotli", "Cryptodome",
-            "multivolumefile"):
+            "multivolumefile",
+            # pypdf's AES for encrypted PDFs (gleapp/docmedia.py)
+            "Crypto"):
     try:
         d, b, h = collect_all(mod)
         datas += d

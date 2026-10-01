@@ -12,7 +12,9 @@ say where the media came from.
 
 Formats: ZIP, 7-Zip (via ``py7zr``), TAR (plain and gzip/bzip2/xz), a single
 gzip/bzip2/xz-compressed file, and a Windows ``thumbcache_*.db`` (see
-``gleapp/thumbcache.py`` for what that last one can and cannot recover). RAR is
+``gleapp/thumbcache.py`` for what that last one can and cannot recover). When the
+case asked for documents (``Source.documents``), a PDF, HTML page, MHTML or Safari
+web archive is a container too, read by ``gleapp/docmedia.py``. RAR is
 recognised on ingest but not expanded - its readers need an external
 ``unrar``/``bsdtar`` binary a self-contained build cannot carry - and the
 container row is flagged so the examiner knows to extract it.
@@ -30,8 +32,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator
 
-from . import archive, thumbcache
-from .ingest import (ARCHIVE_EXTS, _kind_from_magic, classify, is_appledouble,
+from . import archive, docmedia, thumbcache
+from .ingest import (ARCHIVE_EXTS, _kind_from_magic, classify, is_appledouble, is_document,
                      is_exoplayer_cache_name, is_search_index_name)
 
 # A single member larger than this is skipped rather than written into the case.
@@ -42,6 +44,10 @@ MAX_DEPTH = 8
 MAX_MEMBERS = 100_000
 
 EXTRACT_DIR = "extracted"
+
+# The case meta key that records a case asked for documents to be opened, so a
+# later Expand archives treats a PDF inside a zip the way the ingest did.
+DOCUMENTS_META = "expand_documents"
 
 _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
@@ -78,11 +84,16 @@ class _Member:
 
 
 # --------------------------------------------------------------------------
-def _looks_like_container(path: Path) -> str | None:
-    """``'zip'`` | ``'tar'`` | ``'gz'`` | ``'bz2'`` | ``'xz'`` | ``None``."""
+def _looks_like_container(path: Path, name: str = "") -> str | None:
+    """``'zip'`` | ``'tar'`` | ``'gz'`` | ``'bz2'`` | ``'xz'`` | a
+    ``docmedia.FORMATS`` document | ``None``.
+
+    ``name`` is the row's own name: a reference-mode copy under ``<case>/tmp/`` is
+    named by a hash, and a document is recognized partly by its extension.
+    """
     try:
         with open(path, "rb") as fh:
-            head = fh.read(262)
+            head = fh.read(1024)
     except OSError:
         return None
     if head[:4] in _ZIP_MAGIC:
@@ -109,7 +120,8 @@ def _looks_like_container(path: Path) -> str | None:
         return "tar"
     if path.suffix.lower() in {".7z", ".rar"}:
         return path.suffix.lower()[1:]
-    return None
+    # decided last: a tar whose first member is a PDF shows "%PDF-" at offset 512
+    return docmedia.document_format(Path(name) if name else path, head)
 
 
 def _is_tar(path: Path) -> bool:
@@ -207,7 +219,7 @@ def _thumbcache_members(path: Path) -> Iterator[_Member]:
         yield _Member(name, len(e.data), None, None, (lambda d=e.data: d))
 
 
-def _members(path: Path, fmt: str) -> Iterator[_Member]:
+def _members(path: Path, fmt: str, tally: dict | None = None) -> Iterator[_Member]:
     if fmt == "zip":
         yield from _zip_members(path)
     elif fmt == "tar":
@@ -222,10 +234,18 @@ def _members(path: Path, fmt: str) -> Iterator[_Member]:
         yield from _single_member(path, lzma.open, "xz")
     elif fmt == "thumbcache":
         yield from _thumbcache_members(path)
+    elif fmt in docmedia.FORMATS:
+        yield from _document_members(path, fmt, tally)
+
+
+def _document_members(path: Path, fmt: str, tally: dict | None) -> Iterator[_Member]:
+    # a document's parts carry no dates of their own
+    for name, data in docmedia.members(path, fmt, tally):
+        yield _Member(name, len(data), None, None, (lambda d=data: d))
 
 
 # --------------------------------------------------------------------------
-def _member_kind(name: str, data: bytes) -> tuple[str, str]:
+def _member_kind(name: str, data: bytes, documents: bool = False) -> tuple[str, str]:
     """``(kind, ext)`` for an extracted member."""
     ext = PurePosixPath(name).suffix.lower()
     if is_exoplayer_cache_name(name):
@@ -233,6 +253,8 @@ def _member_kind(name: str, data: bytes) -> tuple[str, str]:
     kind = classify(ext)
     if kind == "other" or (kind != "other" and is_appledouble(name, data[:16])):
         kind = _kind_from_magic(data[:16])
+    if kind == "other" and documents and is_document(name, data[:16]):
+        kind = "archive"
     if kind == "archive" and not ext:
         ext = ".zip" if data[:4] in _ZIP_MAGIC else ext
     return kind, ext
@@ -248,21 +270,25 @@ def _dest_for(case_root: Path, container_id: int, member_name: str, ext: str) ->
     return d / f"{h}{ext or ''}"
 
 
-def _expand_one(case, row, *, include_other: bool, tally: dict) -> list[int]:
+def _expand_one(case, row, *, include_other: bool, tally: dict,
+                documents: bool = False, only_documents: bool = False) -> list[int]:
     """Expand one container row. Returns the ids of any archive rows it produced,
     so the caller can recurse into them."""
     rec = archive.source_records(case).get(row["source"])
     new_archives: list[int] = []
     try:
         with archive.local_copy(case.root, rec, row) as local:
-            fmt = _looks_like_container(Path(local))
+            fmt = _looks_like_container(
+                Path(local), row["orig_path"] or row["rel_path"] or row["path"])
+            if only_documents and fmt not in docmedia.FORMATS:
+                return []
             if fmt in (None, "rar"):
                 if fmt == "rar":
                     tally["unsupported"] += 1
                     case.db.update_file(row["id"], error=RAR_ERROR)
                 return []
             written = 0
-            for m in _members(Path(local), fmt):
+            for m in _members(Path(local), fmt, tally):
                 if written >= MAX_MEMBERS:
                     break
                 if m.encrypted:
@@ -282,7 +308,7 @@ def _expand_one(case, row, *, include_other: bool, tally: dict) -> list[int]:
                 if len(data) > MAX_MEMBER_BYTES:
                     tally["too_big"] += 1
                     continue
-                kind, ext = _member_kind(nm, data)
+                kind, ext = _member_kind(nm, data, documents)
                 if (kind not in ("image", "video", "archive") and not include_other
                         and not is_search_index_name(nm)):
                     tally["skipped_other"] += 1
@@ -333,13 +359,21 @@ def _is_macos_junk(name: str) -> bool:
 
 # --------------------------------------------------------------------------
 def expand_containers(case, *, progress: Callable[[int], None] | None = None,
-                      force: bool = False, include_other: bool = False) -> int:
+                      force: bool = False, include_other: bool = False,
+                      documents: bool | None = None, only_documents: bool = False) -> int:
     """Open every ``archive`` row that has not been expanded and register the
     media inside it. Returns the number of rows added.
 
     ``force`` re-opens containers that already have children (e.g. after a bad
     read was fixed). Nested archives are followed to ``MAX_DEPTH``.
+
+    ``documents`` keeps a PDF / HTML / MHTML / web archive found inside an archive
+    as a container to open in turn; None reads what the case recorded at ingest
+    (``DOCUMENTS_META``). ``only_documents`` opens the documents and leaves every
+    other container for a later Expand archives.
     """
+    if documents is None:
+        documents = case.db.get_meta(DOCUMENTS_META) == "1"
     # a case ingested before this feature registered a .zip as 'other' (or
     # skipped it) - reclassify the ones still on disk by extension so the pass
     # and the "archive" filter find them
@@ -360,7 +394,8 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
         and not is_exoplayer_cache_name(r["orig_path"] or r["rel_path"] or r["path"])
     ]
     tally = {k: 0 for k in ("added", "encrypted", "too_big", "failed",
-                            "skipped_other", "unsupported", "failed_archives")}
+                            "skipped_other", "unsupported", "failed_archives",
+                            "too_small")}
     seen: set[int] = set()
     depth = 0
     while queue and depth < MAX_DEPTH:
@@ -370,7 +405,8 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
                 continue
             seen.add(row["id"])
             for child_id in _expand_one(case, row, include_other=include_other,
-                                        tally=tally):
+                                        tally=tally, documents=documents,
+                                        only_documents=only_documents):
                 child = case.db.get_file(child_id)
                 if child is not None:
                     nxt.append(child)

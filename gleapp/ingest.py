@@ -13,6 +13,7 @@ IMAGE_EXTS = {
     ".jpg", ".jpeg", ".jpe", ".png", ".gif", ".bmp", ".tif", ".tiff",
     ".webp", ".heic", ".heif", ".jfif", ".dng", ".cr2", ".nef", ".arw",
     ".ktx", ".ktx2", ".avif",
+    ".jp2", ".j2k", ".j2c", ".jpf", ".jpx",     # JPEG 2000 (file format and bare codestream)
 }
 VIDEO_EXTS = {
     ".mp4", ".m4v", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm",
@@ -78,6 +79,18 @@ def is_search_index_name(name: str) -> bool:
     return name.replace("\\", "/").rsplit("/", 1)[-1].lower() in _SEARCH_INDEX_NAMES
 
 
+# Documents that can hold media (gleapp/docmedia.py). Kept as containers only when a
+# source asks for it (``Source.documents``): a phone holds thousands of cached pages.
+DOCUMENT_EXTS = {".pdf", ".html", ".htm", ".xhtml", ".mht", ".mhtml", ".webarchive"}
+
+
+def is_document(name: str, head: bytes) -> bool:
+    """A document gleapp/docmedia.py can open: by extension, or a PDF by its magic
+    (a PDF an app saved often has no extension)."""
+    ext = os.path.splitext(name.replace("\\", "/").rsplit("/", 1)[-1])[1].lower()
+    return ext in DOCUMENT_EXTS or head[:5] == b"%PDF-"
+
+
 # ExoPlayer's media cache (see gleapp/exocache.py, and the vendored exoprobe for the
 # layout and its source). A piece holds the middle of a video, so its bytes cannot say
 # what it is, and the first piece of an MP4 opens with a video header: these are
@@ -129,6 +142,10 @@ def _kind_from_magic(h: bytes) -> str:
     if h[:2] == b"BM":
         return "image"
     if h[:4] in (b"II*\x00", b"MM\x00*"):                    # TIFF (and many RAWs)
+        return "image"
+    if h[:12] == b"\x00\x00\x00\x0cjP  \r\n\x87\n":            # JPEG 2000 file (JP2/JPX)
+        return "image"
+    if h[:4] == b"\xff\x4f\xff\x51":                          # JPEG 2000 codestream
         return "image"
     if h[:4] == b"RIFF":
         if h[8:12] == b"WEBP":
@@ -186,11 +203,16 @@ def scan(
     include_other: bool = False,
     follow_symlinks: bool = False,
     max_bytes: int | None = None,
+    documents: bool = False,
 ) -> Iterator[Discovered]:
-    """Walk ``root`` yielding image/video files (and 'other' if requested)."""
+    """Walk ``root`` yielding image/video files (and 'other' if requested).
+
+    ``documents`` keeps a PDF, HTML, MHTML or web archive as a container
+    (``archive``) so ``gleapp/nested.py`` extracts the media inside it.
+    """
     root = Path(root).resolve()
     if root.is_file():
-        yield from _one(root, root.parent)
+        yield from _one(root, root.parent, documents=documents)
         return
     for dirpath, _dirs, filenames in os.walk(root, followlinks=follow_symlinks):
         for name in filenames:
@@ -206,6 +228,8 @@ def scan(
                 sniffed = sniff_kind(fp)
                 if sniffed != "other":
                     kind = sniffed
+                elif documents and is_document(name, _head(fp)):
+                    kind = "archive"
                 elif not include_other and not is_search_index_name(name):
                     continue
             try:
@@ -226,13 +250,15 @@ def scan(
             )
 
 
-def _one(fp: Path, root: Path) -> Iterator[Discovered]:
+def _one(fp: Path, root: Path, *, documents: bool = False) -> Iterator[Discovered]:
     st = fp.stat()
     kind = "archive" if is_exoplayer_cache_name(fp.name) else classify(fp.suffix)
     if kind != "other" and is_appledouble(fp.name, _head(fp)):
         kind = "other"
     if kind == "other":
         kind = sniff_kind(fp)
+    if kind == "other" and documents and is_document(fp.name, _head(fp)):
+        kind = "archive"
     yield Discovered(
         path=str(fp),
         rel_path=fp.name,

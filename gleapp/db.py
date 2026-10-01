@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import vicdetails
+from .vendor import exoprobe
 
 SCHEMA_VERSION = 17
 
@@ -324,6 +325,13 @@ class CaseDB:
         # through ``self.lock``; SQLite's own mutex covers the rest.
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # the gallery's filters tell an app's ExoPlayer cache pieces from the archives
+        # and documents they are kept beside; the names follow a pattern SQL cannot
+        # match, so the rule is exoprobe's own
+        self.conn.create_function(
+            "is_exo_cache_name", 1,
+            lambda name: 1 if name and exoprobe.is_cache_name(name) else 0,
+            deterministic=True)
         self.lock = threading.RLock()
         # examiner changes since the last backup snapshot (drives auto-save UI)
         self.dirty = False

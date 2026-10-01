@@ -27,6 +27,14 @@ zstandard>=0.22
 # Windows x64, macOS arm64 and x86_64, and manylinux x86_64 and aarch64. On
 # Windows on ARM, brotli has no wheel and pip builds it from its sdist.
 py7zr>=0.21
+# Media inside a PDF (gleapp/docmedia.py, "Extract media from documents"). Pure
+# Python, BSD-3-Clause, no required dependencies; Pillow decodes its images.
+pypdf>=5.0
+# pypdf decrypts an AES-encrypted PDF (most restricted PDFs open without a password)
+# only through pycryptodome (module Crypto) or cryptography; it does not look for the
+# pycryptodomex below. Same project and wheels as pycryptodomex; the two install side
+# by side.
+pycryptodome>=3.20
 # Reading an Apple disk image encrypted with a password: the vendored ewfprobe
 # imports pycryptodomex (module Cryptodome) when pycryptodome is absent. py7zr
 # already brings it; it is named here so encrypted images do not depend on that.
