@@ -802,11 +802,57 @@ the fastest (0.04 ms, since WAL readers do not wait for the connection's mutex),
 reader would not see a job's rows until its next commit (jobs commit every 25 to 500
 files; on the shared connection a reader sees them at once), the list view's count cache is keyed on
 `conn.total_changes`, and the hash set imports stage rows in TEMP tables, which belong
-to one connection. It may still be worth doing for the waiting alone; it is a larger
-change than this defect needed.
+to one connection. How much waiting there is in the app itself was measured next, below.
 
 The hash store and the stash also share a connection between threads
 (`hashstore.connect`, `stash.connect`). Every statement on those runs and is fetched
 inside the module's lock, or on a read-only connection of its own (`_ro_query`), so they
 were left as they are. A new shared connection that reads outside a lock needs the same
 setting.
+
+## The context's counts are kept until a row is written
+
+Measured 2026-10-01 at 22672c4 on a synthetic case of 150,000 rows in one folder source
+(Python 3.12.1, macOS arm64, Flask test clients): one `/api/context` took 589 to 627 ms.
+Of that, 298 ms was `relink.folder_status` reading every row of the source and finding
+the folder they share, to look for 50 of the files on disk, and each of seven counts
+over `files` took 18 to 82 ms. The gallery asks for the context when it loads, after
+imports, and every fifteenth tick of a running job (`liveJob` in `app.js`).
+
+A probe timed `SELECT * FROM files WHERE id=?` on the shared connection and on a
+read-only connection of its own, from one thread, to see what a reader waits for:
+
+| while | shared, p95 / max | own connection, p95 / max |
+|---|---|---|
+| nothing else running | 1.1 / 4 ms | 0.4 / 3 ms |
+| `/api/context` back to back | 101 / 256 ms | 14 / 127 ms |
+| `/api/files` pages back to back | 25 / 28 ms (median 21) | 0.2 / 1 ms |
+| a processing job adding 1,200 pictures | 55 / 309 ms | 25 / 140 ms |
+
+The median stayed under 1 ms except while pages were turned. So the waiting is in the
+tail, as long as the longest statement running, and during a job about half of it is
+not the connection at all.
+
+`CaseDB.derived(name, compute)` keeps an answer that comes from the case's rows until
+the connection's `total_changes` moves, the number the list view's count cache already
+rests on: every insert, update and delete through the connection moves it, committed or
+not. `_context_counts` in `web/app.py` and `relink._folder_facts` are kept that way.
+The folder and the sample of files are still looked for on disk on every call, since a
+folder moves without the case being told. `folder_status` also reads only the paths
+(72 ms against 123 to 184 ms for whole rows).
+
+After: a context with nothing written since the last took 1.0 to 1.5 ms and read no
+row of `files`, and the probe beside a loop of them read p95 0.3 ms. A context after a
+write took 464 to 489 ms; 137 ms of that is `os.path.commonpath` over 150,000 paths,
+which holds no connection. The job figures did not move: those waits are the job's own
+statements.
+
+What `derived` cannot see is a write through another connection or another process,
+the same limit the count cache has. Hand it only answers that come from the rows:
+anything read from disk, from the settings folder or from a job's state belongs outside
+it. `tests/test_context_kept_between_writes.py` holds both halves, that a repeat reads
+no rows and that no write is followed by an old answer.
+
+A read connection per thread was not built. It would remove the tail above for reads,
+and it changes what a reader sees (see the section before this one). Measure again on a
+real large case before deciding; these numbers are from a synthetic one.

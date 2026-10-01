@@ -1794,7 +1794,12 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 "timezone": appconfig.get_timezone(), "timezone_options": [],
             })
 
-    def _context_payload(case) -> dict:
+    def _context_counts(case) -> dict:
+        """The part of the context that comes from the case's rows and nothing else.
+        Each statement here is a pass over the table (18 to 82 ms apiece on a case of
+        150,000 rows, measured 2026-10-01), and the gallery asks for the context on
+        load, after imports and at intervals during a job, so the answers are
+        kept until a row is written: see ``CaseDB.derived``."""
         srcs = [r["source"] for r in case.db.conn.execute(
             "SELECT DISTINCT source FROM files WHERE source IS NOT NULL ORDER BY source")]
         clusters = [
@@ -1803,12 +1808,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 "SELECT cluster_id, COUNT(*) n FROM files WHERE cluster_id IS NOT NULL "
                 "GROUP BY cluster_id ORDER BY n DESC LIMIT 200")
         ]
-        vic = None
-        if case.db.get_meta("vic_source_json"):
-            vic = {k: case.db.get_meta("vic_" + k) for k in
-                   ("source_json", "files_dir", "case_id", "case_number",
-                    "source_app", "source_app_version")}
-        from .. import detect
         # screening, error and archive counts in one pass over the table, not
         # three: each pass was 0.3-0.6 s on about 530,000 rows
         _media = "kind IN ('image','video') AND thumb IS NOT NULL"
@@ -1841,8 +1840,27 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         d_items = case.db.conn.execute(
             f"SELECT COUNT(*) FROM files WHERE kind != 'archive' AND "
             f"{_pulled_from_sql(_doc_sql)}").fetchone()[0]
+        return {
+            "srcs": srcs, "clusters": clusters, "scr": scr, "n_err": n_err, "arch": arch,
+            "cont": dict(cont), "a_items": a_items, "d_items": d_items,
+            "cst": case.db.stats(),
+            "case_sets": [dict(r) for r in case.db.list_hashsets()],
+            "any_skin": bool(case.db.conn.execute(
+                "SELECT 1 FROM files WHERE skin_ratio IS NOT NULL LIMIT 1").fetchone()),
+        }
+
+    def _context_payload(case) -> dict:
+        counts = case.db.derived("context.counts", lambda: _context_counts(case))
+        srcs, clusters, scr = counts["srcs"], counts["clusters"], counts["scr"]
+        n_err, arch, cont = counts["n_err"], counts["arch"], counts["cont"]
+        a_items, d_items, cst = counts["a_items"], counts["d_items"], counts["cst"]
+        vic = None
+        if case.db.get_meta("vic_source_json"):
+            vic = {k: case.db.get_meta("vic_" + k) for k in
+                   ("source_json", "files_dir", "case_id", "case_number",
+                    "source_app", "source_app_version")}
+        from .. import detect
         from .. import hashstore, stash
-        cst = case.db.stats()
         try:
             hstore = hashstore.summary()
         except Exception:  # noqa: BLE001 - never let a bad store break the app
@@ -1886,7 +1904,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 "known_good": cst.get("known_good", 0),
                 "global_sets": hstore["sets"],
                 "global_entries": hstore["entries"],
-                "case_sets": [dict(r) for r in case.db.list_hashsets()],
+                "case_sets": counts["case_sets"],
                 "stash": stash_sum,
                 "use_stash": case.db.get_meta("use_stash") != "0",
                 "use_vic": case.db.get_meta("use_vic") != "0",
@@ -1896,9 +1914,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 # screening on; fall back to "any file carries a skin_ratio",
                 # which self-heals cases processed before that meta was written.
                 "done": (case.db.get_meta("screened_at") is not None
-                         or bool(case.db.conn.execute(
-                             "SELECT 1 FROM files WHERE skin_ratio IS NOT NULL LIMIT 1"
-                         ).fetchone())),
+                         or counts["any_skin"]),
                 "backend": detect.face_backend(),
                 "with_faces": scr["wf"] or 0,
                 "with_skin": scr["ws"] or 0,

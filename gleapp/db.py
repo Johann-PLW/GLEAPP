@@ -397,6 +397,9 @@ class CaseDB:
         # server froze on a case with 119,604 container rows (issue #254). What
         # SQL cannot work out is stored in a column instead, see files.exo_cache.
         self.lock = threading.RLock()
+        # answers worked out from the case's rows, kept until a row is written;
+        # see derived()
+        self._derived: dict[str, tuple[int, Any]] = {}
         # examiner changes since the last backup snapshot (drives auto-save UI)
         self.dirty = False
         self.last_write = 0.0
@@ -787,6 +790,31 @@ class CaseDB:
                 )
             self._touch()
             self.conn.commit()
+
+    def derived(self, name: str, compute):
+        """What ``compute()`` returns, kept under ``name`` until anything in the case
+        is written through this connection.
+
+        For answers that are worked out from the case's rows and nothing else, and
+        cost a pass over them: the sidebar's counts, the folder each source's files
+        sit under. The stamp is the connection's running total of changed rows,
+        which every insert, update and delete through it moves, committed or not,
+        so an answer is never handed back across a change (the list view's count
+        cache in ``web/app.py`` rests on the same number). It is read before
+        ``compute()`` runs, so a write that lands while the answer is being worked
+        out leaves it under the older stamp and the next call works it out again.
+        A reopened case is a new CaseDB and starts empty. A write made through
+        another connection or another process is not seen.
+
+        The value is shared between callers: treat it as read-only.
+        """
+        stamp = self.conn.total_changes
+        hit = self._derived.get(name)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        value = compute()
+        self._derived[name] = (stamp, value)
+        return value
 
     def close(self) -> None:
         # Under the lock every query takes: closing the connection while another
