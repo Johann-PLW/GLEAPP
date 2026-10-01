@@ -470,8 +470,16 @@ class CaseDB:
         # case open; each was a pass over the table without them
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_source ON files(source)")
+        # What was extracted from each container, found and counted from the index
+        # alone: the sidebar counts those rows per container by kind, and with only
+        # container_id indexed that read every extracted row (399 ms of a 615 ms
+        # statement on a case with 308,575 of them; 58 ms with kind in the index).
+        # It serves every lookup the older index on container_id alone did, so that
+        # one is dropped; a build that still makes it does no harm.
         self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_files_container ON files(container_id)")
+            "CREATE INDEX IF NOT EXISTS idx_files_container_kind "
+            "ON files(container_id, kind)")
+        self.conn.execute("DROP INDEX IF EXISTS idx_files_container")
         self._ensure_group_heads()
         self._ensure_sort_indexes()
         # the rows whose exo_cache is not decided yet, so finding them costs

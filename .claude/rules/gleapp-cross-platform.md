@@ -887,11 +887,19 @@ fixtures with extracted rows of every kind, on all three SQLite versions.
 `test_the_sidebar_counts_agree_with_the_filters_on_awkward_rows` writes the numbers out
 and holds the statement and the filters, which were not changed, to them.
 
-One regime got a longer single statement. A fixture with 60,003 containers and 308,575
-extracted rows took 772 ms in three statements, the longest 427 ms, and takes 615 ms in
-the one. 399 ms of that is counting the extracted rows per container, which reads each
-row for its `kind`; an index on `(container_id, kind)` would answer it without the rows.
-It was not added: no real case measured here has that many extracted rows.
+One regime got a longer single statement, and an index answered it. A fixture with
+60,003 containers and 308,575 extracted rows took 772 ms in three statements, the
+longest 427 ms, and 615 to 691 ms in the one. 399 to 439 ms of that was counting the
+extracted rows per container, which read each row for its `kind`. The index on
+`container_id` is now on `(container_id, kind)` (`idx_files_container_kind`, made on
+open; the older `idx_files_container` is dropped, since the new one serves every
+lookup it did). The count is answered from the index alone, 58 ms, and the statement
+takes 388 ms. Building it took 250 ms on that fixture (368,580 rows, the file 6 MiB
+larger) and 104 ms on the copy of the real case (149,824 rows, 1.3 MiB), once, the
+first time a case is opened. `kind` has to come second: led by `kind` the index still
+"covers" the count, and every lookup by container scans it (the container tests took
+138 s against 4 s). `test_what_was_extracted_is_counted_from_the_index` asks SQLite for
+the plan of the statement the context really runs.
 
 A read connection per thread was not built, and these numbers are why. A job did not
 make readers wait on the real case. What they wait for is a context being worked out
