@@ -1081,6 +1081,11 @@ the piece's own name instead.</p>
   <strong>stops at a gap</strong>, or has no length recorded. The last-written-or-read
   time is the one ExoPlayer put in the piece's name, from the device's clock. Search
   finds a video by its key.</li>
+  <li><strong>The joined file is GLEAPP's, not the device's.</strong> Its path names the
+  cache folder and a name GLEAPP gave it, and no such file exists on the device. In the
+  details pane, the list view and the HTML report its file path shows <code>&raquo;</code> in
+  place of the last <code>/</code>, followed by an &#9432; whose tooltip reads <em>Derived: not
+  a file on the device</em>.</li>
   <li>Pieces after a gap are not joined, and an item with no piece at position 0 is
   not joined: nothing it holds can open. An encrypted index names nothing; the pieces
   are still joined.</li>

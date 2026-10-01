@@ -379,6 +379,9 @@ _FIELD_DEFS: dict[str, tuple[str, "callable", bool]] = {
     "vic_exif":   ("VIC Exif (as recorded)", lambda d: vicdetails.view(d)["exif"], False),
     "error":      ("Error",         lambda d: d.get("error") or "", False),
 }
+# the fields that show a file's path, which carry the derived-file mark
+_DERIVED_MARK_FIELDS = {"path", "orig_path"}
+
 DEFAULT_REPORT_FIELDS = ["name", "created_dt", "md5", "hash_matches", "vic_record", "vic_series",
                          "vic_flags", "vic_tags", "vic_exif"]
 
@@ -568,6 +571,8 @@ _HTML_HEAD = """<!doctype html><html class="{blur_cls}"><head><meta charset="utf
  .card .f .k{{color:var(--mut);flex:0 0 84px}}
  .card .f .v{{flex:1;word-break:break-all;white-space:pre-line}}
  .card .f.mono .v{{font-family:ui-monospace,Consolas,monospace;font-size:11px}}
+ .dmark{{color:#2f6fdf;margin:0 4px}}
+ .dinfo{{color:#2f6fdf;font-size:1.05em;margin-left:3px;cursor:help}}
  .pill{{display:inline-block;padding:1px 7px;border-radius:10px;background:#eef0f3;margin:1px 1px 0 0}}
  /* dark mode (toggle) */
  html.dark{{--line:#333a46;--ink:#e6e8ec;--mut:#8b93a3}}
@@ -1190,9 +1195,19 @@ def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
         except Exception:  # noqa: BLE001 - a bad row must not kill the report
             val = ""
         if val:
+            shown = html.escape(str(val))
+            if k in _DERIVED_MARK_FIELDS and exocache.is_derived(d):
+                # a file joined from an app's cache: the chevron takes the place of the
+                # last separator, before the name GLEAPP gave it, and the note is on the
+                # info mark
+                s = str(val)
+                sep = max(s.rfind("/"), s.rfind("\\"))
+                shown = (f"{html.escape(s[:max(sep, 0)])}<span class='dmark'>"
+                         f"{exocache.DERIVED_MARK}</span>{html.escape(s[sep + 1:])}"
+                         f"<span class='dinfo' title='{exocache.DERIVED_NOTE}'>ⓘ</span>")
             parts.append(f"<div class='f{' mono' if mono else ''}'>"
                          f"<span class='k'>{html.escape(lbl)}</span>"
-                         f"<span class='v'>{html.escape(str(val))}</span></div>")
+                         f"<span class='v'>{shown}</span></div>")
     if original:
         parts.append(f"<div class='f'><span class='k'>Original file</span><span class='v'>"
                      f"<a href='{html.escape(original, quote=True)}' target='_blank' "

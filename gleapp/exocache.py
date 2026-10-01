@@ -592,6 +592,20 @@ def assemble(case, *, progress: Callable[[int], None] | None = None,
     return tally["added"]
 
 
+# A joined file is GLEAPP's own: its path names the cache folder and a name GLEAPP
+# chose, and no file by that name exists on the device. The gallery and the HTML
+# report show a "»" in place of the path's last separator, and this note, in these
+# words, on an info mark after it.
+DERIVED_MARK = "»"
+DERIVED_NOTE = "Derived: not a file on the device"
+
+
+def is_derived(d) -> bool:
+    """True for a file this module joined from cache pieces (it carries cache_info)."""
+    raw = d.get("cache_info") if hasattr(d, "get") else None
+    return bool(raw) and d.get("kind") != "archive"
+
+
 def describe(d) -> str:
     """``cache_info`` as one line a person reads. Empty for any other file.
 
