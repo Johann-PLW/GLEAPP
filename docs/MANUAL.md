@@ -1072,6 +1072,11 @@ or an archive found inside a source:
   **stops at a gap** (a piece in the middle is missing), or has no length
   recorded. The last-written-or-read time is the one ExoPlayer put in the piece's
   name, from the device's clock. Search finds a video by its key.
+- **The joined file is GLEAPP's, not the device's.** Its path names the cache
+  folder and a name GLEAPP gave it, and no such file exists on the device. In the
+  details pane, the list view and the HTML report its file path shows `»` in place
+  of the last `/`, followed by an ⓘ whose tooltip reads *Derived: not a file on the
+  device*.
 - **Pieces after a gap are not joined**: without the bytes before them they cannot
   be placed in a playable file. They stay in the case as containers.
 - **An item with no piece at position 0 is not joined**: nothing it holds can open.

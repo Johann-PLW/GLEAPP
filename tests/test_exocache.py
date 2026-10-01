@@ -310,3 +310,26 @@ def test_is_cache_name_is_decided_by_the_name():
     for no in ("video.mp4", "1.2.v3.exo", "cached_content_index.exi2", "notes.uid",
                "exoplayer.db", "x.v4.exo"):
         assert not is_exoplayer_cache_name(no), no
+
+
+def test_a_joined_file_is_marked_derived_in_the_html_report(tmp_path):
+    from gleapp import report
+    case = _ingest(tmp_path, as_zip=False)
+    try:
+        joined = _joined(case)["com.example.player:2"]
+        assert exocache.is_derived(dict(joined))
+        piece = case.db.iter_files("kind = 'archive' AND cache_info IS NULL", ())[0]
+        assert not exocache.is_derived(dict(piece))
+        out = report.export_html(case, tmp_path / "r.html", f"id = {joined['id']}",
+                                 fields=["name", "path"], maps=False)
+        text = open(out, encoding="utf-8").read()
+        name = joined["orig_name"]
+        mark = (f"<span class='dmark'>{exocache.DERIVED_MARK}</span>{name}"
+                f"<span class='dinfo' title='{exocache.DERIVED_NOTE}'>ⓘ</span>")
+        assert text.count(mark) == 1, "before the name in the path only, not in the name field"
+        # the chevron takes the place of the last separator
+        folder = joined["orig_path"][: -len(name) - 1]
+        assert f"{folder}<span class='dmark'>" in text and "/<span class='dmark'>" not in text
+        assert exocache.DERIVED_NOTE == "Derived: not a file on the device"
+    finally:
+        case.close()

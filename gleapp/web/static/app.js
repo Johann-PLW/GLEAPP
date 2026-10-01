@@ -169,6 +169,20 @@ function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTi
 const diskName = f => (f.rel_path || f.path || "").split(/[\\/]/).pop();
 /* preferred display name: the original file name, else the on-disk name (an MD5 for VIC imports) */
 const dispName = f => f.orig_name || diskName(f) || ("file #" + f.id);
+// A file joined from an app's ExoPlayer cache pieces: its path names the cache folder
+// and a name GLEAPP chose, and no such file exists on the device (gleapp/exocache.py
+// DERIVED_NOTE carries the same words for the HTML report).
+const DERIVED_NOTE = "Derived: not a file on the device";
+const isDerived = f => !!f.cache_info && f.kind !== "archive";
+// a file path, escaped; for a derived file the chevron takes the place of the last
+// separator, between the folder and the name GLEAPP gave it, and an info mark whose
+// tooltip is the note ends the path
+const pathHtml = (f, p) => {
+  if (!isDerived(f) || !p) return esc(p);
+  const sep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return `${esc(p.slice(0, Math.max(sep, 0)))}<span class="dmark">»</span>${esc(p.slice(sep + 1))}`
+    + `<span class="dinfo" title="${DERIVED_NOTE}">ⓘ</span>`;
+};
 
 /* ---------- categories ---------- */
 const catByCode = c => state.cats.find(x => x.code === +c);
@@ -600,7 +614,7 @@ const LIST_DEFS = [
   // "File path" = the device path from the Project VIC JSON; for a folder
   // ingest (no VIC data) it's the source path. Not the local unpack folder.
   { key: "orig_path", filterKey: "file_path", label: "File path", type: "text",
-    get: f => f.orig_path || (f.media_id ? "" : (f.path || f.rel_path)) || "" },
+    mark: true, get: f => f.orig_path || (f.media_id ? "" : (f.path || f.rel_path)) || "" },
   { key: "path", label: "File path (working copy)", type: "text", get: f => f.path || "" },
   { key: "rel_path", label: "Relative path", type: "text", alt: "relpath",
     get: f => f.rel_path || "" },
@@ -976,7 +990,7 @@ function lvRowEl(f, defs) {
       cls += " catcell";
       style = ` style="border-left-color:${catColor(f.category)}"`;
     }
-    return `<td class="${cls.trim()}"${style} title="${esc(v)}">${esc(v)}</td>`;
+    return `<td class="${cls.trim()}"${style} title="${esc(v)}">${d.mark ? pathHtml(f, v) : esc(v)}</td>`;
   }).join("");
   return tr;
 }
@@ -1554,7 +1568,8 @@ async function showMeta(id) {
           `<img src="${k.thumb}" title="${fmtDur(k.ts)}" data-ts="${k.ts}" data-kf="${k.id}">`).join("")}</div>` : ""}
 
       <table>
-        ${rows.map(r => `<tr><td>${r[0]}</td><td style="white-space:pre-line">${esc(r[1])}</td></tr>`).join("")}
+        ${rows.map(r => `<tr><td>${r[0]}</td><td style="white-space:pre-line">${
+          r[0] === "File path" ? pathHtml(f, String(r[1])) : esc(r[1])}</td></tr>`).join("")}
         ${gps}
         ${hashes.map(r => `<tr><td>${r[0]}</td><td class="mono">${esc(r[1])}</td></tr>`).join("")}
       </table>
