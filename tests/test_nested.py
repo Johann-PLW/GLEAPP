@@ -216,6 +216,195 @@ def test_re_running_expand_adds_nothing(tmp_path):
     assert len(case.db.iter_files()) == before
 
 
+# ---- a container that gave nothing is not opened again ------------------------
+#
+# A pass opens every container with nothing extracted from it. Nothing used to say
+# one had been opened already, so each ingest and each Expand archives opened every
+# empty container in the case again: measured on a real case, 119,568 of them, 81 s,
+# to add nothing. ``files.expanded`` records it now. The tests count how many
+# containers a pass looks into, which is what the time goes on.
+
+def _looked_into(monkeypatch) -> list:
+    """Collects the name of every container a pass sniffs from here on."""
+    seen: list = []
+    real = nested._looks_like_container             # pylint: disable=protected-access
+
+    def sniff(path, name=""):
+        seen.append(Path(name).name)
+        return real(path, name)
+
+    monkeypatch.setattr(nested, "_looks_like_container", sniff)
+    return seen
+
+
+def _empties(ev):
+    with zipfile.ZipFile(ev / "photos.zip", "w") as zf:
+        zf.writestr("a.jpg", _jpg((9, 90, 9)))
+    with zipfile.ZipFile(ev / "text.zip", "w") as zf:               # opens, holds no media
+        zf.writestr("notes.txt", b"nothing to show")
+    (ev / "named.zip").write_bytes(b"this is not an archive at all")
+    with zipfile.ZipFile(ev / "outer.zip", "w") as zf:              # an empty one inside
+        inner = io.BytesIO()
+        with zipfile.ZipFile(inner, "w") as z2:
+            z2.writestr("readme.txt", b"still nothing")
+        zf.writestr("inner.zip", inner.getvalue())
+
+
+def test_a_container_that_gave_nothing_is_not_opened_again(tmp_path, monkeypatch):
+    case, _ = _ingest_folder(tmp_path, _empties)
+    rows = len(case.db.iter_files())
+    seen = _looked_into(monkeypatch)
+    assert nested.expand_containers(case) == 0
+    assert seen == [], "text.zip, named.zip and inner.zip were opened by the ingest already"
+    assert len(case.db.iter_files()) == rows
+    # and the mark is in the case, not in this process
+    case.close()
+    case = open_case(tmp_path / "case")
+    assert nested.expand_containers(case) == 0
+    assert seen == []
+
+
+def test_a_wider_pass_opens_what_a_narrower_one_got_nothing_from(tmp_path, monkeypatch):
+    case, _ = _ingest_folder(tmp_path, _empties)
+    seen = _looked_into(monkeypatch)
+    # keeping files that are not media: the two that held only text have rows to give
+    assert nested.expand_containers(case, include_other=True) == 2
+    assert sorted(seen) == ["inner.zip", "text.zip"], "named.zip is not an archive under any option"
+    assert {"text.zip/notes.txt", "outer.zip/inner.zip/readme.txt"} <= set(_rows(case))
+    del seen[:]
+    assert nested.expand_containers(case, include_other=True) == 0
+    assert seen == []
+
+
+def test_a_documents_only_pass_learns_which_containers_are_not_documents(tmp_path, monkeypatch):
+    ev = tmp_path / "ev"
+    ev.mkdir()
+    with zipfile.ZipFile(ev / "photos.zip", "w") as zf:
+        zf.writestr("a.jpg", _jpg((9, 90, 9)))
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    # registered and not opened, as an examiner who turned expansion off leaves it
+    ingest_sources(case, [Source(kind="folder", path=str(ev), name="ev")], expand_archives=False)
+    seen = _looked_into(monkeypatch)
+    assert nested.expand_containers(case, documents=True, only_documents=True) == 0
+    assert seen == ["photos.zip"]
+    del seen[:]
+    assert nested.expand_containers(case, documents=True, only_documents=True) == 0
+    assert seen == []
+    # that it is not a document says nothing about what is in it: a pass that
+    # opens archives still has to, and gets the picture
+    assert nested.expand_containers(case) == 1
+    assert "photos.zip/a.jpg" in _rows(case)
+
+
+def test_a_pass_that_opened_an_archive_also_knows_it_is_not_a_document(tmp_path, monkeypatch):
+    def build(ev):
+        with zipfile.ZipFile(ev / "text.zip", "w") as zf:
+            zf.writestr("notes.txt", b"nothing to show")
+
+    case, _ = _ingest_folder(tmp_path, build)
+    seen = _looked_into(monkeypatch)
+    # on a real case the first documents-only pass after an ingest read 119,568
+    # containers back out of the source archive to learn this, 59 s
+    assert nested.expand_containers(case, documents=True, only_documents=True) == 0
+    assert seen == []
+    # a pass that opens archives and keeps documents is a wider one: it looks
+    assert nested.expand_containers(case, documents=True) == 0
+    assert seen == ["text.zip"]
+
+
+def test_a_document_with_nothing_in_it_is_still_a_document(tmp_path, monkeypatch):
+    ev = tmp_path / "ev"
+    ev.mkdir()
+    (ev / "page.html").write_text("<html><body><p>words, no pictures</p></body></html>",
+                                  encoding="utf-8")
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    ingest_sources(case, [Source(kind="folder", path=str(ev), name="ev")],
+                   expand_archives=False, expand_documents=True)
+    row = _rows(case)["page.html"]
+    assert row["kind"] == "archive" and row["error"] is None
+    # opened, nothing in it, and not written down as "not a document"
+    assert row["expanded"] & nested.OPENED and not row["expanded"] & nested.NOT_A_DOCUMENT
+    seen = _looked_into(monkeypatch)
+    assert nested.expand_containers(case, documents=True, only_documents=True) == 0
+    assert seen == []
+
+
+def test_a_container_that_would_not_open_is_tried_again(tmp_path, monkeypatch):
+    def build(ev):
+        (ev / "bad.zip").write_bytes(b"PK\x03\x04" + b"\x00" * 200)
+
+    case, _ = _ingest_folder(tmp_path, build)
+    assert _rows(case)["bad.zip"]["error"].startswith("could not expand archive")
+    seen = _looked_into(monkeypatch)
+    nested.expand_containers(case)
+    assert seen == ["bad.zip"]
+
+
+def test_a_member_that_could_not_be_read_leaves_the_container_unmarked(tmp_path, monkeypatch):
+    def build(ev):
+        with zipfile.ZipFile(ev / "p.zip", "w") as zf:
+            zf.writestr("x.jpg", _jpg((5, 5, 5)))
+
+    def unreadable(*_args, **_kwargs):
+        def read():
+            raise OSError("bad sector")
+        yield nested._Member("x.jpg", 10, None, None, read)   # pylint: disable=protected-access
+
+    monkeypatch.setattr(nested, "_members", unreadable)
+    case, _ = _ingest_folder(tmp_path, build)
+    assert [r for r in _rows(case) if r.startswith("p.zip/")] == []
+    monkeypatch.undo()
+    # the read works now, and the container is opened again without being forced
+    assert nested.expand_containers(case) == 1
+    assert "p.zip/x.jpg" in _rows(case)
+
+
+def test_removed_extracted_files_come_back_and_force_ignores_the_mark(tmp_path, monkeypatch):
+    case, _ = _ingest_folder(tmp_path, _empties)
+    cid = _rows(case)["photos.zip"]["id"]
+    case.db.conn.execute("DELETE FROM files WHERE container_id = ?", (cid,))
+    case.db.commit()
+    # photos.zip gave a row, so it carries no mark: with the row gone it is opened
+    seen = _looked_into(monkeypatch)
+    assert nested.expand_containers(case) == 1
+    assert seen == ["photos.zip"]
+    del seen[:]
+    nested.expand_containers(case, force=True)
+    assert sorted(seen) == ["inner.zip", "named.zip", "outer.zip", "photos.zip", "text.zip"]
+
+
+def test_a_mark_from_another_generation_is_not_trusted(tmp_path, monkeypatch):
+    case, _ = _ingest_folder(tmp_path, _empties)
+    seen = _looked_into(monkeypatch)
+    # a build that reads a new format raises the generation: every container an
+    # older build got nothing from is opened once more, then marked again
+    monkeypatch.setattr(nested, "MARK_GENERATION", nested.MARK_GENERATION + 1)
+    assert nested.expand_containers(case) == 0
+    assert sorted(seen) == ["inner.zip", "named.zip", "text.zip"]
+    del seen[:]
+    assert nested.expand_containers(case) == 0
+    assert seen == []
+
+
+def test_the_marks_are_committed_when_the_pass_ends(tmp_path, monkeypatch):
+    import sqlite3                                  # pylint: disable=import-outside-toplevel
+
+    def build(ev):
+        (ev / "named.zip").write_bytes(b"this is not an archive at all")
+
+    case, _ = _ingest_folder(tmp_path, build)
+    monkeypatch.setattr(nested, "MARK_GENERATION", nested.MARK_GENERATION + 1)
+    nested.expand_containers(case)
+    # read by another connection, which sees only what was committed: a pass that
+    # is the last thing a run does must not leave its marks to be lost
+    other = sqlite3.connect(tmp_path / "case" / "case.gleapp")
+    try:
+        mark = other.execute("SELECT expanded FROM files WHERE rel_path = 'named.zip'").fetchone()[0]
+    finally:
+        other.close()
+    assert mark >> 8 == nested.MARK_GENERATION and mark & nested.NOT_A_CONTAINER
+
+
 # ---- the expansion message has to outlive the processing pass ----------------
 #
 # An ingest expands the containers and then processes every row, containers

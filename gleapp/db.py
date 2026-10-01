@@ -182,11 +182,15 @@ CREATE TABLE IF NOT EXISTS files (
     cache_info    TEXT,                   -- JSON: for a file joined from an app's ExoPlayer cache,
                                           -- the cache it came from, its key, and whether the join
                                           -- is complete. See gleapp/exocache.py.
-    exo_cache     INTEGER                 -- 1 when the row's name is one an ExoPlayer cache writes
+    exo_cache     INTEGER,                -- 1 when the row's name is one an ExoPlayer cache writes
                                           -- (a piece, its index, a .uid file), else 0. Decided in
                                           -- Python when the row is written, see exo_cache_flag();
                                           -- NULL only on a row a build without the column wrote,
                                           -- and opening the case fills those.
+    expanded      INTEGER                 -- on a container that an expansion pass opened and got
+                                          -- nothing from: what that pass was (bits, see
+                                          -- gleapp/nested.py), so a later pass that could add
+                                          -- nothing either leaves it alone. NULL otherwise.
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_md5      ON files(md5);
@@ -459,7 +463,7 @@ class CaseDB:
             ("container_id", "INTEGER"), ("hashset_vic", "TEXT"),
             ("hashset_sources", "TEXT"), ("hashset_mask", "INTEGER"),
             ("grp_head", "INTEGER NOT NULL DEFAULT 1"), ("cache_info", "TEXT"),
-            ("exo_cache", "INTEGER"),
+            ("exo_cache", "INTEGER"), ("expanded", "INTEGER"),
         ):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} {decl}")
