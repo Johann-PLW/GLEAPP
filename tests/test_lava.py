@@ -345,6 +345,53 @@ def test_the_run_log_agrees_with_the_artifacts_it_describes(case, tmp_path):
     assert {n for n, (_, yes) in grid.items() if yes} == written
 
 
+def test_a_narrower_re_export_leaves_no_earlier_media_behind(case, tmp_path):
+    """A second export into the same folder holds only what its own database lists.
+
+    The database is rebuilt every time; media kept from a wider export would be
+    files the new report does not list, handed over with it all the same.
+    """
+    out = tmp_path / "lava"
+
+    def state():
+        db = sqlite3.connect(out / lava.LAVA_DB_NAME)
+        try:
+            listed = {r[0] for r in db.execute(
+                "SELECT extraction_path FROM _lava_media_items")}
+        finally:
+            db.close()                                 # Windows: the next export deletes it
+        on_disk = {f"media/{p.name}" for p in (out / "media").iterdir()}
+        html = {f"media/{p.name}" for p in (out / "_HTML" / "media").iterdir()}
+        logged = re.search(r"Media files in the report</t[dh]>\s*<td>([\d,]+)<",
+                           (out / "_HTML" / "_Script_Logs" / "Screen_Output.html")
+                           .read_text(encoding="utf-8"))
+        return listed, on_disk, html, int(logged.group(1).replace(",", ""))
+
+    lava.export_lava(case, out)
+    listed, on_disk, html, logged = state()
+    assert len(listed) > 3 and listed == on_disk == html and logged == len(listed)
+
+    lava.export_lava(case, out)                        # same scope again
+    again = state()
+    assert again[0] == again[1] == again[2] == listed and again[3] == len(listed)
+
+    ids = [r["id"] for r in case.db.iter_files()][:1]
+    lava.export_lava(case, out, where=f"id IN ({','.join(map(str, ids))})",
+                     maps=False, keyframes=False)
+    listed, on_disk, html, logged = state()
+    assert listed and listed == on_disk == html and logged == len(listed)
+
+
+def test_media_folders_that_are_not_a_lava_export_are_left_alone(case, tmp_path):
+    out = tmp_path / "lava"
+    (out / "media").mkdir(parents=True)
+    keep = out / "media" / "someone_elses.jpg"
+    keep.write_bytes(b"not ours")
+    with pytest.raises(FileExistsError):
+        lava.export_lava(case, out)
+    assert keep.read_bytes() == b"not ours"
+
+
 def test_an_artifact_with_no_rows_is_left_out_of_the_report(case, tmp_path):
     """A zero-row artifact is absent, not empty, and the run log says it was tried.
 
