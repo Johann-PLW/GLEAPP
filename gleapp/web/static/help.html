@@ -393,9 +393,7 @@ Uncategorized.</p>
   <tr><th>Code</th><th>Name</th><th>What it is for</th></tr>
   <tr>
     <td><b>0</b></td><td>Non-pertinent</td>
-    <td>Everything else: not child-exploitation material and of no evidentiary
-    value for this offense: family photos, memes, screenshots, app assets, OS and
-    application files. Not notable. <strong>An NSRL known-good hash hit
+    <td>Not notable. <strong>An NSRL known-good hash hit
     auto-categorizes an uncategorized file here.</strong></td>
   </tr>
   <tr>
@@ -439,6 +437,16 @@ rename, recolor (click the color swatch next to the name), delete (soft-deleted
 while in use so labels are kept), drag to reorder (they always sort after the
 presets). The first four get number-key shortcuts 6–9 in order and start with an
 auto-assigned color.</p>
+<p><strong>Project VIC JSON.</strong> A <code>Category</code> of 0 is imported as
+Non-pertinent; an empty (<code>null</code>) category or 5 is imported as
+Uncategorized. On export, Uncategorized is written back as <code>null</code>.</p>
+<p><strong>Cases made by an older GLEAPP.</strong> Before schema v18 GLEAPP stored
+these two codes the other way round (0 Uncategorized, 5 Non-pertinent). The first
+time this version opens such a case it swaps them on every file and category, so
+each decision keeps its meaning; a file with no category becomes Uncategorized. The
+swap runs once. After that, do not open the case with an older GLEAPP: it would
+read the codes the old way. Run <strong>Re-check</strong> on a case that uses a
+Project VIC hash set, so entries with a category of 0 are applied.</p>
 
 <h3 id="flags">Flags: an independent, per-file label</h3>
 <p>A file's <strong>category</strong> is always exactly one value. <strong>Flags</strong>
@@ -778,7 +786,7 @@ category Project&nbsp;VIC assigned.</p>
 <ul>
   <li><strong>A match is flagged <span class="tag" style="background:#d9822b">VIC</span>.</strong>
   If the file has no category yet, it goes into the category Project VIC gave it
-  (for example 1 CAM, 2 Child Exploitative, 3 CGI). A category you have set is
+  (for example 0 Non-pertinent, 1 CAM, 2 Child Exploitative, 3 CGI). A category you have set is
   never overridden. The change is not silent: the file carries the VIC flag, and
   the details pane's <em>Matched in</em> row names the set and the category it
   asserted.</li>
@@ -786,7 +794,8 @@ category Project&nbsp;VIC assigned.</p>
   Project VIC set and in your hash stash shows both <span class="tag"
   style="background:#d9822b">VIC</span> and <span class="tag"
   style="background:#7c4dff">STASH</span>. If the two disagree on the category,
-  the lower, more severe code is taken. A file in the NSRL and a notable set is
+  the lower, more severe code is taken; Non-pertinent (0) ranks below every other
+  category. A file in the NSRL and a notable set is
   never made Non-pertinent.</li>
   <li><strong>Find them:</strong> the sidebar's <em>Known hashes &rarr; Show</em> has
   <em>Project VIC hits</em>, <em>Hash stash hits</em> and <em>hit in both</em>. HTML,
@@ -1170,7 +1179,7 @@ current selection) and one or more <strong>formats</strong>:</p>
   <tr><td>JSON</td><td>the same data, structured; carries the case header too</td></tr>
   <tr><td>KMZ</td><td>geolocated media for Google Earth / mapping tools: a zipped KML with a thumbnail (or video key frame) bundled for every placemark, so clicking a pin shows the picture at its location</td></tr>
   <tr><td>MD5 list</td><td>one hash per row (also from the selection bar / right-click)</td></tr>
-  <tr><td>Project VIC JSON</td><td>the original VIC file with your Category / Comments / Tags written back, keyed by MediaID and MD5 (shown for VIC cases)</td></tr>
+  <tr><td>Project VIC JSON</td><td>the original VIC file with your Category / Comments / Tags written back, keyed by MediaID and MD5 (shown for VIC cases); Uncategorized is written as <code>null</code></td></tr>
   <tr><td>LAVA report</td><td>a project folder LAVA opens: the media, a location map for each geolocated file and an overview map drawn offline from the basemap you imported (&sect;19), the video key frames, and the artifact tables. Takes minutes rather than seconds, so it runs as a job and the bar at the bottom follows it</td></tr>
 </table>
 <p>Filesystem / ingest times in the HTML and CSV are rendered in the case's
