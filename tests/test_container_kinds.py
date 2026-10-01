@@ -96,6 +96,73 @@ def test_the_filters_and_the_sidebar_tell_the_three_kinds_apart(tmp_path):
     assert containerrows.read_all(client, ids) == containerrows.expected(ids)
 
 
+def test_the_sidebar_counts_agree_with_the_filters_on_awkward_rows(tmp_path):
+    """The sidebar's five container counts come from one statement and the filters
+    from another; both have to give the numbers written out here. The rows are the
+    ones a count could get wrong: an archive inside an archive, a row with no kind,
+    a document known only by what came out of it, a container with no extension at
+    all (NULL, which the document rule answers with neither yes nor no), an upper
+    case extension, and a cache piece with something extracted from it."""
+    from gleapp.web.app import create_app           # pylint: disable=import-outside-toplevel
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    db = case.db
+    serial = [0]
+
+    def container(rel, ext, parent=None):
+        serial[0] += 1
+        fields = {"rel_path": rel, "source": "ev", "kind": "archive", "ext": ext, "size": 9}
+        if parent is not None:
+            fields["container_id"] = parent
+        return db.upsert_file(f"/case/staged/c{serial[0]}", **fields)
+
+    def child(parent, name, kind):
+        serial[0] += 1
+        return db.upsert_file(f"/case/staged/k{serial[0]}", rel_path=f"x/{serial[0]}/{name}",
+                              source="ev", kind=kind, ext=".bin", size=1,
+                              container_id=parent, orig_name=name)
+
+    a1 = container("dl/a1.zip", ".zip")
+    child(a1, "one.jpg", "image")
+    child(a1, "two.jpg", "image")
+    child(a1, "nokind.dat", None)                     # counted by no filter and no count
+    n1 = container("dl/a1.zip/inner.zip", ".zip", parent=a1)        # an archive in an archive
+    child(n1, "deep.jpg", "image")
+    d1 = container("docs/d1.pdf", ".pdf")
+    child(d1, "p0001_obj00001.jpg", "image")
+    child(d1, "p0002_obj00002.jpg", "image")
+    container("docs/D2.PDF", ".PDF")                   # a document nothing came out of
+    d3 = container("app/files/bare", "")
+    child(d3, "p0001_obj00001.jpg", "image")           # a document by what came out of it
+    d4 = container("app/files/bare2", None)
+    child(d4, "attachment_obj1.bin", "other")
+    container("app/files/unknown", None)               # no extension, nothing extracted
+    container("app/files/empty", "")                   # the same with '': an archive
+    container("app/cache/exo/1.0.1700000000000.v3.exo", ".exo")
+    c2 = container("app/cache/exo/2.0.1700000000000.v3.exo", ".exo")
+    child(c2, "frame.jpg", "image")                    # from a cache piece: in neither count
+    db.commit()
+    case.close()
+
+    client = create_app(None).test_client()
+    client.post("/api/case/open", json={"path": str(tmp_path / "case")})
+    assert client.get("/api/context").get_json()["containers"] == {
+        "archives": 3,            # a1, the archive inside it, and the one with ext ''
+        "archive_items": 3,       # two pictures from a1, one from the archive inside it
+        "documents": 4,
+        "documents_opened": 3,
+        "document_items": 4,
+    }
+
+    def total(query):
+        return client.get(f"/api/files?limit=1&{query}").get_json()["total"]
+
+    assert total("kind=archive:archive") == 3
+    assert total("kind=archive:document") == 4
+    assert total("kind=archive:cache") == 2
+    assert total("in_archive=1") == 3
+    assert total("in_document=1") == 4
+
+
 def test_the_fixtures_own_labels_agree_with_the_cache_rule():
     # the labels in containerrows.TEMPLATES are written by hand; this says the rule
     # the app applies (exoprobe's) gives the same answer for each name
