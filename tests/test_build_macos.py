@@ -60,6 +60,35 @@ def test_dmg_window_is_as_wide_as_its_background():
     assert win_h >= height
 
 
+def test_dmg_icons_sit_either_side_of_the_arrow():
+    """The arrow moved 44 points with the background of 2026-10-01, and a background that
+    moves it again leaves the icons off centre unless the settings move with it. The arrow
+    is the only dark mark in its band."""
+    from PIL import Image  # pylint: disable=import-outside-toplevel
+    with Image.open(ROOT / "packaging" / "dmg_background.png") as img:
+        rgb = img.convert("RGB")
+        dark = [x for y in range(250, 320) for x in range(rgb.width)
+                if sum(rgb.getpixel((x, y))) < 600]
+    arrow_centre = (min(dark) + max(dark)) / 2
+    locations = _dmg_settings()["icon_locations"]
+    (app_x, app_y), (apps_x, apps_y) = locations["GLEAPP.app"], locations["Applications"]
+    assert app_y == apps_y
+    assert app_x < min(dark)
+    assert apps_x > max(dark)
+    assert abs((app_x + apps_x) / 2 - arrow_centre) <= 2
+
+
+def test_dmg_retina_background_is_exactly_twice_the_size():
+    """dmgbuild finds dmg_background@2x.png by name and joins it to the background with
+    tiffutil -cathidpicheck, which refuses a pair that is not exactly 1x and 2x, and the
+    disk image then fails to build. Without it a Retina screen shows the 1x blurred."""
+    from PIL import Image  # pylint: disable=import-outside-toplevel
+    with Image.open(ROOT / "packaging" / "dmg_background.png") as img:
+        width, height = img.size
+    with Image.open(ROOT / "packaging" / "dmg_background@2x.png") as img:
+        assert img.size == (2 * width, 2 * height)
+
+
 @darwin_only
 def test_dmg_carries_the_background_and_the_applications_link(tmp_path, monkeypatch):
     pytest.importorskip("dmgbuild")
