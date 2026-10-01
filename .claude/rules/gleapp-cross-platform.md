@@ -70,6 +70,41 @@ from LZMA2, ZStandard, PPMd, Brotli, BCJ+LZMA2 and Deflate archives, and hiding 
 `backports` or `psutil` from the bundle lost every 7z member, silently, while the zip
 control still expanded.
 
+## A container that gave nothing is opened once, not on every pass
+
+`nested.expand_containers` opens every container row that has nothing extracted from
+it, in the whole case, whichever source an ingest was asked for. Nothing used to record
+that one had been opened and held nothing to register, so every ingest, every Expand
+archives and every documents pass opened all of those again, each read back out of the
+source archive. Measured 2026-10-01 on a copy of a real case's database (149,824 rows
+from one archive source, 119,604 of them containers), ingesting a folder of ten pictures
+each time:
+
+| | first ingest | second ingest |
+|---|---|---|
+| before | 77 s, 119,627 containers opened, 59 gave rows | 81 s, 119,568 opened, none gave rows |
+| after | 81 s, 119,627 opened, 59 gave rows | 1.9 s, 4 opened |
+
+`files.expanded` now records it, on a container that gave nothing and only on those,
+so one whose extracted files are later removed is opened again as before. The bits
+(`nested.OPENED` and the rest) say how it was opened, because a pass that also keeps
+files that are not media, or keeps documents as containers, can get rows from one a
+narrower pass got none from; such a pass opens it again. A container that would not
+open (an error, a source that is not there, a RAR), or that had a member that could
+not be read, is not marked, which is what the 4 above are. A pass that opened an
+archive also notes that it is not a document, so a documents-only pass after it took
+0.9 s instead of reading all 119,568 again (59 s when it had to find out itself). The
+0.9 s that is left is reading the container rows to decide.
+
+`force` ignores the mark. So does a change of `nested.MARK_GENERATION`, which is kept
+above the bits: **a build that teaches a reader a new format, or changes which members
+are kept, has to raise it**, or every container an older build marked as holding nothing
+stays unopened by the build that could get something from it.
+
+An ingest of one source still opens containers of the others that were never opened,
+which is how ten pictures set off the 81 s above on a case first ingested with
+expansion off. That was left as it is.
+
 ## macOS specifics
 
 PyInstaller strips signatures while it builds, its own log says so, so `codesign` runs

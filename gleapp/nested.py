@@ -56,6 +56,54 @@ _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 # nothing about why its members are not in the case, so ``pipeline._process_one_at``
 # leaves a message of one of these shapes alone. A forced re-expansion that opens the
 # container clears it (see ``_expand_one``).
+# ``files.expanded``: what a pass learned about a container it got nothing from.
+#
+# A pass opens every container that has nothing extracted from it, and until this was
+# kept nothing said one had been opened already. On a case of 149,824 rows, 119,604
+# of them containers, ingesting a folder of ten pictures opened 119,627 containers
+# and took 77 s, and ingesting ten more opened the 119,568 that had given nothing
+# again and took 81 s, each one read back out of the source archive.
+#
+# The mark is set only on a container that gave nothing, so one whose extracted files
+# are later removed is opened again as it always was. It records how the container
+# was opened, because a pass that also keeps other files, or keeps documents as
+# containers, can get rows from one a narrower pass got none from. A container that
+# could not be opened (an error, an unavailable source, a RAR), or that had a member
+# that could not be read, is not marked and is tried again. ``force`` ignores the mark.
+#
+# The mark also carries MARK_GENERATION, above the bits. A build that teaches a
+# reader a new format, or changes which members are kept, has to raise it: a mark
+# from another generation is ignored, so every container that gave nothing is opened
+# once more by the build that might get something from it.
+MARK_GENERATION = 1
+_BITS = 0xFF
+OPENED = 1                    # its members were looked at
+OPENED_WITH_OTHER = 2         # ... and files that are not media were kept (include_other)
+OPENED_WITH_DOCUMENTS = 4     # ... and documents were kept as containers (documents)
+NOT_A_CONTAINER = 8           # its bytes are nothing a reader here opens, whatever the options
+NOT_A_DOCUMENT = 16           # it is a container, and not a document: nothing for a
+#                               pass that opens only documents
+
+
+def _bits(mark) -> int:
+    """The bits of a mark this build wrote, or 0 for no mark or another generation's."""
+    mark = mark or 0
+    return mark & _BITS if mark >> 8 == MARK_GENERATION else 0
+
+
+def _mark(case, row, bits: int) -> None:
+    have = _bits(row["expanded"] if "expanded" in row.keys() else None)
+    if (have | bits) != have:
+        case.db.update_file(row["id"], expanded=(MARK_GENERATION << 8) | have | bits)
+
+
+def _settled(mark, need: int, only_documents: bool) -> bool:
+    """A pass that needs ``need`` could add nothing to a container marked ``mark``."""
+    bits = _bits(mark)
+    return bool(bits & NOT_A_CONTAINER or (only_documents and bits & NOT_A_DOCUMENT)
+                or (bits & need) == need)
+
+
 RAR_ERROR = ("RAR archive - GLEAPP has no RAR reader; extract it with another tool "
              "and add the files as a folder")
 EXPANSION_ERROR_PREFIXES = ("could not expand archive: ", "archive unavailable: ", RAR_ERROR)
@@ -280,14 +328,18 @@ def _expand_one(case, row, *, include_other: bool, tally: dict,
         with archive.local_copy(case.root, rec, row) as local:
             fmt = _looks_like_container(
                 Path(local), row["orig_path"] or row["rel_path"] or row["path"])
-            if only_documents and fmt not in docmedia.FORMATS:
+            if fmt is None:
+                _mark(case, row, NOT_A_CONTAINER)
                 return []
-            if fmt in (None, "rar"):
-                if fmt == "rar":
-                    tally["unsupported"] += 1
-                    case.db.update_file(row["id"], error=RAR_ERROR)
+            if only_documents and fmt not in docmedia.FORMATS:
+                _mark(case, row, NOT_A_DOCUMENT)
+                return []
+            if fmt == "rar":
+                tally["unsupported"] += 1
+                case.db.update_file(row["id"], error=RAR_ERROR)
                 return []
             written = 0
+            unread = tally["failed"]
             for m in _members(Path(local), fmt, tally):
                 if written >= MAX_MEMBERS:
                     break
@@ -338,6 +390,12 @@ def _expand_one(case, row, *, include_other: bool, tally: dict,
             if is_expansion_error(row["error"] if "error" in row.keys() else None):
                 # it would not open on an earlier pass and has opened now
                 case.db.update_file(row["id"], error=None)
+            if not written and tally["failed"] == unread:
+                # what kind of container it is was learned on the way, so a later
+                # documents-only pass need not read it again to find out
+                _mark(case, row, OPENED | (OPENED_WITH_OTHER if include_other else 0)
+                      | (OPENED_WITH_DOCUMENTS if documents else 0)
+                      | (0 if fmt in docmedia.FORMATS else NOT_A_DOCUMENT))
             case.db.commit()
     except archive.ArchiveUnavailable as exc:
         case.db.update_file(row["id"],
@@ -383,14 +441,18 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
         f"WHERE kind = 'other' AND lower(ext) IN ({ph})", tuple(ARCHIVE_EXTS))
     case.db.commit()
 
-    have_children = {
-        r["container_id"] for r in case.db.iter_files(
-            "container_id IS NOT NULL", ())}
+    # only the ids: reading the whole row of everything ever extracted, to learn
+    # which containers have something, grows with the case
+    have_children = {r[0] for r in case.db.conn.execute(
+        "SELECT DISTINCT container_id FROM files WHERE container_id IS NOT NULL")}
+    need = (OPENED | (OPENED_WITH_OTHER if include_other else 0)
+            | (OPENED_WITH_DOCUMENTS if documents else 0))
     # an ExoPlayer cache file is kept as a container but is not one to open:
     # gleapp/exocache.py joins it with the other pieces of its item
     queue = [
         r for r in case.db.iter_files("kind = 'archive'", ())
-        if (force or r["id"] not in have_children)
+        if (force or (r["id"] not in have_children
+                      and not _settled(r["expanded"], need, only_documents)))
         and not is_exoplayer_cache_name(r["orig_path"] or r["rel_path"] or r["path"])
     ]
     tally = {k: 0 for k in ("added", "encrypted", "too_big", "failed",
@@ -415,6 +477,7 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
         queue = nxt
         depth += 1
 
+    case.db.commit()          # the marks on containers that gave nothing
     if tally["added"] or tally["failed_archives"]:
         case.db.audit_log(
             case.examiner, "expand-archives",
