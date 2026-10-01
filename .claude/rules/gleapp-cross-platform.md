@@ -77,7 +77,13 @@ after phase 1 on the finished bundle, never before. The `.app` comes from a `BUN
 in the spec with identifier `org.leapp.gleapp.app`, the shape LAVA uses; the `.dmg` comes
 from `dmgbuild` and is verified with `hdiutil` before it is reported. `dmgbuild` writes the
 Finder's `.DS_Store` itself (background `packaging/dmg_background.png`, layout in
-`packaging/dmg_settings.py`, the same as the other LEAPPs). It is a build-time
+`packaging/dmg_settings.py`, the same as the other LEAPPs). The settings place the icons
+either side of the arrow on that 960x540 image: since the background of 2026-10-01 its
+centre is at x=479 and the icons at (304, 290) and (654, 290), and a test requires them
+to straddle it. `dmg_background@2x.png` beside it, exactly 1920x1080, is what a Retina
+screen shows; dmgbuild finds it by name and joins the two with `tiffutil
+-cathidpicheck`, which refuses a pair that is not exactly 1x and 2x. Export both from the
+source artwork; upscaling the 1x brings the blur back. It is a build-time
 dependency only, in the `[build]` extra under a darwin marker. `packaging/gleapp.icns` and
 `packaging/gleapp.ico` carry the logo and the spec picks them up automatically.
 
