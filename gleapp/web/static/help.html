@@ -1412,6 +1412,38 @@ in a report:</p>
 than as a nameless carved twin, and the offsets it recovered are handed to the carver to
 skip.</p>
 
+<h3>Files a volume does not hold in full</h3>
+<p>A walked file's recorded size is not always what the volume stores for it. On NTFS and
+APFS the reader can tell, and GLEAPP registers and copies what the volume holds:</p>
+<ul>
+  <li><strong>An online-only cloud placeholder</strong> (OneDrive Files On-Demand, for one)
+    keeps the file's name, size and dates on the volume and none of its content, which is
+    with the provider. It is listed with <strong>no copy, no hash and no thumbnail</strong>,
+    and its row says <em>online-only cloud placeholder</em> with the size the volume records
+    and the bytes it stores. The Sources panel counts them, the error filter lists them,
+    and <strong>Retry failed files</strong> leaves them out, since there is nothing to
+    retry. The row shows that a file of that name, size and dates was in that folder. Its
+    content was never in the image.</li>
+  <li><strong>A sparse file</strong> reads at its recorded length, with zeros where the
+    volume stores nothing. When media is copied into the case, runs of zeros are written as
+    holes, so the copy can take less room than its length. How much less depends on the
+    filesystem the case is on, and the bytes are the same either way.</li>
+  <li><strong>A file the volume holds under several names</strong> (hard links) is one
+    file. It is copied into the case once and the other names are linked to that copy. Each
+    name keeps its own row.</li>
+  <li><strong>A file Windows compressed</strong> with NTFS compression, or with the XPRESS
+    compression of the Windows overlay filter, is read as its content. One compressed with
+    the overlay's LZX is not decoded. It is reported as not read rather than written out as
+    zeros.</li>
+  <li><strong>Copying is checked for room first.</strong> Before media is copied in from a
+    disk image, at ingest or later with <strong>Copy into case</strong>, the room the copies
+    need is added up and compared with the free space on the case's volume. A copy that does
+    not fit is refused before anything is written. If the volume fills anyway, the copy
+    stops and says so.</li>
+</ul>
+<p>Not tested, because no sample was available: a placeholder that still holds part of its
+content, and an APFS file marked dataless.</p>
+
 <h3>Recovering from deleted records</h3>
 <p>For NTFS, FAT32, exFAT, YAFFS2, JFFS2 and UBIFS: a deleted file whose record still names
 it is recovered with its <strong>real name</strong>.</p>

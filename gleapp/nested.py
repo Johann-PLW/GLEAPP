@@ -454,6 +454,9 @@ def expand_containers(case, *, progress: Callable[[int], None] | None = None,
         if (force or (r["id"] not in have_children
                       and not _settled(r["expanded"], need, only_documents)))
         and not is_exoplayer_cache_name(r["orig_path"] or r["rel_path"] or r["path"])
+        # nor is a cloud provider's online-only placeholder: the image holds its
+        # name and none of its content, and its row already says so
+        and not archive.is_placeholder_error(r["error"])
     ]
     tally = {k: 0 for k in ("added", "encrypted", "too_big", "failed",
                             "skipped_other", "unsupported", "failed_archives",

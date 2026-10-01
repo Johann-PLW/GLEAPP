@@ -50,6 +50,14 @@ Two modes, chosen per source at ingest:
     is self-contained. ``stage_source`` converts a reference source into this;
     ``unstage_source`` goes the other way while the archive is still readable.
 
+A walked file's recorded size is not always what its volume stores for it, and a copy
+is made of what the volume holds. A cloud provider's online-only placeholder has a
+size and no content: it is registered with no copy and no hash, and its row says so
+(``PLACEHOLDER_ERROR``). A sparse file is copied with its runs of zeros left as holes.
+A file the volume holds under several names is copied once and linked for the rest.
+And before a walked source is copied in, the room the copies need is added up and the
+copy is refused if the case's volume does not have it.
+
 Either way, what is registered is what the case can produce: media members, plus
 everything else when ``include_other`` is set on the source. A carved source has only
 media to register, so that setting has nothing to decide there. The source archive is
@@ -66,12 +74,14 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import errno
 import hashlib
 import io
 import itertools
 import json
 import os
 import re
+import shutil
 import struct
 import tarfile
 import threading
@@ -547,22 +557,211 @@ def _local_name(row) -> str:
     return f"{_slug(row['source'])}-{Path(row['path']).name}"
 
 
-def _write_stream(fin, dest: Path, head: bytes = b"") -> None:
+# A cloud provider's online-only placeholder (OneDrive Files On-Demand is the common
+# one) keeps a file's name, size and dates on the volume and none of its content,
+# which is with the provider. The walk registers the row and writes this in its error
+# column, so nothing later writes a file for it or records a hash of bytes the image
+# never held. Before the vendored reader could tell one from a sparse file, such a row
+# was read as zeros of the recorded size.
+PLACEHOLDER_ERROR = "online-only cloud placeholder: "
+
+
+def placeholder_error(size: int, stored) -> str:
+    """The text a placeholder's row carries: what the volume records and what it holds."""
+    held = "an unknown number" if stored is None else f"{int(stored):,}"
+    return (f"{PLACEHOLDER_ERROR}the volume records {int(size):,} bytes for this file "
+            f"and stores {held} of them, so its content is not in the image")
+
+
+def is_placeholder_error(text) -> bool:
+    """True when ``text`` is what the walk wrote on a cloud placeholder's row."""
+    return bool(text) and str(text).startswith(PLACEHOLDER_ERROR)
+
+
+# A walked file can be mostly hole: a sparse file's unwritten ranges read as zeros
+# and take no room on the volume they came from. Zeros are written back out as holes
+# in pieces of this size, so a copy takes less than its length wherever the case's own
+# filesystem keeps holes, and is the same bytes either way. How small a hole is kept
+# is the filesystem's business: measured on macOS 27.0.1, APFS allocated a 15 MiB gap
+# in full and left a 16 MiB one unallocated.
+_HOLE = 64 * 1024
+_HOLE_PROBE = 32 * 1024 * 1024
+_FSCTL_SET_SPARSE = 0x000900C4
+
+
+def _mark_sparse(fout) -> bool:
+    """Ask the filesystem to keep the holes of the file being written. Windows keeps
+    them only in a file marked sparse; everywhere else there is nothing to ask.
+    Returns False when Windows declined, which FAT and exFAT do."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes                                  # pylint: disable=import-outside-toplevel
+        import msvcrt                                  # pylint: disable=import-outside-toplevel,import-error
+        from ctypes import wintypes                    # pylint: disable=import-outside-toplevel
+        fout.flush()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        returned = wintypes.DWORD(0)
+        return bool(kernel32.DeviceIoControl(
+            wintypes.HANDLE(msvcrt.get_osfhandle(fout.fileno())), _FSCTL_SET_SPARSE,
+            None, 0, None, 0, ctypes.byref(returned), None))
+    except Exception:                                  # pylint: disable=broad-except
+        return False
+
+
+def _allocated(path) -> int | None:
+    """The bytes the filesystem set aside for ``path``, or None where it cannot say."""
+    if os.name == "nt":
+        try:
+            import ctypes                              # pylint: disable=import-outside-toplevel
+            from ctypes import wintypes                # pylint: disable=import-outside-toplevel
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetCompressedFileSizeW.argtypes = [
+                wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.GetCompressedFileSizeW.restype = wintypes.DWORD
+            high = wintypes.DWORD(0)
+            ctypes.set_last_error(0)
+            low = kernel32.GetCompressedFileSizeW(str(path), ctypes.byref(high))
+            if low == 0xFFFFFFFF and ctypes.get_last_error():
+                return None
+            return (high.value << 32) | low
+        except Exception:                              # pylint: disable=broad-except
+            return None
+    try:
+        return os.stat(path).st_blocks * 512
+    except (OSError, AttributeError):
+        return None
+
+
+def _keeps_holes(folder: Path) -> bool:
+    """Whether a file written with a hole under ``folder`` takes less room than its
+    length. Asked of the filesystem by writing one, since neither its name nor the
+    platform settles it. The hole is large (``_HOLE_PROBE``) because APFS keeps only
+    large ones; on a filesystem with none, FAT or exFAT, the probe costs that many
+    bytes written once and removed."""
+    span = _HOLE_PROBE
+    probe = Path(folder) / f".holes-{os.getpid()}-{threading.get_ident()}"
+    try:
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        with open(probe, "wb") as fout:
+            _mark_sparse(fout)
+            fout.seek(span - 1)
+            fout.write(b"\x01")
+        taken = _allocated(probe)
+        return taken is not None and taken < span // 2
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            probe.unlink()
+
+
+def _copy_keeping_holes(fin, fout, head: bytes = b"") -> None:
+    """Copy ``head`` and then ``fin`` to ``fout``, seeking over every all-zero piece
+    instead of writing it. The file comes out the same length with the same bytes."""
+    _mark_sparse(fout)
+    pos = 0
+    skipped = False
+    chunk = head or fin.read(_CHUNK)
+    while chunk:
+        for start in range(0, len(chunk), _HOLE):
+            piece = chunk[start:start + _HOLE]
+            if piece.count(0) == len(piece):
+                skipped = True
+            else:
+                if skipped:
+                    fout.seek(pos)
+                    skipped = False
+                fout.write(piece)
+            pos += len(piece)
+        chunk = fin.read(_CHUNK)
+    if skipped:
+        fout.truncate(pos)             # a hole at the end still counts toward the length
+
+
+def _write_stream(fin, dest: Path, head: bytes = b"", *, holes: bool = False) -> None:
     """Copy ``head`` and then everything left in ``fin`` to ``dest`` through a private
-    temp name, so a partial copy never sits at the final path."""
+    temp name, so a partial copy never sits at the final path. With ``holes``, runs of
+    zeros are left as holes (see ``_copy_keeping_holes``)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(f"{dest.name}.part-{os.getpid()}-{threading.get_ident()}")
     try:
         with open(part, "wb") as fout:
-            if head:
-                fout.write(head)
-            while chunk := fin.read(_CHUNK):
-                fout.write(chunk)
+            if holes:
+                _copy_keeping_holes(fin, fout, head)
+            else:
+                if head:
+                    fout.write(head)
+                while chunk := fin.read(_CHUNK):
+                    fout.write(chunk)
         os.replace(part, dest)
     except BaseException:
         with contextlib.suppress(OSError):
             part.unlink()
         raise
+
+
+def _free_bytes(folder: Path) -> int | None:
+    """The free space on the volume ``folder`` is (or will be) on, or None if it
+    cannot be asked."""
+    at = Path(folder)
+    while not at.exists() and at != at.parent:
+        at = at.parent
+    try:
+        return int(shutil.disk_usage(at).free)
+    except OSError:
+        return None
+
+
+# What a copy of a sparse file is allowed over the bytes the volume stores for it,
+# when the room a staging pass needs is added up: holes are written in _HOLE pieces,
+# so a file's data can spill into a piece either side of each run it holds.
+_HOLE_SLACK = 1024 * 1024
+
+
+def _copy_bytes(size: int, alloc, holes_kept: bool) -> int:
+    """About how many bytes a staged copy of one walked file takes under the case.
+
+    Its recorded size, except for a sparse file going to a filesystem that keeps
+    holes, which takes about what the volume stores for it. A compressed file is
+    written out uncompressed, so it takes its size whatever it stores. For a sparse
+    file this is the least the copy can take, not a promise: a filesystem that keeps
+    only large holes writes the small ones out. A pass that runs out of room anyway
+    stops and says so (``_out_of_room``)."""
+    if (holes_kept and alloc and alloc.get("sparse") and not alloc.get("compression")
+            and alloc.get("stored") is not None):
+        return min(int(size), int(alloc["stored"]) + _HOLE_SLACK)
+    return int(size)
+
+
+def _require_room(folder: Path, need: int, what: str) -> None:
+    """Refuse a staging pass that would not fit, before it writes anything."""
+    free = _free_bytes(folder)
+    if free is not None and need > free:
+        raise ValueError(
+            f"copying {what} into the case needs about {need:,} bytes and the volume "
+            f"the case is on has {free:,} free. Free some space, move the case, or "
+            f"read the source on demand instead of copying it")
+
+
+def _out_of_room(exc: BaseException) -> bool:
+    """True when ``exc`` is the volume being written to having no space left."""
+    return isinstance(exc, OSError) and exc.errno == errno.ENOSPC
+
+
+def _link(first: Path, dest: Path) -> bool:
+    """Make ``dest`` another name for the copy already at ``first``. False when the
+    filesystem will not (FAT and exFAT have no hard links), so the caller writes it."""
+    if first == dest:
+        return True
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(FileNotFoundError):
+            dest.unlink()
+        os.link(first, dest)
+        return True
+    except OSError:
+        return False
 
 
 def _write_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, dest: Path) -> None:
@@ -625,6 +824,13 @@ def source_record(case, name: str) -> dict | None:
         "bitlocker": case.db.get_meta(f"{key}:bitlocker") or "",
         # and the identifiers of the encrypted APFS volumes it read decrypted
         "apfs": case.db.get_meta(f"{key}:apfs") or "",
+        # the walked rows that are a cloud provider's online-only placeholders: the
+        # volume names them and holds none of their content, so they have no copy
+        # and no hash, and an examiner has to be told that is why
+        "placeholders": num("placeholders", int, 0),
+        # and the staged files that are a second name for a copy already written,
+        # because the volume held them as hard links to one file
+        "linked": num("linked", int, 0),
     }
 
 
@@ -1126,8 +1332,9 @@ def _walk_head(w, node: int, size: int, want: int = 16) -> bytes:
     return got[:want]
 
 
-def _extract_walked_member(rec: dict, row, dest: Path) -> None:
-    """Write one walked file by asking its volume's walker for the bytes."""
+def _row_walker(rec: dict, row):
+    """``(walker, node)`` for a walked row: the walker of the volume it was read from
+    and the node that names it there."""
     path = rec["path"]
     node, base = _row_get(row, "member_node"), _row_get(row, "volume_base")
     if isinstance(node, str):
@@ -1136,18 +1343,27 @@ def _extract_walked_member(rec: dict, row, dest: Path) -> None:
         # this keeps the value the shape the walker handed out.
         if isinstance(node, list):
             node = tuple(node)
-    size = int(row["size"] or 0)
     vols = {v["base"]: v for v in json.loads(rec.get("volumes") or "[]")}
     vol = vols.get(int(base)) if base is not None else None
     if node is None or vol is None:
         raise ArchiveUnavailable(
             f"{row['orig_path']!r} has no recorded volume to be read from: {path}")
     w, _lock = _open_walker(path, int(base), vol["kind"], vol["size"])
+    return w, node
+
+
+def _extract_walked_member(rec: dict, row, dest: Path) -> None:
+    """Write one walked file by asking its volume's walker for the bytes."""
+    path = rec["path"]
+    size = int(row["size"] or 0)
+    w, node = _row_walker(rec, row)
     try:
-        _write_stream(_walk_reader(w, node, size), dest)
+        _write_stream(_walk_reader(w, node, size), dest, holes=True)
     except Exception as exc:                         # pylint: disable=broad-except
         with contextlib.suppress(OSError):
             dest.unlink()
+        if _out_of_room(exc):
+            raise                                    # the case's volume, not the image
         if not Path(path).exists():
             _drop_image(path)
             raise ArchiveUnavailable(
@@ -1337,6 +1553,8 @@ class _Tally:
         self.ts_dos = 0
         self.mirrored = 0               # members that were another storage view of a kept one
         self.views_differ = 0           # mirrored groups registered in full, copies disagree
+        self.placeholders = 0           # walked rows whose content is with a cloud provider
+        self.linked = 0                 # staged as a hard link to a copy already written
 
 
 def _register(case, src, dest: Path, name: str, rel: str, kind: str, ext: str, size: int,
@@ -1344,7 +1562,15 @@ def _register(case, src, dest: Path, name: str, rel: str, kind: str, ext: str, s
               member_offset: int | None, alt_paths: list[str] | None = None,
               origin: str | None = None, member_node: int | None = None,
               volume_base: int | None = None,
-              recorded_times: str | None = None, atime: float | None = None) -> None:
+              recorded_times: str | None = None, atime: float | None = None,
+              error: str | None = None) -> None:
+    # Only a row that has something to say sets the error column: a later ingest of
+    # the same source must not blank what processing wrote there. The one thing said
+    # here is that the row is a cloud placeholder, and such a row has no content to
+    # have a hash of, so a hash an earlier version recorded for it (of the zeros it
+    # read in place of the content) goes with it.
+    said = ({"error": error, "md5": None, "sha1": None, "sha256": None}
+            if error else {})
     case.db.upsert_file(
         str(dest),
         rel_path=rel,
@@ -1364,6 +1590,7 @@ def _register(case, src, dest: Path, name: str, rel: str, kind: str, ext: str, s
         member_node=member_node,
         volume_base=volume_base,
         recorded_times=recorded_times,
+        **said,
     )
 
 
@@ -1403,10 +1630,21 @@ def _finish(case, src, path: Path, *, fmt: str, root: str, stage: bool, reason: 
     case.db.set_meta(f"{key}:failed", str(tally.failed))
     case.db.set_meta(f"{key}:mirrored", str(tally.mirrored))
     case.db.set_meta(f"{key}:views_differ", str(tally.views_differ))
+    case.db.set_meta(f"{key}:placeholders", str(tally.placeholders))
+    case.db.set_meta(f"{key}:linked", str(tally.linked))
     case.db.commit()
     how = "copied under the case" if stage else "read from the archive on demand"
     if reason:
         how += f"; {reason}"
+    if tally.failed:
+        how += f"; {tally.failed} files could not be read and are not registered"
+    if tally.placeholders:
+        how += (f"; {tally.placeholders} of them online-only cloud placeholders, "
+                f"registered with no copy and no hash because the image does not "
+                f"hold their content")
+    if tally.linked:
+        how += (f"; {tally.linked} written as hard links to a copy already made, "
+                f"as the volume held them")
     case.db.audit_log(case.examiner, "ingest-archive",
                       f"{path.name} ({fmt}): registered {tally.registered} ({how}), skipped "
                       f"{tally.skipped_encrypted} encrypted, {tally.skipped_links} links, "
@@ -1651,105 +1889,161 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # and the encrypted APFS volumes it read decrypted, likewise; one left locked
         # is recorded below as a volume not read, with what would open it
         apfs: list[str] = []
-        for base, size, fskind, label in vols:
-            vol = label or f"lba{base // ss}"
-            try:
-                walker = qnxprobe.walker_for(fskind, img, base, size)
-                if walker is None:
-                    refused.append(f"{vol} ({fskind}): {_not_walked(img, base, size)}")
-                    continue
-                if fskind == "apfs":
-                    apfs += _apfs_states(walker, vol, refused)
-                _prime_catalog(walker)
-                # FAT and exFAT keep a wall-clock reading and no zone, so their
-                # mtime comes back as zero and the readings arrive here instead,
-                # as text, keyed by the same path collect() reports.
-                readings: dict = {}
-                entries = qnxprobe.collect(walker, walker.root, times=readings)
-            except Exception as exc:                 # pylint: disable=broad-except
-                refused.append(f"{vol} ({fskind}): {exc}")
-                continue
-            for path, node, fsize, mtime in entries:
-                # collect() reports a symlink or special file with no size. It
-                # carries no bytes of its own, as a tar link member does not.
-                if fsize is None:
-                    tally.skipped_links += 1
-                    continue
-                if max_bytes and fsize > max_bytes:
-                    tally.skipped_size += 1
-                    continue
-                name = f"{vol}/{path}"
-                ext = PurePosixPath(path).suffix.lower()
-                head = b""
-                is_doc = False
-                if ext in IMAGE_EXTS:
-                    kind = "image"
-                elif ext in VIDEO_EXTS:
-                    kind = "video"
-                elif ext in ARCHIVE_EXTS:
-                    kind = "archive"
-                else:
-                    kind = "other"
-                # ExoPlayer cache files are decided by name, see gleapp/exocache.py
-                if is_exoplayer_cache_name(path):
-                    kind = "archive"
-                if kind == "other" or is_appledouble_name(path):
-                    try:
-                        head = _walk_head(walker, node, fsize)
-                    except Exception:                # pylint: disable=broad-except
-                        tally.failed += 1
+
+        def planned():
+            """Every file the walk registers, in the order the volumes report them:
+            ``(volume base, walker, name, node, size, modified, kind, extension,
+            zone-less readings, allocation)``. Reading it all before anything is
+            copied is what lets a staging pass know the room it needs first."""
+            for base, size, fskind, label in vols:
+                vol = label or f"lba{base // ss}"
+                try:
+                    walker = qnxprobe.walker_for(fskind, img, base, size)
+                    if walker is None:
+                        refused.append(f"{vol} ({fskind}): {_not_walked(img, base, size)}")
                         continue
-                # A macOS sidecar carries its sibling's whole name, so its
-                # extension names a picture it does not hold.
-                if kind != "other" and is_appledouble(path, head):
-                    kind = "other"
-                if kind == "other":
-                    kind = _kind_from_magic(head)
-                    if kind == "other" and getattr(src, "documents", False) and is_document(path, head):
+                    if fskind == "apfs":
+                        apfs.extend(_apfs_states(walker, vol, refused))
+                    _prime_catalog(walker)
+                    # FAT and exFAT keep a wall-clock reading and no zone, so their
+                    # mtime comes back as zero and the readings arrive here instead,
+                    # as text, keyed by the same path collect() reports.
+                    readings: dict = {}
+                    entries = qnxprobe.collect(walker, walker.root, times=readings)
+                except Exception as exc:             # pylint: disable=broad-except
+                    refused.append(f"{vol} ({fskind}): {exc}")
+                    continue
+                for path, node, fsize, mtime in entries:
+                    # collect() reports a symlink or special file with no size. It
+                    # carries no bytes of its own, as a tar link member does not.
+                    if fsize is None:
+                        tally.skipped_links += 1
+                        continue
+                    if max_bytes and fsize > max_bytes:
+                        tally.skipped_size += 1
+                        continue
+                    # What the volume stores for the file, where the reader can say
+                    # (NTFS and APFS): a cloud provider's online-only placeholder
+                    # has a size and no content, and is kept as a row with neither
+                    # a copy nor a hash rather than read as zeros.
+                    alloc = qnxprobe.allocation(walker, node)
+                    placeholder = bool(alloc and alloc.get("placeholder"))
+                    if not (placeholder or (alloc and alloc.get("sparse"))):
+                        alloc = None                 # nothing the copy has to know
+                    name = f"{vol}/{path}"
+                    ext = PurePosixPath(path).suffix.lower()
+                    head = b""
+                    is_doc = False
+                    if ext in IMAGE_EXTS:
+                        kind = "image"
+                    elif ext in VIDEO_EXTS:
+                        kind = "video"
+                    elif ext in ARCHIVE_EXTS:
                         kind = "archive"
-                        is_doc = True
-                    if kind == "other" and not src.include_other and not is_search_index_name(path):
+                    else:
+                        kind = "other"
+                    # ExoPlayer cache files are decided by name, see gleapp/exocache.py
+                    if is_exoplayer_cache_name(path):
+                        kind = "archive"
+                    # A placeholder has no first bytes to look at, so its name is
+                    # all that says what it is.
+                    if (kind == "other" or is_appledouble_name(path)) and not placeholder:
+                        try:
+                            head = _walk_head(walker, node, fsize)
+                        except Exception:            # pylint: disable=broad-except
+                            tally.failed += 1
+                            continue
+                    # A macOS sidecar carries its sibling's whole name, so its
+                    # extension names a picture it does not hold.
+                    if kind != "other" and is_appledouble(path, head):
+                        kind = "other"
+                    if kind == "other":
+                        kind = _kind_from_magic(head)
+                        if (kind == "other" and getattr(src, "documents", False)
+                                and is_document(path, head)):
+                            kind = "archive"
+                            is_doc = True
+                        if (kind == "other" and not src.include_other
+                                and not is_search_index_name(path)):
+                            continue
+                    if _only_documents(src) and not is_doc:
                         continue
-                if _only_documents(src) and not is_doc:
-                    continue
-                dest = _staged_path(staged_dir, slug, name)
-                # collect() carries only the modified time. NTFS holds created and
-                # accessed beside it, as instants, so ask the walker for those two.
-                # A FAT or exFAT walker has no stamps(): its dates are the zone-less
-                # readings above, and no instant can be made from them.
-                created = accessed = 0
-                if hasattr(walker, "stamps"):
-                    created, _modified, accessed = walker.stamps(node)
-                if stage:
-                    try:
+                    yield (base, walker, name, node, fsize, mtime, kind, ext,
+                           readings.get(path), alloc)
+
+        plan = planned()
+        holes_kept = False
+        if stage:
+            # Everything a staging pass will write is known before it writes any of
+            # it, so a copy that cannot fit is refused here rather than part way
+            # through. A file the volume holds under several names is one file, and
+            # is counted and written once.
+            plan = list(plan)
+            holes_kept = _keeps_holes(staged_dir)
+            once: dict = {}
+            for base, _w, _name, node, fsize, _m, _k, _e, _said, alloc in plan:
+                if not (alloc and alloc.get("placeholder")):
+                    once.setdefault((int(base), json.dumps(node)),
+                                    _copy_bytes(fsize, alloc, holes_kept))
+            _require_room(staged_dir, sum(once.values()), image_path.name)
+        written: dict = {}                           # (volume, node) -> the copy made of it
+        for base, walker, name, node, fsize, mtime, kind, ext, said, alloc in plan:
+            dest = _staged_path(staged_dir, slug, name)
+            # collect() carries only the modified time. NTFS holds created and
+            # accessed beside it, as instants, so ask the walker for those two.
+            # A FAT or exFAT walker has no stamps(): its dates are the zone-less
+            # readings above, and no instant can be made from them.
+            created = accessed = 0
+            if hasattr(walker, "stamps"):
+                created, _modified, accessed = walker.stamps(node)
+            error = None
+            if alloc and alloc.get("placeholder"):
+                error = placeholder_error(fsize, alloc.get("stored"))
+                tally.placeholders += 1
+            elif stage:
+                same = (int(base), json.dumps(node))
+                try:
+                    if same in written and _link(written[same], dest):
+                        tally.linked += 1
+                    else:
                         # No head here. _walk_head above read the sniff bytes from
                         # a generator of its own, so the walker hands them back
                         # again from offset 0; passing them would write them twice.
                         # (A tar member is read through the one handle the sniff
                         # consumed, which is why that path does pass its head.)
-                        _write_stream(_walk_reader(walker, node, fsize), dest)
-                    except Exception:                # pylint: disable=broad-except
-                        with contextlib.suppress(OSError):
-                            dest.unlink()
-                        tally.failed += 1
-                        continue
-                    if mtime:
-                        with contextlib.suppress(OSError):
-                            os.utime(dest, (accessed or mtime, mtime))
-                # A walked row is read back through its volume's walker, so it
-                # records the node and the volume rather than a byte offset.
-                said = readings.get(path)
-                _register(case, src, dest, name, name, kind, ext, fsize,
-                          mtime or None, created or None, None, None,
-                          recorded_times=json.dumps(said) if said else None,
-                          origin="walk", member_node=json.dumps(node),
-                          volume_base=int(base), atime=accessed or None)
-                tally.registered += 1
-                n += 1
-                if n % 200 == 0:
-                    case.db.commit()
-                    if progress:
-                        progress(n)
+                        _write_stream(_walk_reader(walker, node, fsize), dest, holes=True)
+                        written.setdefault(same, dest)
+                except Exception as exc:             # pylint: disable=broad-except
+                    with contextlib.suppress(OSError):
+                        dest.unlink()
+                    if _out_of_room(exc):
+                        # Not a file the reader could not read: every file after it
+                        # would fail the same way and be counted as unreadable.
+                        case.db.commit()
+                        raise ValueError(
+                            f"the volume the case is on filled while copying "
+                            f"{image_path.name} into the case, after "
+                            f"{tally.registered:,} files. Free some space and ingest "
+                            f"it again, or read it on demand instead of copying "
+                            f"it") from exc
+                    tally.failed += 1
+                    continue
+                if mtime:
+                    with contextlib.suppress(OSError):
+                        os.utime(dest, (accessed or mtime, mtime))
+            # A walked row is read back through its volume's walker, so it
+            # records the node and the volume rather than a byte offset.
+            _register(case, src, dest, name, name, kind, ext, fsize,
+                      mtime or None, created or None, None, None,
+                      recorded_times=json.dumps(said) if said else None,
+                      origin="walk", member_node=json.dumps(node),
+                      volume_base=int(base), atime=accessed or None, error=error)
+            tally.registered += 1
+            n += 1
+            if n % 200 == 0:
+                case.db.commit()
+                if progress:
+                    progress(n)
     finally:
         _drop_image(str(image_path))
     case.db.commit()
@@ -2237,23 +2531,81 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
 
 def stage_source(case, name: str, *, progress=None) -> int:
     """Copy every registered member of a reference-mode source under the case, making
-    it self-contained. Returns the number of files written."""
+    it self-contained. Returns the number of files written.
+
+    Refused, before anything is written, when the copies would not fit on the volume
+    the case is on. A walked row that is a cloud provider's online-only placeholder
+    has no content to copy and is left as a row; one found here that an earlier
+    ingest could not recognise is marked as one. A file the volume holds under
+    several names is written once and linked for the others. A walked file the
+    reader cannot read is left without a copy and counted, since one such file must
+    not stop the rest of the source being copied in."""
     rec = _require(case, name)
     rows = case.db.iter_files("source = ?", (name,))
-    written = 0
-    for i, r in enumerate(rows, 1):
+    walked = rec["format"] in IMAGE_FORMATS
+    holes_kept = _keeps_holes(case.staged_dir)
+    todo: list[tuple] = []                           # (row, key of the file it names, bytes)
+    placeholders = 0
+    for r in rows:
+        if is_placeholder_error(r["error"]) or Path(r["path"]).exists():
+            continue
+        same, alloc = None, None
+        if walked and _row_get(r, "member_node") is not None:
+            w, node = _row_walker(rec, r)
+            alloc = qnxprobe.allocation(w, node)
+            if alloc and alloc.get("placeholder"):
+                case.db.update_file(r["id"], error=placeholder_error(
+                    r["size"] or 0, alloc.get("stored")), md5=None, sha1=None, sha256=None)
+                placeholders += 1
+                continue
+            same = (int(r["volume_base"]), json.dumps(node))
+        todo.append((r, same, _copy_bytes(r["size"] or 0, alloc, holes_kept)))
+    need: dict = {}
+    for i, (_r, same, takes) in enumerate(todo):
+        need.setdefault(same if same is not None else ("row", i), takes)
+    _require_room(case.staged_dir, sum(need.values()), name)
+    written = linked = unread = 0
+    first: dict = {}
+    for i, (r, same, _takes) in enumerate(todo, 1):
         dest = Path(r["path"])
-        if not dest.exists():
-            _materialize(rec, r, dest)
+        copied = True
+        if same is not None and same in first and _link(first[same], dest):
+            linked += 1
+        else:
+            try:
+                _materialize(rec, r, dest)
+            except ArchiveUnavailable:
+                # The image itself going away stops the pass. One file in it the
+                # reader declines (a compression it does not decode, say) does not.
+                if not (walked and Path(rec["path"]).exists()):
+                    raise
+                unread += 1
+                copied = False
+            if copied and same is not None:
+                first.setdefault(same, dest)
+        if copied:
             if r["mtime"]:
                 with contextlib.suppress(OSError):
                     os.utime(dest, (r["mtime"], r["mtime"]))
             written += 1
-        if progress and (i % 100 == 0 or i == len(rows)):
-            progress(i, len(rows))
-    case.db.set_meta(f"{_meta_key(name)}:mode", MODE_STAGED)
-    case.db.audit_log(case.examiner, "stage-source",
-                      f"{name}: {written} members copied under the case")
+        if progress and (i % 100 == 0 or i == len(todo)):
+            progress(i, len(todo))
+    key = _meta_key(name)
+    case.db.set_meta(f"{key}:mode", MODE_STAGED)
+    if placeholders:
+        case.db.set_meta(f"{key}:placeholders", str(rec["placeholders"] + placeholders))
+    if linked:
+        case.db.set_meta(f"{key}:linked", str(rec["linked"] + linked))
+    case.db.commit()
+    said = f"{name}: {written} members copied under the case"
+    if linked:
+        said += f", {linked} of them as hard links to a copy already made"
+    if placeholders:
+        said += (f"; {placeholders} found to be online-only cloud placeholders, which "
+                 f"have no content to copy")
+    if unread:
+        said += f"; {unread} could not be read from the image and have no copy"
+    case.db.audit_log(case.examiner, "stage-source", said)
     return written
 
 
