@@ -337,8 +337,9 @@ error flag so the counts still line up for export.
 Each file carries its VIC MD5 (processing trusts it, skips re-hashing), MediaID,
 original filename and device path, MIME type, victim/offender/distributed flags,
 and the Series and Tags the record carried, kept apart from the examiner's own flags. Existing `Category` values are imported; GLEAPP category codes map 1:1 to
-VIC codes (0 = uncategorized = `null`): the codes 1–5 GLEAPP seeds *are* the
-Project VIC scheme, so an imported category lands on the matching locked preset.
+VIC codes (0 = Non-pertinent; 5 = Uncategorized, written back as `null`): the
+codes 0–5 GLEAPP seeds *are* the Project VIC scheme, so an imported category
+lands on the matching locked preset.
 
 **Export back:** the **Export Project VIC** button (or `gleapp report --format vic`)
 re-reads the original file and writes `reports/projectvic_export.json` with each
@@ -589,7 +590,7 @@ folders / a JSON job, then watch processing progress, no CLI needed.
 | Select | click; Ctrl-click add; Shift-click range; `←`/`→` move; `A` select all |
 | **See details** | **single-click** a file → the right pane fills instantly (no double-click). Toggle the pane with `I` or the header button |
 | Manage categories | **⚙ Categories** in the header: presets 0–5 are locked; add / rename / delete / reorder your own (order = the `1`–`9` keys) |
-| Categorize | keys `1`–`9` by category order (`1`–`5` = VIC presets), `0` to clear, or the selection bar / right-click menu / details pane |
+| Categorize | keys `0`–`4` = VIC codes, `5` to clear, `6`–`9` your own categories in order, or the selection bar / right-click menu / details pane |
 | **Find similar** | **right-click → Find similar images**, key `F`, or the details-pane button |
 | **Scrub a video** | move the cursor left→right across a video tile: it steps through the key frames; a bar shows position |
 | View full size | **View full size** button in the details pane, or double-click a tile |

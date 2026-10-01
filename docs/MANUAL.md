@@ -380,22 +380,35 @@ A field appears only when the file has a value for it.
 Every case is seeded with **codes 0-5**, the Project VIC 2.0 (US) category
 scheme. They are **locked**: cannot be renamed, recolored, reordered, hidden or
 deleted (they show read-only with a 🔒 in the ⚙ Categories editor). Number keys
-`1`-`5` apply them; `0` clears a category.
+match the codes: `0` applies Non-pertinent, `1`-`4` apply codes 1-4, and `5`
+clears a category back to Uncategorized.
 
 | Code | Name | What it is for |
 |---|---|---|
-| **0** | Uncategorized | Not yet reviewed, no decision made. The default and the backlog you work down. Filter to it and categorize each file; the cursor advances to the next automatically, and ↻ Refresh clears the done ones. |
+| **0** | Non-pertinent | Not notable. **An NSRL known-good hash hit auto-categorizes an uncategorized file here.** |
 | **1** | CAM (Child Abuse Material) | Depicts a real prepubescent child, or a minor not obviously past puberty, engaged in a sexual act; the lascivious exhibition of the genitals or pubic area; or sadistic/masochistic abuse of a minor. The most serious category: illegal contraband. Notable / evidential. |
 | **2** | Child Exploitative / Age Difficult | A sexualized depiction of a minor below the Category 1 threshold (non-penetrative sexual posing, sexualized "child erotica", a pubescent minor), or a person whose age is genuinely difficult to determine and could be a minor. Notable. |
 | **3** | CGI / Animation (Child Exploitative) | Computer-generated imagery, drawings, cartoons, anime or rendered art depicting Category 1 or 2 content. Not a real child, still exploitative material. Notable. |
 | **4** | Comparison Images (Non-pertinent) | Images kept for comparison or identification: known-series reference images, images used to identify a victim, location or offender, that are themselves non-pertinent to the primary offense. Also for non-pertinent images an examiner wants specifically flagged. Not notable. |
-| **5** | Non-pertinent | Everything else: not CSAM, no evidentiary value, family photos, memes, screenshots, app assets, OS/application files. Not notable. **An NSRL known-good hash hit auto-categorizes an uncategorized file here.** |
+| **5** | Uncategorized | Not yet reviewed, no decision made. The default and the backlog you work down. Filter to it and categorize each file; the cursor advances to the next automatically, and ↻ Refresh clears the done ones. |
 
 **Adding your own.** "+ Add category" in the editor creates **code 6** and up.
 Your categories are fully editable: rename, recolor (click the color swatch
 next to the name), delete (soft while in use), drag to reorder (they always
-sort after the presets). They get number-key shortcuts 6, 7, ... in order and
+sort after the presets). The first four get number-key shortcuts 6-9 in order and
 start with an auto-assigned color.
+
+**Project VIC JSON.** A `Category` of 0 is imported as Non-pertinent; an empty
+(`null`) category or 5 is imported as Uncategorized. On export, Uncategorized is
+written back as `null`.
+
+**Cases made by an older GLEAPP.** Before schema v18 GLEAPP stored these two
+codes the other way round (0 Uncategorized, 5 Non-pertinent). The first time
+this version opens such a case it swaps them on every file and category, so
+each decision keeps its meaning; a file with no category becomes Uncategorized.
+The swap runs once. After that, do not open the case with an older GLEAPP: it
+would read the codes the old way. Run **Re-check** on a case that uses a
+Project VIC hash set, so entries with a category of 0 are applied.
 
 ### Flags: an independent, per-file label
 
@@ -759,13 +772,15 @@ value and the category Project VIC assigned.
 **What a match does**
 
 - **A match is flagged *VIC*.** If the file has no category yet, it goes into the
-  category Project VIC gave it (for example 1 CAM, 2 Child Exploitative, 3 CGI).
+  category Project VIC gave it (for example 0 Non-pertinent, 1 CAM, 2 Child
+  Exploitative, 3 CGI).
   A category you have set is never overridden. The change is not silent: the
   file carries the VIC flag, and the details pane's *Matched in* row names the
   set and the category it asserted.
 - **A file in more than one place keeps every flag.** A file in a Project VIC
   set and in your hash stash shows both *VIC* and *STASH*. If the two disagree
-  on the category, the lower, more severe code is taken. A file in the NSRL and
+  on the category, the lower, more severe code is taken; Non-pertinent (0) ranks
+  below every other category. A file in the NSRL and
   a notable set is never made Non-pertinent.
 - **Find them:** the sidebar's *Known hashes → Show* has *Project VIC hits*,
   *Hash stash hits* and *hit in both*. HTML, CSV and JSON reports carry a *Hash
@@ -1237,7 +1252,7 @@ want, or current selection) and one or more **formats**:
 | JSON | the same data, structured; carries the case header too |
 | KMZ | geolocated media for Google Earth / mapping tools: a zipped KML with a thumbnail (or video key frame) bundled for every placemark, so clicking a pin shows the picture at its location |
 | MD5 list | one hash per row (also from the selection bar / right-click) |
-| Project VIC JSON | the original VIC file with Category / Comments / Tags written back, keyed by MediaID and MD5 (VIC cases) |
+| Project VIC JSON | the original VIC file with Category / Comments / Tags written back, keyed by MediaID and MD5 (VIC cases); Uncategorized is written as `null` |
 | LAVA report | a project folder LAVA opens: the media, a location map for each geolocated file the basemap covers and an overview map drawn offline from the basemap you imported (§19), the video key frames, and the artifact tables. Takes minutes rather than seconds, so it runs as a job and the bar at the bottom follows it |
 
 Filesystem / ingest times in the HTML and CSV are rendered in the case's
@@ -1534,8 +1549,9 @@ partition on a dual-boot disk is enough to do that.
 
 | Key | Action |
 |---|---|
-| `1`-`9` | categorize the selection (1-5 = VIC presets, 6+ = your categories) |
-| `0` | clear category |
+| `0`-`4` | categorize the selection with that VIC code (0 = Non-pertinent) |
+| `5` | clear category (Uncategorized) |
+| `6`-`9` | your own categories, in order |
 | `F` | find similar images to the focused file |
 | `H` | hex view of the focused file |
 | `I` | toggle the details pane |

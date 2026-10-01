@@ -17,6 +17,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import quote
 
+from .db import category_code, is_uncategorized
 from . import archive, basemaps, categories, exocache, flags, imaging, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
 from .case import Case
 
@@ -53,7 +54,7 @@ def _rows(case: Case, where: str = "") -> list[dict]:
     out = []
     for r in case.db.iter_files(where):
         d = dict(r)
-        d["category_label"] = categories.label(case.db, d.get("category") or 0)
+        d["category_label"] = categories.label(case.db, d.get("category"))
         d["flags"] = [dict(fr) for fr in case.db.flags_for(d["id"])]
         d["flags_label"] = ", ".join(fr["name"] for fr in d["flags"])
         d["file_path"] = _disp_path(d)      # device path (VIC) or source path
@@ -92,7 +93,7 @@ def matched_in(sources: list[dict]) -> str:
         detail = []
         if x.get("src") in ("vic", "other", "good") and x.get("name"):
             detail.append(str(x["name"]))
-        if x.get("category"):
+        if not is_uncategorized(x.get("category")):
             detail.append(f"category {x['category']}")
         parts.append(label + (f" ({', '.join(detail)})" if detail else ""))
     return "; ".join(parts)
@@ -908,7 +909,7 @@ def _overview_html(case: Case, overview: str, tally: dict[str, int], drawn_rows:
 def _summary_html(case: Case, rows: list[dict], label: str, *,
                   flag_mode: bool = False) -> str:
     by_kind = Counter(d.get("kind") for d in rows)
-    by_cat = Counter(d.get("category") or 0 for d in rows)
+    by_cat = Counter(category_code(d.get("category")) for d in rows)
     by_flag: Counter = Counter()
     flagged = 0
     for d in rows:
@@ -938,7 +939,7 @@ def _summary_html(case: Case, rows: list[dict], label: str, *,
         if by_kind.get(k):
             out.append(line("sub", lbl, by_kind[k]))
 
-    codes = sorted(by_cat, key=lambda c: (c == 0, cmap.get(c, {}).get("position", c), c))
+    codes = sorted(by_cat, key=lambda c: (is_uncategorized(c), cmap.get(c, {}).get("position", c), c))
     if codes:
         out.append("<tr class='grp'><td colspan='3'>By category</td></tr>")
         for c in codes:
@@ -1153,10 +1154,11 @@ def _copy_full_size(case: Case, d: dict, media_dir: Path, *, want_video: bool,
 def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
                full_images: bool, full_videos: bool, loc_map: str = "",
                media_dir: Path | None = None) -> str:
-    code = d.get("category") or 0
+    code = d.get("category")
     catbar = (f"<div class='catbar' style='background:"
               f"{html.escape(categories.color(case.db, code))}'>"
-              f"{html.escape(d['category_label'])}</div>" if code else "")
+              f"{html.escape(d['category_label'])}</div>"
+              if not is_uncategorized(code) else "")
     # Flags sit right under the category bar - small and colored, never
     # confusable with the (bold, singular) category itself. A file can carry
     # any number, including zero.
@@ -1360,17 +1362,17 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 f"<a class='toplink' href='#top'>&uarr; top</a></h2>")
             _kind_grids(items)
     else:
-        # group by category (ordered by the category's display position, 0
-        # last), then within each category by flag (see _section above), with
+        # group by category (ordered by the category's display position,
+        # Uncategorized last), then within each category by flag (see _section above), with
         # kind (image/video/other) only splitting whatever carries no flag.
         groups: dict[int, dict[str, list[dict]]] = {}
         for d in rows:
-            code = d.get("category") or 0
+            code = category_code(d.get("category"))
             kind = d.get("kind") if d.get("kind") in ("image", "video") else "other"
             groups.setdefault(code, {}).setdefault(kind, []).append(d)
 
         def _order(code: int) -> tuple:
-            if code == 0:
+            if is_uncategorized(code):
                 return (1, 1e9, 0)
             return (0, cmap.get(code, {}).get("position", code), code)
         codes = sorted(groups, key=_order)

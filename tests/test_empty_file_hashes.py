@@ -162,7 +162,7 @@ def test_an_empty_file_is_not_flagged_by_a_case_set_that_lists_empty_input(tmp_p
             _EMPTY["md5"], _EMPTY["sha1"], _EMPTY["sha256"]), "it was hashed"
         assert empty["hashset_hit"] is None
         assert empty["hashset_sources"] is None and empty["hashset_vic"] is None
-        assert (empty["category"] or 0) == 0
+        assert empty["category"] == 5
 
         hit = rows["listed.png"]
         assert hit["hashset_hit"] == "VIC" and hit["category"] == 2
@@ -211,7 +211,7 @@ def test_a_set_imported_earlier_no_longer_flags_an_empty_file(tmp_path, algo):
             assert row["hashset_sources"] is None and row["hashset_vic"] is None
             assert row["hashset_mask"] is None
         assert case.db.get_file(earlier)["category"] == 1
-        assert (case.db.get_file(unseen)["category"] or 0) == 0
+        assert case.db.get_file(unseen)["category"] == 5
     finally:
         case.close()
 

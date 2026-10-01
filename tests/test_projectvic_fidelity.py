@@ -199,7 +199,7 @@ def test_isprecategorized_does_not_decide_the_category(tmp_path, case):
     vic = _write_vic(tmp_path, media, files={"a.png": b"a", "b.png": b"b"})
     projectvic.import_vic(case, vic)
     by_id = {r["media_id"]: r for r in case.db.iter_files()}
-    assert not by_id[1]["category"], "true with no Category stays uncategorised"
+    assert by_id[1]["category"] == 5, "true with no Category stays uncategorized"
     assert by_id[2]["category"] == 4, "false with a Category keeps the verdict"
 
 

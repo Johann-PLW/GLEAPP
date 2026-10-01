@@ -134,11 +134,11 @@ function hashBadges(f) {
   }
   const out = [];
   for (const [src, list] of groups) {
-    const what = list.map(s => s.name + (s.category ? ` — category ${s.category}` : "")).join("; ");
+    const what = list.map(s => s.name + (hasCat(s.category) ? ` — category ${s.category}` : "")).join("; ");
     if (src === "vic")
       out.push(`<span class="b vic" title="${esc(`In Project VIC hash set: ${what}`)}">VIC</span>`);
     else if (src === "stash") {
-      const cat = list[0].category ? ` — category ${list[0].category}` : "";
+      const cat = hasCat(list[0].category) ? ` — category ${list[0].category}` : "";
       out.push(`<span class="b stash" title="${esc(`In your local hash stash — you previously categorized this file${cat}`)}">STASH</span>`);
     } else if (src === "good")
       out.push(`<span class="b good" title="${esc(what)}">${
@@ -153,7 +153,7 @@ function matchedInText(f) {
   return hashSources(f).map(s => {
     const bits = [];
     if (s.src !== "stash" && s.name) bits.push(s.name);
-    if (s.category) bits.push(`category ${s.category}`);
+    if (hasCat(s.category)) bits.push(`category ${s.category}`);
     return (SRC_LABEL[s.src] || "Hash set") + (bits.length ? ` (${bits.join(", ")})` : "");
   }).join("; ");
 }
@@ -185,12 +185,30 @@ const pathHtml = (f, p) => {
 };
 
 /* ---------- categories ---------- */
+// Project VIC: 5 is Uncategorized and 0 is Non-pertinent (a real category)
+const UNCAT = 5;
+const hasCat = c => c != null && c !== "" && +c !== UNCAT;
 const catByCode = c => state.cats.find(x => x.code === +c);
 const activeCats = () => state.cats
-  .filter(c => c.code !== 0 && c.active)
+  .filter(c => c.code !== UNCAT && c.active)
   .sort((a, b) => a.position - b.position);
-const catName = c => (catByCode(c) || {}).name || (c ? "Category " + c : "Uncategorized");
-const catColor = c => (catByCode(c) || {}).color || (c ? "#888" : "#3a3f4b");
+// Number keys match the Project VIC codes: 0 Non-pertinent, 1-4, 5 clears
+// (Uncategorized). The examiner's own categories (code 6+) take keys 6-9 in
+// display order; any past the fourth has no key.
+const customCats = () => activeCats().filter(c => c.code > UNCAT);
+const catKey = code => {
+  if (code >= 0 && code < UNCAT) return code;
+  const i = customCats().findIndex(c => c.code === code);
+  return i >= 0 && i < 4 ? UNCAT + 1 + i : null;
+};
+const keyCat = k => {
+  if (k === UNCAT) return UNCAT;
+  if (k < UNCAT) return catByCode(k) ? k : null;
+  const c = customCats()[k - UNCAT - 1];
+  return c ? c.code : null;
+};
+const catName = c => (catByCode(c) || {}).name || (hasCat(c) ? "Category " + c : "Uncategorized");
+const catColor = c => (catByCode(c) || {}).color || (hasCat(c) ? "#888" : "#3a3f4b");
 
 async function refreshCats() {
   state.cats = await api("/api/categories");
@@ -201,12 +219,13 @@ async function refreshCats() {
     sel.insertAdjacentHTML("beforeend",
       `<option value="${c.code}">${esc(c.name)}${c.active ? "" : " (hidden)"}</option>`));
   sel.value = cur || "any";
-  // selection bar buttons - only the first 9 have a number key, same as the
-  // keydown handler's activeCats()[+e.key - 1]
-  $("#selCats").innerHTML = activeCats().map((c, i) =>
-    `<button class="btn sm" data-cat="${c.code}"${i < 9 ? ` title="key ${i + 1}"` : ""}
+  // selection bar buttons, labeled with the key the keydown handler maps
+  $("#selCats").innerHTML = activeCats().map(c => {
+    const k = catKey(c.code);
+    return `<button class="btn sm" data-cat="${c.code}"${k != null ? ` title="key ${k}"` : ""}
       style="border-color:${c.color}">${esc(c.name || "Category " + c.code)}${
-        i < 9 ? ` <span class="muted">${i + 1}</span>` : ""}</button>`).join("");
+        k != null ? ` <span class="muted">${k}</span>` : ""}</button>`;
+  }).join("");
 }
 
 /* ---------- flags ---------- */
@@ -445,7 +464,7 @@ function tileEl(f) {
     + (state.sel.has(f.id) ? " sel" : "")
     + (state.focus === f.id ? " focus" : "");
   el.dataset.id = f.id;
-  el.style.borderColor = f.category ? catColor(f.category) : "";
+  el.style.borderColor = hasCat(f.category) ? catColor(f.category) : "";
   const nExact = f.stack_count || 1;
   const nVis = f.vstack_count || 0;
   // face-match results carry similarity with no "distance" (that's a pHash-only concept)
@@ -477,7 +496,7 @@ function tileEl(f) {
     stackBits.push(`<span class="stackn" title="${nExact} identical copies">⬚ ${nExact}</span>`);
   }
   const stack = stackBits.length ? `<div class="stacks">${stackBits.join("")}</div>` : "";
-  const catbar = f.category
+  const catbar = hasCat(f.category)
     ? `<div class="catbar" style="background:${catColor(f.category)}">${esc(catName(f.category))}</div>`
     : `<div class="catbar none">Uncategorized</div>`;
   const media = f.thumb
@@ -1361,13 +1380,13 @@ async function categorize(ids, cat) {
   ids.forEach(id => { const f = state.files.find(x => x.id === id); if (f) f.category = cat; });
   refreshTiles(ids);
   const n = (r && r.count) || ids.length;
-  const msg = `${cat ? catName(cat) : "Uncategorized"} → ${n} file(s)`
+  const msg = `${catName(cat)} → ${n} file(s)`
     + (n > ids.length ? ` (${ids.length} tile${ids.length === 1 ? "" : "s"} with their copies)` : "");
   // move the cursor on to the next file under whatever filter is active
   // (the categorized tiles stay put until you hit Refresh) - not just when
   // working the Uncategorized backlog specifically
   let note = "";
-  if (cat !== 0) note = advancePast(ids, cat) || "";
+  if (cat !== UNCAT) note = advancePast(ids, cat) || "";
   else if (state.metaOpen && ids.includes(state.focus)) showMeta(state.focus);
   toast(msg + note, note ? 3500 : undefined);
 }
@@ -1915,9 +1934,11 @@ function openCtx(x, y, ids) {
   const groupField = f0 && f0.vstack_id ? "vstack" : "stack";
   const groupId = f0 ? (f0.vstack_id || f0.stack_id) : null;
   const groupN = f0 ? (f0.vstack_id ? f0.vstack_count : f0.stack_count) || 1 : 0;
-  const catBtns = activeCats().map((c, i) =>
-    `<button data-a="c${c.code}"><span class="dot" style="background:${c.color}"></span>
-      ${esc(c.name || "Category " + c.code)}${many} <span class="muted">${i + 1}</span></button>`).join("");
+  const catBtns = activeCats().map(c => {
+    const k = catKey(c.code);
+    return `<button data-a="c${c.code}"><span class="dot" style="background:${c.color}"></span>
+      ${esc(c.name || "Category " + c.code)}${many}${k != null ? ` <span class="muted">${k}</span>` : ""}</button>`;
+  }).join("");
   $("#ctx").innerHTML = `
     <button data-a="similar">\u{1F50D} Find similar images</button>
     ${groupId && groupN > 1 ? `<button data-a="group">\u{1F4CB} Show all in group (${groupN})</button>` : ""}
@@ -1926,7 +1947,7 @@ function openCtx(x, y, ids) {
     <button data-a="hex">\u{1F524} Hex view</button>
     <div class="sep"></div>
     ${catBtns}
-    <button data-a="c0"><span class="dot" style="background:#3a3f4b"></span>Clear category${many} <span class="muted">0</span></button>
+    <button data-a="c${UNCAT}"><span class="dot" style="background:#3a3f4b"></span>Clear category${many} <span class="muted">${UNCAT}</span></button>
     <div class="sep"></div>
     <button data-a="flag">\u{1F3F7} Flags…${many}</button>
     <div class="sep"></div>
@@ -1974,17 +1995,14 @@ $("#ctx").addEventListener("click", e => {
 
 /* ---------- category editor ---------- */
 function renderCatEd() {
-  const rows = state.cats.filter(c => c.code !== 0).sort((a, b) => a.position - b.position);
+  const rows = state.cats.filter(c => c.code !== UNCAT).sort((a, b) => a.position - b.position);
   const custom = rows.filter(c => !c.locked);
-  // the keyboard shortcut is a category's position among ACTIVE categories
-  // (activeCats()[+e.key - 1]), which is not the same number as its fixed VIC
-  // code - showing "VIC 3" here read as a hotkey and wasn't one. Only the
-  // first 9 active categories have a key; the rest (including any hidden one)
-  // show no badge rather than a made-up one.
-  const acts = activeCats();
+  // the keyboard shortcut (see catKey): a preset's own code, keys 6-9 for the
+  // first four active categories of the examiner's own; the rest (including
+  // any hidden one) show no badge rather than a made-up one
   const keyBadge = code => {
-    const i = acts.findIndex(c => c.code === code);
-    return i >= 0 && i < 9 ? `<span class="vcode">⌨ <b>${i + 1}</b></span>` : "";
+    const k = catByCode(code) && catByCode(code).active ? catKey(code) : null;
+    return k != null ? `<span class="vcode">⌨ <b>${k}</b></span>` : "";
   };
   $("#catRows").innerHTML = rows.map(c => c.locked ? `
     <div class="cat locked" data-code="${c.code}">
@@ -2190,11 +2208,10 @@ document.addEventListener("keydown", e => {
     if (e.key === "ArrowLeft") { e.preventDefault(); return moveFocus(-1); }
   }
   const ids = selIds();
-  if (e.key >= "1" && e.key <= "9") {
-    const c = activeCats()[+e.key - 1];
-    if (c && ids.length) categorize(ids, c.code);
-  } else if (e.key === "0" && ids.length) categorize(ids, 0);
-  else if (e.key.toLowerCase() === "f" && ids.length) showSimilar(ids[0]);
+  if (e.key >= "0" && e.key <= "9" && e.key.length === 1) {
+    const code = keyCat(+e.key);
+    if (code != null && ids.length) categorize(ids, code);
+  } else if (e.key.toLowerCase() === "f" && ids.length) showSimilar(ids[0]);
   else if (e.key.toLowerCase() === "h" && ids.length) openHex(ids[0]);
   else if (e.key.toLowerCase() === "i") toggleMeta();
   else if (e.key.toLowerCase() === "a") {
@@ -2580,7 +2597,7 @@ let rptLogo = null;   // data: URI of the chosen agency logo, or null
 async function openReportDlg() {
   const s = await api("/api/stats").catch(() => ({}));
   const cats = Object.entries(s.by_category || {})
-    .filter(([k]) => +k !== 0).reduce((a, [, v]) => a + v, 0);
+    .filter(([k]) => +k !== UNCAT).reduce((a, [, v]) => a + v, 0);
   $("#scAll").textContent = s.total ? `(${s.total.toLocaleString()})` : "";
   $("#scCat").textContent = `(${cats.toLocaleString()})`;
   $("#scUncat").textContent = s.total
@@ -2615,8 +2632,8 @@ async function openReportDlg() {
       chosen.has(o.key) ? " checked" : ""}> ${esc(o.label)}</label>`).join("");
 
   const byCat = s.by_category || {};
-  $("#rscopeCats").innerHTML = [{ code: 0, name: "Uncategorized" }]
-    .concat(state.cats.filter(c => c.code !== 0).sort((a, b) => a.position - b.position))
+  $("#rscopeCats").innerHTML = [{ code: UNCAT, name: "Uncategorized" }]
+    .concat(state.cats.filter(c => c.code !== UNCAT).sort((a, b) => a.position - b.position))
     .map(c => `<label><input type="checkbox" class="rscat" value="${c.code}">
       ${esc(c.name || "Category " + c.code)}
       <span class="muted">(${(byCat[c.code] || 0).toLocaleString()})</span></label>`).join("");

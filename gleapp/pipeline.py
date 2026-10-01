@@ -443,7 +443,7 @@ def rematch_hashes(case: Case, *, progress=None) -> int:
     ``use_stash`` meta flag is turned off (a non-CSAM case, say), and every
     Project VIC set when ``use_vic`` is - see ``hashdb.match_all``.
     """
-    from .db import NONPERTINENT_CATEGORY
+    from .db import NONPERTINENT_CATEGORY, is_uncategorized
     use_stash = case.db.get_meta("use_stash") != "0"
     use_vic = case.db.get_meta("use_vic") != "0"
     rows = list(case.db.iter_files(
@@ -474,7 +474,7 @@ def rematch_hashes(case: Case, *, progress=None) -> int:
             #  - a 'known' set asserts its own category
             #  - a 'known-good' hit (NSRL etc.) -> Non-pertinent, unless a
             #    notable source flags the file as well
-            if (r["category"] or 0) == 0:
+            if is_uncategorized(r["category"]):
                 if asserted is not None:
                     case.db.update_file(r["id"], category=asserted)
                 elif (not any(h["kind"] == "known" for h in found)

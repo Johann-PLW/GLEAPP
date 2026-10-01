@@ -610,8 +610,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     case = open_case(args.case)
     _unlock_case(case, args)
     where = args.where or {
-        "categorized": "category != 0",
-        "uncategorized": "category = 0",
+        "categorized": "category != 5",
+        "uncategorized": "category = 5",
         "flags": "id IN (SELECT file_id FROM file_flags)",
     }.get(args.scope, "")
     tag = f"_{args.scope}" if args.scope != "all" and not args.where else ""

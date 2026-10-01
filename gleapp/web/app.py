@@ -269,7 +269,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
     def row_dict(r) -> dict:
         d = dict(r)
         case = state["case"]
-        code = d.get("category") or 0
+        code = d.get("category")
         d["category_label"] = categories.label(case.db, code)
         d["category_color"] = categories.color(case.db, code)
         d["flags"] = [dict(r) for r in case.db.flags_for(d["id"])]
@@ -1515,7 +1515,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                                                    exclude={h["id"] for h in copies})
         hits = copies + similar_content
         for h in hits:
-            code = h.get("category") or 0
+            code = h.get("category")
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
         return jsonify({"file_id": file_id, "count": len(hits), "files": hits, "engine": engine,
@@ -1566,7 +1566,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case = C()
         hits = find_matching_faces(case, face_id, limit=300)
         for h in hits:
-            code = h.get("category") or 0
+            code = h.get("category")
             h["category_label"] = categories.label(case.db, code)
             h["category_color"] = categories.color(case.db, code)
         return jsonify({"face_id": face_id, "count": len(hits), "files": hits})
@@ -2308,9 +2308,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 abort(400, description="no files selected")
             return f"id IN ({','.join(map(str, ids))})", f"{len(ids)} selected"
         if scope == "categorized":
-            return "category != 0", "categorized only"
+            return "category != 5", "categorized only"
         if scope == "uncategorized":
-            return "category = 0", "uncategorized only"
+            return "category = 5", "uncategorized only"
         if scope == "flags":
             return "id IN (SELECT file_id FROM file_flags)", "flagged only"
         if scope == "specificflags":

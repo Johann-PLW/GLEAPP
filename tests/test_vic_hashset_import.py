@@ -46,7 +46,7 @@ def _records(n: int, seed: int = 1) -> list[dict]:
     for i in range(n):
         rec = {
             "MediaID": 1000 + i,
-            "Category": i % 4,                       # includes 0, Uncategorized
+            "Category": i % 4,                       # includes 0, Non-pertinent
             "MD5": f"{rnd.getrandbits(128):032X}",   # uppercase, as distributed
             "MediaSize": rnd.randrange(1, 1 << 24),
             "DateUpdated": "2025-01-02T03:04:05-05:00",
@@ -188,7 +188,7 @@ def test_a_record_is_yielded_before_the_rest_of_the_file_is_read(tmp_path, monke
 # -- the entries --------------------------------------------------------------
 
 def test_category_zero_is_kept_not_dropped(tmp_path):
-    """0 is Project VIC's Uncategorized, a recorded value. A falsy test used to
+    """0 is Project VIC's Non-pertinent, a recorded value. A falsy test used to
     let it fall through to the next field and come out as no category."""
     rec = {"MediaID": 1, "Category": 0, "MD5": "A" * 32}
     assert {c for _a, _v, c in _iter_projectvic({"value": [rec]})} == {0}
