@@ -568,6 +568,41 @@ the zip check comparing recorded CRCs rather than recomputing them. A read that 
 short is reported rather than written out, since an image swapped for a shorter one at the
 same path is never re-verified.
 
+## A walked file is copied as what its volume holds
+
+A file's recorded size and the bytes its volume stores for it part company for a sparse
+file, for a cloud provider's online-only placeholder and for a file held under two names.
+`qnxprobe.allocation(walker, node)` (1.56) says which, on NTFS and APFS, and
+`_ingest_image_walk` asks it for every file.
+
+A placeholder is a row with `archive.PLACEHOLDER_ERROR` at the front of its `error` column,
+no copy and no hash; before 1.56 it was read as zeros of the recorded size and hashed. The
+marker lives in a column other code reads, so every reader has to decide what a
+placeholder is to it: `pipeline._process_one` and `_process_videos` skip it (a forced run
+too), `nested.expand_containers` does not queue it, the error filter lists it, and the
+retry count and job leave it out (`_retryable` in `web/app.py`). A new reader of `error`
+needs the same decision. It is classified by its name alone, since it has no first bytes.
+
+Copies of walked files go through `_write_stream(..., holes=True)`, which seeks over
+all-zero 64 KiB pieces. That only saves room where the case's filesystem keeps holes.
+Windows keeps them only in a file marked sparse (`_mark_sparse`, FSCTL_SET_SPARSE). APFS
+on macOS 27.0.1 left a 16 MiB gap unallocated and wrote a 15 MiB one out in full, which is
+why `_keeps_holes` probes with a 32 MiB hole. The test of it fails on a CI runner rather
+than skip, so a broken probe on one platform is not a quiet pass.
+
+A file the volume holds under several names is written once per `(volume base, node)` and
+linked for the rest (`_link`, which falls back to a second copy where the filesystem has no
+hard links). Each name keeps its own row.
+
+Before a walked source is copied in, at ingest or by `stage_source`, the room is added up
+(`_copy_bytes`, each file once, placeholders at nothing) and `_require_room` refuses a copy
+that does not fit. For a sparse file the figure is the least the copy can take. If the
+volume fills anyway the pass stops on `ENOSPC`; it used to count every later file as one
+the reader could not read.
+
+Not exercised, for want of a sample: a placeholder that still holds part of its content,
+and an APFS file marked dataless.
+
 ## Maps are drawn from a file the examiner imports, and the page requests nothing else
 
 The gallery's only map feature used to be a link to openstreetmap.org carrying the

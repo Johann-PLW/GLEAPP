@@ -2495,10 +2495,13 @@ async function refreshContext() {
   (c.sources || []).forEach(s => {
     if (!have.has(s)) src.insertAdjacentHTML("beforeend", `<option>${esc(s)}</option>`);
   });
-  if (c.errors > 0) {
-    $("#errCount").textContent = `(${c.errors.toLocaleString()})`;
+  if (c.errors > 0) $("#errCount").textContent = `(${c.errors.toLocaleString()})`;
+  // An online-only cloud placeholder's row carries a note, not a failure: the
+  // error filter lists it, and there is nothing for a retry to do with it.
+  const retry = c.retryable ?? c.errors;
+  if (retry > 0) {
     $("#btnRetryErr").style.display = "";
-    $("#btnRetryErr").textContent = `Retry ${c.errors.toLocaleString()} failed files`;
+    $("#btnRetryErr").textContent = `Retry ${retry.toLocaleString()} failed files`;
   }
 }
 
@@ -4499,6 +4502,18 @@ function renderSourcePanel(list) {
                         + ` ${_snapBytes(v.size || 0)} past the end of the image)`).join("; ")
           + `</div>`;
       }
+      // A cloud provider's online-only placeholders: the volume names them and
+      // holds none of their content, so each is a row with no copy and no hash.
+      // Said here so an examiner does not read those rows as files that failed.
+      const held = Number(s.placeholders || 0);
+      if (held) {
+        vols += `<div class="muted" style="font-size:11px;margin-top:2px"`
+          + ` title="An online-only file of a cloud provider (OneDrive Files On-Demand,`
+          + ` for one) keeps its name, size and dates on the volume and none of its`
+          + ` content. Each is listed with no copy, no hash and no thumbnail.">`
+          + `${held.toLocaleString()} online-only cloud placeholder${held === 1 ? "" : "s"}:`
+          + ` listed, content not in the image</div>`;
+      }
     } catch (e) { vols = ""; }
     // a compressed tar cannot be read on demand, so its copies cannot be dropped
     const fixed = s.format === "tar-compressed";
@@ -4887,10 +4902,11 @@ $("#mapViewClose").onclick = closeMapView;
     refreshSimIndexInfo();
     updateArchInfo(c.archives); updateContainerCounts(c.containers);
     updateKnownHash(c.known_hash);
-    if (c.errors > 0) {
-      $("#errCount").textContent = `(${c.errors.toLocaleString()})`;
+    if (c.errors > 0) $("#errCount").textContent = `(${c.errors.toLocaleString()})`;
+    const retry = c.retryable ?? c.errors;     // placeholders are noted, not failed
+    if (retry > 0) {
       $("#btnRetryErr").style.display = "";
-      $("#btnRetryErr").textContent = `Retry ${c.errors.toLocaleString()} failed files`;
+      $("#btnRetryErr").textContent = `Retry ${retry.toLocaleString()} failed files`;
     }
     state.cats = c.categories || [];
     state.flags = c.flags || [];

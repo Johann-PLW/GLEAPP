@@ -612,6 +612,12 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         threading.Thread(target=_job, daemon=True).start()
         return jsonify({"ok": True})
 
+    # The rows a retry can do something about. A cloud provider's online-only
+    # placeholder carries a note in the same column saying its content is not in the
+    # image; processing skips it every time, so it is not a failed file to retry.
+    _retryable = ("error IS NOT NULL AND error NOT LIKE "
+                  f"'{archive.PLACEHOLDER_ERROR}%'")
+
     @app.post("/api/reprocess-errors")
     def reprocess_errors():
         if state["case"] is None:
@@ -620,7 +626,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             abort(409, description="a job is already running")
         case = state["case"]
         n = case.db.conn.execute(
-            "SELECT COUNT(*) n FROM files WHERE error IS NOT NULL").fetchone()["n"]
+            f"SELECT COUNT(*) n FROM files WHERE {_retryable}").fetchone()["n"]
         state["job"] = {"running": True, "stage": "process", "done": 0,
                         "total": n, "message": f"Retrying {n} failed files…",
                         "stats": None, "error": None}
@@ -629,12 +635,12 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             j = state["job"]
             try:
                 from ..pipeline import process
-                st = process(case, where="error IS NOT NULL", force=True,
+                st = process(case, where=_retryable, force=True,
                              screen=False, reason="retry-errors", similar=False,
                              progress=lambda d, t: j.update(done=d, total=t),
                              stage_cb=lambda m: j.update(message=m))
                 fixed = n - case.db.conn.execute(
-                    "SELECT COUNT(*) n FROM files WHERE error IS NOT NULL"
+                    f"SELECT COUNT(*) n FROM files WHERE {_retryable}"
                 ).fetchone()["n"]
                 _index_added_files(case)
                 j.update(running=False, stage="done",
@@ -1789,7 +1795,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 "clusters": [],
                 "categories": list(categories.catmap(case.db).values()),
                 "flags": list(flags.flagmap(case.db).values()),
-                "stats": {}, "vic": None, "errors": 0,
+                "stats": {}, "vic": None, "errors": 0, "retryable": 0,
                 "known_hash": {}, "screening": {},
                 "timezone": appconfig.get_timezone(), "timezone_options": [],
             })
@@ -1819,12 +1825,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             f"SUM(CASE WHEN {_media} AND skin_ratio IS NOT NULL AND skin_ratio > 0 "
             "THEN 1 ELSE 0 END) ws, "
             "COALESCE(SUM(error IS NOT NULL), 0) n_err, "
+            f"COALESCE(SUM({_retryable}), 0) n_retry, "
             f"COALESCE(SUM({_arch}), 0) arch_total, "
             f"SUM(CASE WHEN {_arch} AND id IN (SELECT container_id FROM files "
             "WHERE container_id IS NOT NULL) THEN 1 ELSE 0 END) arch_expanded "
             "FROM files").fetchone()
         scr = {"n": one["n"], "wf": one["wf"], "ws": one["ws"]}
-        n_err = one["n_err"]
+        n_err, n_retry = one["n_err"], one["n_retry"]
         arch = {"total": one["arch_total"], "expanded": one["arch_expanded"]}
         # the archive count leaves out documents and ExoPlayer cache pieces, which are
         # kept as containers too; each count below links to the filter that shows it.
@@ -1847,7 +1854,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "ON k.container_id = files.id WHERE files.kind = 'archive' LIMIT -1)").fetchone()
         a_items, d_items = cont["a_items"], cont["d_items"]
         return {
-            "srcs": srcs, "clusters": clusters, "scr": scr, "n_err": n_err, "arch": arch,
+            "srcs": srcs, "clusters": clusters, "scr": scr, "n_err": n_err,
+            "n_retry": n_retry, "arch": arch,
             "cont": dict(cont), "a_items": a_items, "d_items": d_items,
             "cst": case.db.stats(),
             "case_sets": [dict(r) for r in case.db.list_hashsets()],
@@ -1900,6 +1908,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "stats": cst,
             "vic": vic,
             "errors": n_err,
+            "retryable": counts["n_retry"],
             "archives": {"total": arch["total"] or 0,
                          "expanded": arch["expanded"] or 0},
             "containers": {"archives": cont["a_total"], "archive_items": a_items,

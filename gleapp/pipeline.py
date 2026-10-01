@@ -235,6 +235,10 @@ def _process_one(case_root, thumb_dir, row, *, force: bool, keyframes: int, scre
     pulled out for the duration of the work and dropped again.
     """
     fid = row["id"]
+    # A cloud provider's online-only placeholder has no content in the image, so
+    # there is nothing to hash or decode, on this run or a forced one.
+    if archive.is_placeholder_error(row["error"]):
+        return {"id": fid, "status": "skip", "fields": {}, "keyframes": []}
     if row["md5"] and not force and (row["thumb"] or row["kind"] == "archive"):
         return {"id": fid, "status": "skip", "fields": {}, "keyframes": []}
     if row["error"] == "file not found on disk" and not Path(row["path"]).exists():
@@ -631,7 +635,9 @@ def _process_videos(case: Case, vids, *, force, keyframes, screen, workers, writ
 
     todo = []
     for r in vids:
-        if r["md5"] and r["thumb"] and not force:
+        if archive.is_placeholder_error(r["error"]):     # no content in the image
+            write({"id": r["id"], "status": "skip", "fields": {}, "keyframes": []})
+        elif r["md5"] and r["thumb"] and not force:
             write({"id": r["id"], "status": "skip", "fields": {}, "keyframes": []})
         elif r["error"] == "file not found on disk" and not Path(r["path"]).exists():
             write({"id": r["id"], "status": "skip", "fields": {}, "keyframes": []})

@@ -1429,6 +1429,41 @@ The deleted-record pass runs first, so a deleted file comes back with its name
 rather than as a nameless carved twin, and the offsets it recovered are handed
 to the carver to skip.
 
+### Files a volume does not hold in full
+
+A walked file's recorded size is not always what the volume stores for it. On
+NTFS and APFS the reader can tell, and GLEAPP registers and copies what the
+volume holds:
+
+- **An online-only cloud placeholder** (OneDrive Files On-Demand, for one)
+  keeps the file's name, size and dates on the volume and none of its content,
+  which is with the provider. It is listed with **no copy, no hash and no
+  thumbnail**, and its row says *online-only cloud placeholder* with the size
+  the volume records and the bytes it stores. The Sources panel counts them,
+  the error filter lists them, and **Retry failed files** leaves them out,
+  since there is nothing to retry. The row shows that a file of that name,
+  size and dates was in that folder. Its content was never in the image.
+- **A sparse file** reads at its recorded length, with zeros where the volume
+  stores nothing. When media is copied into the case, runs of zeros are
+  written as holes, so the copy can take less room than its length. How much
+  less depends on the filesystem the case is on, and the bytes are the same
+  either way.
+- **A file the volume holds under several names** (hard links) is one file.
+  It is copied into the case once and the other names are linked to that copy.
+  Each name keeps its own row.
+- **A file Windows compressed** with NTFS compression, or with the XPRESS
+  compression of the Windows overlay filter, is read as its content. One
+  compressed with the overlay's LZX is not decoded. It is reported as not read
+  rather than written out as zeros.
+- **Copying is checked for room first.** Before media is copied in from a disk
+  image, at ingest or later with **Copy into case**, the room the copies need
+  is added up and compared with the free space on the case's volume. A copy
+  that does not fit is refused before anything is written. If the volume fills
+  anyway, the copy stops and says so.
+
+Not tested, because no sample was available: a placeholder that still holds
+part of its content, and an APFS file marked dataless.
+
 ### Recovering from deleted records
 
 For NTFS, FAT32, exFAT, YAFFS2, JFFS2 and UBIFS: a deleted file whose record
