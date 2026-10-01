@@ -27,7 +27,9 @@ the difference matters to whoever reads the output:
 
     header    the file's own header or box structure gave the length
     parsed    the length came from walking the file's internal structure
-    capped    neither was available, the length is a ceiling and not a fact
+    capped    the extent was cut at a limit (the ceiling for its kind, the end
+              of the stream, or the end of a clipped range), so the length is
+              a ceiling and not a fact
 
 **What this does not do.** It finds files that are contiguous. A fragmented file
 recovers only as far as its first fragment. It reads no filesystem, so it has no
@@ -46,7 +48,7 @@ import sys
 import zipfile
 from typing import NamedTuple
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # How much to read at a time while scanning, and how much to carry over so a
 # signature straddling two blocks is still found.
@@ -55,6 +57,8 @@ _OVERLAP = 32
 
 # Ceilings per kind, so a false header cannot claim the rest of the image. These
 # are generous on purpose: a capped hit is reported as capped, not as a length.
+# RIFF and ISO-BMFF each hold more than one kind, so their ceiling is chosen once
+# the form or brand has said which kind the file is (see _cap).
 DEFAULT_CAPS = {
     "jpeg": 64 << 20,
     "png": 64 << 20,
@@ -260,7 +264,12 @@ def _gif_length(stream, offset, cap):
     return None
 
 
-def _riff_length(stream, offset, cap):
+def _cap(caps, kind):
+    """The ceiling for a kind, never above the absolute one."""
+    return min(caps.get(kind, DEFAULT_CAPS.get(kind, 1 << 20)), _ABSOLUTE_CAP)
+
+
+def _riff_length(stream, offset, caps):
     """RIFF records its own size, so the extent is exact."""
     head = _read_at(stream, offset, 12)
     if len(head) < 12:
@@ -274,12 +283,12 @@ def _riff_length(stream, offset, cap):
     else:
         return None
     total = size + 8
-    if total < 16 or total > cap:
+    if total < 16 or total > _cap(caps, kind):
         return None
     return total, "header", kind
 
 
-def _bmff_length(stream, offset, cap):
+def _bmff_length(stream, offset, caps):
     """Sum ISO-BMFF top-level boxes. The brand decides stills from video.
 
     The ftyp box is validated before anything is summed. A bare "ftyp" is only
@@ -287,6 +296,10 @@ def _bmff_length(stream, offset, cap):
     drive, "hreftyp" in a web resource read as a 6.8 MB file and "er Iftyp" as a
     1.7 GB one, because the preceding four text bytes parse as a box size. A
     real ftyp box is small, and a real file has at least one box after it.
+
+    A box size is taken as written, so the sum can pass the ceiling: one box with
+    a 64-bit size can declare more than any disk holds. The extent then ends at
+    the ceiling and is reported as capped.
     """
     head = _read_at(stream, offset, 12)
     if len(head) < 12:
@@ -298,8 +311,9 @@ def _bmff_length(stream, offset, cap):
     if not all(0x20 <= b < 0x7F for b in brand):
         return None
     kind = "heic" if brand in _HEIC_BRANDS else "mp4"
+    cap = _cap(caps, kind)
     pos = offset
-    end = offset + min(cap, _ABSOLUTE_CAP)
+    end = offset + cap
     seen_ftyp = False
     boxes = known = 0
     while pos < end:
@@ -331,6 +345,8 @@ def _bmff_length(stream, offset, cap):
     if boxes < 2 or known < 2 or length < 16:
         return None                              # ftyp alone, or ftyp plus
                                                  # only boxes it cannot vouch for
+    if length > cap:
+        return cap, "capped", kind
     return length, "header", kind
 
 
@@ -338,17 +354,16 @@ def _bmff_length(stream, offset, cap):
 
 def _measure(stream, offset, kind, caps):
     """Return a Candidate for a header at ``offset``, or None if it is not one."""
-    cap = min(caps.get(kind, DEFAULT_CAPS.get(kind, 1 << 20)), _ABSOLUTE_CAP)
     if kind == "jpeg":
-        got = _jpeg_length(stream, offset, cap)
+        got = _jpeg_length(stream, offset, _cap(caps, kind))
     elif kind == "png":
-        got = _png_length(stream, offset, cap)
+        got = _png_length(stream, offset, _cap(caps, kind))
     elif kind == "gif":
-        got = _gif_length(stream, offset, cap)
+        got = _gif_length(stream, offset, _cap(caps, kind))
     elif kind == "riff":
-        got = _riff_length(stream, offset, cap)
+        got = _riff_length(stream, offset, caps)
     elif kind == "bmff":
-        got = _bmff_length(stream, offset, cap)
+        got = _bmff_length(stream, offset, caps)
     else:
         return None
     if got is None:
@@ -363,7 +378,7 @@ def _measure(stream, offset, kind, caps):
 
 
 def carve(stream, *, kinds=None, caps=None, start=0, end=None,
-          nested=False, progress=None):
+          nested=False, clip=False, progress=None):
     """Scan ``stream`` and yield a Candidate for every media file found.
 
     ``kinds`` limits the search, for example ``{"jpeg", "png"}``. ``caps`` maps a
@@ -371,12 +386,22 @@ def carve(stream, *, kinds=None, caps=None, start=0, end=None,
     another file, such as an EXIF thumbnail, which are suppressed by default.
     ``progress`` is called as ``progress(position, end)`` while scanning.
 
+    ``start`` and ``end`` say where to look for headers. A file that starts inside
+    that range ends where its own structure says, which can be past ``end``, so
+    scanning a stream as several ranges can report hits that overlap. Set ``clip``
+    when the bytes past ``end`` are not the file's to claim (the range is a run of
+    free space, say): a hit is then cut at ``end`` and reported as capped. With or
+    without it, no hit runs past the end of the stream; one whose header records
+    more than the stream holds is cut there and reported as capped.
+
     The stream is left where the scan finished. Nothing is written to it.
     """
     caps = dict(DEFAULT_CAPS, **(caps or {}))
-    if end is None:
-        stream.seek(0, os.SEEK_END)
-        end = stream.tell()
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    if end is None or end > size:
+        end = size
+    limit = end if clip else size
     pos = start
     covered_to = start
     while pos < end:
@@ -404,6 +429,10 @@ def carve(stream, *, kinds=None, caps=None, start=0, end=None,
             hit = _measure(stream, at, kind, caps)
             if hit is None:
                 continue
+            if hit.end > limit:
+                hit = hit._replace(length=limit - hit.offset, bounded="capped")
+                if hit.length < MIN_LENGTHS.get(hit.kind, 1):
+                    continue
             if kinds and hit.kind not in kinds:
                 continue
             if not nested:

@@ -1473,6 +1473,9 @@ recovering files no surviving record names.
 - Each kind has a size ceiling so a false header cannot claim the rest of the
   disk (64 MB for the stills, 32 MB for GIF, 4 GB for video) and a floor so a
   header with nothing behind it is not reported as a file.
+- A carved file never runs past its ceiling, the end of the image or, in a
+  scoped carve, the end of the free run it was found in. One cut at any of those
+  is the start of a file and not the whole of it.
 
 ### What you can and cannot say about a carved file
 
