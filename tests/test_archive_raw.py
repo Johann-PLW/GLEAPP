@@ -13,6 +13,7 @@ import gzip
 import hashlib
 import io
 import shutil
+import struct
 import sys
 import tarfile
 from pathlib import Path
@@ -280,6 +281,47 @@ def test_a_raw_image_is_carved_for_media_no_file_claims(tmp_path):
     finally:
         archive.close_zips()
         case.close()
+
+
+def _box(kind: bytes, payload: bytes = b"") -> bytes:
+    return struct.pack(">I", 8 + len(payload)) + kind + payload
+
+
+_FTYP = _box(b"ftyp", b"mp42\x00\x00\x00\x00mp42isom")
+
+
+def test_a_scoped_carve_stages_no_more_than_the_free_runs_hold(tmp_path, monkeypatch):
+    """A carved video's length comes from its own box sizes, which are whatever the
+    bytes say. In a scoped carve each free run is scanned on its own, so a hit that
+    ran past its run overlapped the hits of the runs after it, and one box that
+    declared more than the disk holds was staged from its offset to the end of the
+    image. Enough of those and the staged copies outgrow the disk they came from.
+
+    Two free runs here. The first holds a header whose mdat declares 150 GiB; the
+    second a whole small clip. Each staged copy must fit inside its own run.
+    """
+    run = 64 * 1024
+    vol = bytearray(_volume())
+    first_at, second_at = len(vol) - (2 << 20), len(vol) - (1 << 20)
+    runaway = (_FTYP + _box(b"moov", b"m" * 200)
+               + struct.pack(">I", 1) + b"mdat" + struct.pack(">Q", 150 << 30))
+    clip = _FTYP + _box(b"moov", b"m" * 200) + _box(b"mdat", b"d" * 3000)
+    vol[first_at:first_at + len(runaway)] = runaway
+    vol[second_at:second_at + len(clip)] = clip
+    image = _raw(tmp_path / "ev", "acq.img", bytes(vol))
+    case, name, _ = _ingest(tmp_path, image, stage=True)
+    monkeypatch.setattr(archive, "_unclaimed_space",
+                        lambda *a, **k: [(first_at, run), (second_at, run)])
+    try:
+        archive.carve_source(case, name, unallocated_only=True)
+        carved = sorted((int(r["member_offset"]), int(r["size"]), Path(r["path"]).stat().st_size)
+                        for r in case.db.iter_files() if r["origin"] == "carve")
+    finally:
+        archive.close_zips()
+        case.close()
+    assert carved == [(first_at, run, run), (second_at, len(clip), len(clip))], carved
+    assert sum(staged for _at, _size, staged in carved) <= 2 * run
+
 
 
 @pytest.mark.parametrize("stem", ["fat32-deleted", "exfat-deleted"])

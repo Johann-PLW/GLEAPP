@@ -1882,9 +1882,18 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
                              f"space no volume claims, {scanned:,} bytes")
         # A scoped carve can be the whole image (one with no volume the reader can
         # name), so it reports progress the way an unscoped one does.
+        # A scoped carve cuts each hit at the end of its run (clip). The bytes
+        # after a free run belong to a live file or to another volume, and the
+        # runs are scanned one by one, so a hit left to run on would overlap the
+        # hits of every run after it: a carved video's length is whatever its box
+        # sizes say, and one box can declare more than the disk holds. Staged, such
+        # hits are each copied to the end of the image, and the copies outgrow
+        # the disk they came from. A cut hit is the start of a file and not the
+        # whole of it, as a hit cut by fragmentation is.
         hits = (mediacarve.carve(img, progress=scan_progress) if spans is None
                 else itertools.chain.from_iterable(
-                    mediacarve.carve(img, start=at, end=at + n, progress=scan_progress)
+                    mediacarve.carve(img, start=at, end=at + n, clip=True,
+                                     progress=scan_progress)
                     for at, n in spans))
         for hit in hits:
             if max_bytes and hit.length > max_bytes:
