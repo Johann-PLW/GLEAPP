@@ -163,6 +163,60 @@ def test_the_sidebar_counts_agree_with_the_filters_on_awkward_rows(tmp_path):
     assert total("in_document=1") == 4
 
 
+def _index_names(conn) -> set:
+    return {r[1] for r in conn.execute("PRAGMA index_list(files)")}
+
+
+def test_what_was_extracted_is_counted_from_the_index(tmp_path):
+    """The sidebar counts the rows extracted from each container by kind. With only
+    ``container_id`` indexed that read every extracted row; the index carries
+    ``kind`` so the count never touches them. The plan is asked of the statement the
+    context really runs, so a change to either that loses it shows here."""
+    from gleapp.web.app import create_app           # pylint: disable=import-outside-toplevel
+    case, _ids = _case(tmp_path, 160)
+    case.close()
+    app = create_app(None)
+    client = app.test_client()
+    client.post("/api/case/open", json={"path": str(tmp_path / "case")})
+    conn = app.config["STATE"]["case"].db.conn
+    assert "idx_files_container_kind" in _index_names(conn)
+    assert "idx_files_container" not in _index_names(conn)
+
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        client.get("/api/context")
+    finally:
+        conn.set_trace_callback(None)
+    counting = [s for s in seen if "GROUP BY container_id" in s]
+    assert len(counting) == 1, "the context counts extracted rows in one statement"
+    plan = [r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + counting[0])]
+    # found by container_id and answered without the rows: an index led by kind
+    # would also be "covering", and every lookup by container would scan it
+    assert any("USING COVERING INDEX idx_files_container_kind (container_id>" in step
+               for step in plan), plan
+
+
+def test_a_case_made_with_the_older_index_is_given_the_new_one(tmp_path):
+    from gleapp.web.app import create_app           # pylint: disable=import-outside-toplevel
+    case, ids = _case(tmp_path, 160)
+    case.close()
+    # as a build before the change left it
+    old = sqlite3.connect(tmp_path / "case" / "case.gleapp")
+    old.execute("DROP INDEX idx_files_container_kind")
+    old.execute("CREATE INDEX idx_files_container ON files(container_id)")
+    old.commit()
+    old.close()
+
+    app = create_app(None)
+    client = app.test_client()
+    client.post("/api/case/open", json={"path": str(tmp_path / "case")})
+    conn = app.config["STATE"]["case"].db.conn
+    assert "idx_files_container_kind" in _index_names(conn)
+    assert "idx_files_container" not in _index_names(conn)
+    assert containerrows.read_all(client, ids) == containerrows.expected(ids)
+
+
 def test_the_fixtures_own_labels_agree_with_the_cache_rule():
     # the labels in containerrows.TEMPLATES are written by hand; this says the rule
     # the app applies (exoprobe's) gives the same answer for each name
