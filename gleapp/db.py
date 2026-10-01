@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -357,13 +358,37 @@ def exo_cache_flag(orig_path: Any, rel_path: Any, path: Any) -> int:
 _EXO_NAME_COLUMNS = frozenset(("orig_path", "rel_path", "path"))
 
 
+# How the one connection every thread shares is opened.
+#
+# Reads do not take ``CaseDB.lock``, and the sqlite3 module keeps a cache of
+# prepared statements per connection, keyed on the statement text. From Python
+# 3.12 a cached statement counts as in use only once SQLite has stepped it
+# (``sqlite3_stmt_busy``), and ``execute()`` releases the interpreter lock between
+# that check and the step. Two threads running the same text can therefore both
+# be handed the same prepared statement: the second binds its own parameter and
+# steps it, and one of them gets the other's row, no row, or an error. With
+# ``cached_statements=0`` every ``execute()`` prepares a statement of its own.
+#
+# Python 3.10 is left on the module's default. It marks a statement in use
+# itself, before releasing the interpreter lock, so it does not have the defect;
+# and its own cache holds at least five statements whatever is asked for, and
+# broke under threads at that size (measured: every later read of one statement
+# raised KeyError). 3.11 has neither problem and takes the setting 3.12 needs.
+# The measurements and the CPython lines are in "The case connection keeps no
+# statement cache" in .claude/rules/gleapp-cross-platform.md. Do not turn the
+# cache back on while threads share the connection.
+_SHARED_CONNECTION: dict[str, Any] = (
+    {"cached_statements": 0} if sys.version_info >= (3, 11) else {})
+
+
 class CaseDB:
     def __init__(self, path: str | Path):
         self.path = str(path)
         # check_same_thread=False: the CLI pipeline (writer thread) and the Flask
         # dev server (per-request threads) share one connection.  All writes go
         # through ``self.lock``; SQLite's own mutex covers the rest.
-        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.conn = sqlite3.connect(self.path, check_same_thread=False,
+                                    **_SHARED_CONNECTION)
         self.conn.row_factory = sqlite3.Row
         # No Python function, collation or aggregate is ever registered on this
         # connection. A query that calls one holds SQLite's connection mutex and

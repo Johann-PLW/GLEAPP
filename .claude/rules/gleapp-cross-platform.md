@@ -739,3 +739,74 @@ source or test run on a pthreads OpenBLAS, such as PyPI's numpy 1.26.4. numpy 2.
 wheel also bundles OpenBLAS and was not checked, nor was the Intel release build. If the
 release ever takes a pthreads OpenBLAS, the app inherits the deadlock; `openblas_get_config()`
 on the bundled library says which it has.
+
+## The case connection keeps no statement cache
+
+Every thread shares a case's one connection, writes take `CaseDB.lock`, and reads do
+not. The sqlite3 module keeps a cache of prepared statements per connection, keyed on
+the statement text, and from Python 3.12 two threads that run the same text can be
+handed the same prepared statement. One of them then gets the other's row, no row, or an
+error. A gallery page sends several requests with the same SQL at once
+(`SELECT * FROM files WHERE id=?`), so one file's record could answer for another.
+
+Measured 2026-10-01 on macOS arm64, first with plain `sqlite3` and no GLEAPP code: two
+threads each running `SELECT a FROM t WHERE rowid = ?` 3,000 times on one connection.
+Python 3.10.20 (SQLite 3.53.4) answered all 6,000 correctly. Python 3.12.1 (SQLite
+3.43.1) and 3.14.6 (SQLite 3.50.4) each got between 262 and 359 of 6,000 wrong on three
+runs with nothing else using the connection, and between 563 and 771 on two runs with a
+third thread running a long query on it. With `cached_statements=0` both answered all 6,000. In
+GLEAPP, at 314d093, `tests/test_shared_connection_reads.py` asks for rows from four
+threads while a fifth runs a long query: of 1,600 `CaseDB.get_file` calls 276 to 388 were
+wrong on 3.12 and 3.14 (another row, None, or an exception), and of 600 `/api/file/<id>`
+requests 60 to 85 were (another file's record, a 404, or a 500), three runs each; 3.10
+passed.
+
+The cause, read from CPython's `Modules/_sqlite`. Until 3.11 a statement object carried
+its own `in_use` flag, and `execute()` set it before it released the interpreter lock, so
+a second cursor asking for the same text got a statement of its own
+(https://github.com/python/cpython/blob/842e987df856a5d4db37933c62a3456930a19092/Modules/_sqlite/cursor.c#L519-L528,
+3.10.20). Commit f5c85aa3eea1adf0c61089583e2251282a316ec1 (gh-88239, in 3.12) removed the
+flag and asks SQLite instead
+(https://github.com/python/cpython/blob/2305ca51448552542b2414186252123a8dc87db7/Modules/_sqlite/cursor.c#L856,
+3.12.1; line 856 at 3.14.6 as well). `sqlite3_stmt_busy` is true only once a statement
+has been stepped (https://www.sqlite.org/c3ref/stmt_busy.html), and between that check
+and the step `execute()` releases the interpreter lock three times: to reset the
+statement (lines 134 to 136), to count its parameters (641 to 643) and to step it (518
+to 520). A second thread that asks in that window passes the same check on the same
+statement. Whether Python 3.13 behaves the same was read (its `cursor.c` has the same
+check) and not run; no interpreter for it was at hand.
+
+`db._SHARED_CONNECTION` therefore opens the connection with `cached_statements=0` on
+Python 3.11 and later: the cache is `functools.lru_cache` there, and with a size of 0
+every `execute()` prepares a statement of its own. Python 3.10 keeps the module's
+default. It does not have the defect, and its own cache
+(https://github.com/python/cpython/blob/842e987df856a5d4db37933c62a3456930a19092/Modules/_sqlite/cache.c#L87)
+holds at least five statements whatever is asked for and releases the interpreter lock
+while it prepares one on a miss: with `cached_statements=0` on 3.10, 12 of 112 runs of
+these readers ended with every later `get_file` raising
+`KeyError: ('SELECT * FROM files WHERE id=?',)`. With the default, 31 runs of 31 were
+clean. The same miss path exists at the default size of 100 and was not seen to fail
+there. Python 3.11 was not run here either; it has both the `in_use` flag and the
+`lru_cache`, and CI runs the test on it.
+
+What it costs, on a synthetic case of 150,000 rows, Python 3.12.1: `get_file` went from
+13.2 to 29.3 microseconds, `/api/file/<id>` from a median of 0.147 ms to 0.181 ms,
+`upsert_file` from 67 to 77 microseconds a row and `update_file` from 7.3 to 9.2;
+`/api/files` pages and `/api/context` did not move (56 ms and 625 ms medians either way).
+
+The two other ways were measured on the same case and not taken. A lock around every
+statement and its fetch would mean changing every read in `web/app.py`, and it is slower
+for readers than what there is: beside a thread repeating a 22 ms count, `get_file` took
+a median of 423 ms with the lock against 40 ms without. A read connection per thread was
+the fastest (0.04 ms, since WAL readers do not wait for the connection's mutex), but a
+reader would not see a job's rows until its next commit (jobs commit every 25 to 500
+files; on the shared connection a reader sees them at once), the list view's count cache is keyed on
+`conn.total_changes`, and the hash set imports stage rows in TEMP tables, which belong
+to one connection. It may still be worth doing for the waiting alone; it is a larger
+change than this defect needed.
+
+The hash store and the stash also share a connection between threads
+(`hashstore.connect`, `stash.connect`). Every statement on those runs and is fetched
+inside the module's lock, or on a read-only connection of its own (`_ro_query`), so they
+were left as they are. A new shared connection that reads outside a lock needs the same
+setting.
