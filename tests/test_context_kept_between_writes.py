@@ -11,13 +11,15 @@ rows, and no write is ever followed by an old answer.
 
 from __future__ import annotations
 
+import io
 import shutil
+import zipfile
 
 import pytest
 from PIL import Image
 
-from gleapp import relink
-from gleapp.case import Source, open_case
+from gleapp import archive, relink
+from gleapp.case import Source, open_case, parse_source_spec
 from gleapp.db import CaseDB
 from gleapp.pipeline import ingest_sources
 
@@ -182,3 +184,45 @@ def test_folder_status_reads_the_rows_once_and_looks_on_disk_every_time(tmp_path
     case.db.upsert_file(str(moved / "late.png"), rel_path="late.png", source="ev",
                         kind="image", ext=".png", size=1)
     assert relink.folder_status(case)[0]["files"] == 5
+
+
+def _png_bytes(color) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_archive_source_counts_are_read_once_and_the_archive_is_looked_for_every_time(tmp_path):
+    from gleapp.web.app import create_app           # pylint: disable=import-outside-toplevel
+    zpath = tmp_path / "extraction.zip"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        for i in range(3):
+            zf.writestr(f"Dump/data/media/0/DCIM/p{i}.png", _png_bytes((i * 70, 20, 90)))
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    sources, _meta = parse_source_spec(str(zpath))
+    ingest_sources(case, sources)
+    name = sources[0].name
+    case.close()
+    app = create_app(None)
+    client = app.test_client()
+    assert client.post("/api/case/open", json={"path": str(tmp_path / "case")}).status_code == 200
+    case = app.config["STATE"]["case"]
+
+    def entry():
+        got = client.get("/api/context").get_json()["archive_sources"]
+        assert [s["name"] for s in got] == [name]
+        return got[0]
+
+    assert (entry()["files"], entry()["status"]) == (3, "ok")
+    assert _reads_files(_statements(case, entry)) == []
+    assert _reads_files(_statements(case, lambda: archive.source_status(case))) == []
+
+    # one more row of the source, as a carve adds them: counted at once
+    case.db.upsert_file(str(tmp_path / "case" / "staged" / "late.png"), rel_path="carved/late.png",
+                        source=name, kind="image", ext=".png", size=1, origin="carve")
+    after = entry()
+    assert (after["files"], after["carved"]) == (4, 1)
+
+    # the archive moves and nothing is written to the case: the next answer says so
+    shutil.move(str(zpath), str(tmp_path / "elsewhere.zip"))
+    assert entry()["status"] == "missing"

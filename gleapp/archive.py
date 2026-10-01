@@ -636,6 +636,13 @@ def source_records(case) -> dict[str, dict]:
     return {n: source_record(case, n) for n in names}
 
 
+def _origin_counts(case) -> dict[str, dict[str, int]]:
+    """For each archive source, how many rows it has of each ``origin``."""
+    return {name: {r["origin"] or "": r["n"] for r in case.db.conn.execute(
+        "SELECT origin, COUNT(*) n FROM files WHERE source=? GROUP BY origin", (name,))}
+        for name in source_records(case)}
+
+
 def source_status(case) -> list[dict]:
     """One entry per archive source: the record, how many files it registered
     (``files``, split into ``walked`` and ``carved``), and ``status``: ``ok``,
@@ -645,7 +652,13 @@ def source_status(case) -> list[dict]:
     BitLocker volumes that no key given this session opens, which ``unlock_bitlocker``
     takes, or one holding encrypted APFS volumes the walk read decrypted and nothing
     given this session opens, which ``unlock_apfs`` takes). ``locked_by`` says which:
-    ``password``, ``private key``, ``BitLocker`` or ``APFS``."""
+    ``password``, ``private key``, ``BitLocker`` or ``APFS``.
+
+    The gallery asks for this with every context. The counts come from the case's
+    rows and are kept until one is written (``CaseDB.derived``): on a case of
+    149,824 rows from one archive they were a 59 ms pass each time. Whether the
+    source is where the case recorded it is looked at on every call."""
+    counts = case.db.derived("archive.origin_counts", lambda: _origin_counts(case))
     out = []
     for name, rec in sorted(source_records(case).items()):
         locked_by = ""
@@ -679,9 +692,7 @@ def source_status(case) -> list[dict]:
         # unclaimed space are each a separate thing to ask for, so one source can
         # hold all three kinds of row and usually holds only walked ones. The
         # values _register writes are db.ORIGINS.
-        by_origin = {r["origin"] or "": r["n"] for r in case.db.conn.execute(
-            "SELECT origin, COUNT(*) n FROM files WHERE source=? GROUP BY origin",
-            (name,))}
+        by_origin = counts.get(name, {})
         out.append({**rec, "status": status, "locked_by": locked_by if status == "locked"
                     else "", "files": sum(by_origin.values()),
                     "walked": by_origin.get("walk", 0),

@@ -853,6 +853,27 @@ anything read from disk, from the settings folder or from a job's state belongs 
 it. `tests/test_context_kept_between_writes.py` holds both halves, that a repeat reads
 no rows and that no write is followed by an old answer.
 
-A read connection per thread was not built. It would remove the tail above for reads,
-and it changes what a reader sees (see the section before this one). Measure again on a
-real large case before deciding; these numbers are from a synthetic one.
+The same probe on a copy of a real case's database, 149,824 rows from one archive
+source, 119,604 of them containers (d36da6f, Python 3.12.1, macOS arm64):
+
+| while | shared, median / p95 / max | own connection, p95 |
+|---|---|---|
+| nothing else running | 0.09 / 0.4 / 1 ms | 0.3 ms |
+| a job adding 1,200 pictures, ingest stage | 0.08 / 0.3 / 531 ms | 0.2 ms |
+| the same job, processing stage | 0.1 / 7 / 254 ms | 1.3 ms |
+| a write then `/api/context`, back to back | 54 / 316 / 580 ms | 0.2 ms |
+| `/api/files` pages back to back | 43 / 51 / 138 ms | 0.2 ms |
+
+A context worked out there took 582 to 609 ms, and its slow statements are the
+container counts (190, 130, 76 and 50 ms), not the folder check: an archive source has
+no folder to find. A repeated context still took 61 ms, because `archive.source_status`
+counted the source's rows by origin on every call (59 ms). Those counts are kept by
+`derived` as well now (`archive._origin_counts`), and a repeat takes 1.5 to 2.3 ms and
+reads no row of `files`. Whether the archive is where the case recorded it is still
+looked at every time.
+
+A read connection per thread was not built, and these numbers are why. A job did not
+make readers wait on the real case. What they wait for is a context being worked out
+and a page of the list being read, each as long as its longest statement. A read
+connection would remove that and change what a reader sees (see the section before this
+one); making those statements cheaper removes it without that.
