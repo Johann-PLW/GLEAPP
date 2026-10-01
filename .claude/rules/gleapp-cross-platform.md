@@ -872,6 +872,27 @@ counted the source's rows by origin on every call (59 ms). Those counts are kept
 reads no row of `files`. Whether the archive is where the case recorded it is still
 looked at every time.
 
+The container counts themselves were then made one statement instead of three
+(`_context_counts`). The three each decided what kind of container a row is again,
+the document rule three times in the first alone, and two of them built the set of
+every archive or document container to find what was pulled from one. The one
+statement decides it once per container in an inner SELECT and counts what was
+extracted once per container. `LIMIT -1` on the inner SELECT is what keeps SQLite from
+folding it into the sums and deciding again for each: without it the same statement
+took 283 ms against 103 ms (SQLite 3.43.1 and 3.50.4; 170 against 81 ms on 3.53.4), with
+the same answers. On the copy of the real case the three statements took 327 ms and the
+one 111 ms, and a context worked out after a write went from 582 to 609 ms down to 355
+to 382 ms. The five numbers were the same on that case, on a Project VIC case, and on
+fixtures with extracted rows of every kind, on all three SQLite versions.
+`test_the_sidebar_counts_agree_with_the_filters_on_awkward_rows` writes the numbers out
+and holds the statement and the filters, which were not changed, to them.
+
+One regime got a longer single statement. A fixture with 60,003 containers and 308,575
+extracted rows took 772 ms in three statements, the longest 427 ms, and takes 615 ms in
+the one. 399 ms of that is counting the extracted rows per container, which reads each
+row for its `kind`; an index on `(container_id, kind)` would answer it without the rows.
+It was not added: no real case measured here has that many extracted rows.
+
 A read connection per thread was not built, and these numbers are why. A job did not
 make readers wait on the real case. What they wait for is a context being worked out
 and a page of the list being read, each as long as its longest statement. A read
