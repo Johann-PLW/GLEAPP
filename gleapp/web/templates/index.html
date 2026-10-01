@@ -576,7 +576,7 @@
       <label class="flabel">Flag
         <select id="fflag"><option value="any">Any</option></select></label>
       <label class="flabel">Type
-        <select id="fkind"><option value="">All</option><option>image</option><option>video</option><option>other</option><option value="archive">archive (container)</option></select></label>
+        <select id="fkind"><option value="">All</option><option>image</option><option>video</option><option>other</option><optgroup label="Containers (not pictures themselves)"><option value="archive:archive">Archives (zip, 7z, tar, gz)</option><option value="archive:document">Documents (PDF, web pages)</option><option value="archive:cache">App cache pieces (ExoPlayer)</option></optgroup></select></label>
       <label class="flabel">Source
         <select id="fsrc"><option value="">All</option></select></label>
       <div id="srcInfo" class="fnote"></div>
@@ -669,10 +669,16 @@
     </details>
 
     <details class="fsec" data-sec="arch" hidden>
-      <summary>Archives <span class="fdot"></span></summary>
+      <summary>Archives and documents <span class="fdot"></span></summary>
       <div class="fbody">
-        <label class="fck" title="Files pulled out of a .zip / .7z / .tar / .gz found in a source. The Type filter's 'archive (container)' shows the archive files themselves."><input type="checkbox" id="finarch"> Extracted from an archive</label>
+        <div class="fnote"><b>Archives</b></div>
         <div id="archInfo" class="fnote"></div>
+        <label class="fck" title="Only the pictures and videos that came out of a zip, 7z, tar or gz. Type: Archives shows the archive files themselves."><input type="checkbox" id="finarch"> Only files pulled from an archive</label>
+        <div class="fnote" style="margin-top:10px"><b>Documents</b></div>
+        <div id="docsCounts" class="fnote"></div>
+        <div class="fnote"><button class="btn sm" id="btnDocs" title="Looks through the sources for PDFs, web pages (HTML, MHTML) and Safari web archives, and adds the pictures and videos inside them. Documents already opened are skipped.">Extract media from documents</button></div>
+        <div id="docsInfo" class="fnote"></div>
+        <label class="fck" title="Only the pictures and videos that came out of a PDF, web page or web archive. Type: Documents shows the documents themselves."><input type="checkbox" id="findoc"> Only files pulled from a document</label>
       </div>
     </details>
     </div>
@@ -815,8 +821,9 @@
     <label style="margin-top:10px"><input type="checkbox" id="optScreen" checked> Face / skin tone pre-processing</label>
     <label title="Match this case's files against your hash stash (category 1-3 hashes from past cases). Turn off for a case that isn't CSAM / Project VIC related, so an old stashed hit can't re-flag unrelated media. Changeable later from the Known hashes section."><input type="checkbox" id="optStash" checked> Enable hash stash matching</label>
     <label title="Off, an extraction archive or acquisition is read in place and the case stays small; the file must stay where it is. On, the media is copied out so the case stands alone. A compressed tar is always copied out."><input type="checkbox" id="optStage"> Copy media out of extraction archives into the case</label>
-    <label title="Open each .zip / .7z / .tar / .gz found inside a source and register the images and videos in it. Slow on a full file-system extraction that holds many compressed files. Off, the archives are still listed (Type: archive (container)) and you can open them later with Expand archives in the sidebar."><input type="checkbox" id="optExpand"> Expand archives found inside the sources</label>
+    <label title="Open each .zip / .7z / .tar / .gz found inside a source and register the images and videos in it. Slow on a full file-system extraction that holds many compressed files. Off, the archives are still listed (Type: Archives) and you can open them later with Expand archives in the sidebar."><input type="checkbox" id="optExpand"> Expand archives found inside the sources</label>
     <div class="muted" id="optExpandWarn" style="display:none;font-size:11px;margin:-2px 0 6px 22px;color:var(--warn)">&#9888; Expanding archives will add time to processing.</div>
+    <label title="Open each PDF, HTML page, MHTML (.mht) and Safari web archive found in the sources and register the images and videos inside it. A JPEG or JPEG 2000 in a PDF, and anything embedded in a web page, comes out byte for byte; any other PDF image is rebuilt from its pixels as a PNG (named _rebuilt), so its hashes are not an original file's. Images under 32 pixels on a side are left out. Off, these documents are not kept in the case."><input type="checkbox" id="optDocs"> Extract media from documents (PDF, HTML, MHTML, web archive)</label>
     <label title="Disk images only (E01 or raw). After walking the filesystems, recover deleted media: first from deleted records (NTFS MFT, FAT32 and exFAT directory entries, and the nodes YAFFS2, JFFS2 and UBIFS leave on flash), which brings a deleted file back with its real name and reaches resident NTFS files a carve cannot, then by carving the space no volume claims for signatures (a carved file has no name, path or date of its own). Carving reads the whole free area, so it adds time. You can also run this later from the Source panel."><input type="checkbox" id="optCarve"> Recover media (filesystem records and carving)</label>
     <label>Video preview key frames: <span id="kfv">6</span>
       <input type="range" id="optKf" min="2" max="16" step="1" value="6" style="width:100%"></label>
@@ -983,8 +990,9 @@
   <div class="srclist" id="aeList"></div>
   <label><input type="checkbox" id="aeScreen" checked> Face / skin tone pre-processing</label>
   <label title="Off, an extraction archive or acquisition is read in place; on, the media is copied out so the case stands alone. A compressed tar is always copied out."><input type="checkbox" id="aeStage"> Copy media out of extraction archives into the case</label>
-  <label title="Open each .zip / .7z / .tar / .gz found inside a source and register the images and videos in it. Slow on a full file-system extraction that holds many compressed files. Off, the archives are still listed (Type: archive (container)) and you can open them later with Expand archives in the sidebar."><input type="checkbox" id="aeExpand"> Expand archives found inside the sources</label>
+  <label title="Open each .zip / .7z / .tar / .gz found inside a source and register the images and videos in it. Slow on a full file-system extraction that holds many compressed files. Off, the archives are still listed (Type: Archives) and you can open them later with Expand archives in the sidebar."><input type="checkbox" id="aeExpand"> Expand archives found inside the sources</label>
   <div class="muted" id="aeExpandWarn" style="display:none;font-size:11px;margin:-2px 0 6px 22px;color:var(--warn)">&#9888; Expanding archives will add time to processing.</div>
+  <label title="Open each PDF, HTML page, MHTML (.mht) and Safari web archive found in the sources and register the images and videos inside it. A JPEG or JPEG 2000 in a PDF, and anything embedded in a web page, comes out byte for byte; any other PDF image is rebuilt from its pixels as a PNG (named _rebuilt), so its hashes are not an original file's. Images under 32 pixels on a side are left out. Off, these documents are not kept in the case."><input type="checkbox" id="aeDocs"> Extract media from documents (PDF, HTML, MHTML, web archive)</label>
   <label title="Disk images only (E01 or raw). After walking the filesystems, recover deleted media from deleted records and by carving unclaimed space. You can also run this later from the Source panel."><input type="checkbox" id="aeCarve"> Recover deleted media (disk image sources only)</label>
   <label>Video preview key frames: <span id="aeKfv">6</span>
     <input type="range" id="aeKf" min="2" max="16" step="1" value="6" style="width:100%"></label>

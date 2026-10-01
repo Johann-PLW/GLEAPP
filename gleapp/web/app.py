@@ -25,12 +25,12 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from .. import (appconfig, archive, backup, basemaps, categories, exocache, flags, lava,
-               relink, report)
+from .. import (appconfig, archive, backup, basemaps, categories, docmedia, exocache, flags,
+               lava, relink, report)
 from ..case import open_case, parse_source_spec
 from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
 from ..facematch import find_matching_faces
-from ..ingest import is_exoplayer_cache_name
+from ..ingest import DOCUMENT_EXTS, is_exoplayer_cache_name
 from ..pipeline import ingest_sources, process
 from ..similar import find_similar
 
@@ -695,6 +695,52 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         threading.Thread(target=_job, daemon=True).start()
         return jsonify({"ok": True, "count": n})
 
+    @app.post("/api/extract-documents")
+    def extract_documents():
+        """Go back over the case's sources for the PDFs, web pages, MHTML and web
+        archives an ingest without "Extract media from documents" left out, and
+        extract the media in them (pipeline.add_documents)."""
+        if state["case"] is None:
+            abort(409, description="no case open")
+        if state["job"]["running"]:
+            abort(409, description="a job is already running")
+        case = state["case"]
+        state["job"] = {"running": True, "stage": "process", "done": 0, "total": 0,
+                        "message": "Looking for documents in the sources…", "stats": None,
+                        "error": None}
+
+        def _job() -> None:
+            j = state["job"]
+            try:
+                from ..pipeline import add_documents
+                got = add_documents(
+                    case, progress=lambda k: j.update(done=k, message=f"{k:,} files found"))
+                added = got["added"]
+                # the documents and their items are in the case now; the page refreshes
+                # its counts on this rather than after processing and hash matching
+                j.update(extracted={"documents": got["documents"], "added": added})
+                if added:
+                    j.update(stage="process", done=0, total=added,
+                             message=f"Processing {added:,} extracted file(s)…")
+                    process(case, where="md5 IS NULL", reason="extract-documents",
+                            similar=False,
+                            progress=lambda d, t: j.update(done=d, total=t),
+                            stage_cb=lambda m: j.update(message=m))
+                _index_added_files(case)
+                msg = (f"{got['documents']:,} document(s), {added:,} file(s) extracted"
+                       if added else "No new media in documents")
+                if got["unavailable"]:
+                    msg += " · not available: " + ", ".join(got["unavailable"])
+                j.update(running=False, stage="done", message=msg,
+                         stats={"expanded": added, "documents": got["documents"],
+                                "unavailable": got["unavailable"]})
+            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+                j.update(running=False, stage="error",
+                         error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_job, daemon=True).start()
+        return jsonify({"ok": True})
+
     @app.post("/api/rehash")
     def rehash():
         if state["case"] is None:
@@ -1178,8 +1224,16 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         group = q.get("stack") or q.get("vstack")
         if group:
             eq("stack_id" if q.get("stack") else "vstack_id", int(group))
+        elif q.get("container"):
+            # everything one archive or document gave up, the same kind of explicit
+            # request as a group: the media in it, not the containers nested in it
+            eq("container_id", int(q["container"]))
+            where.append("kind != 'archive'")
         else:
-            if q.get("kind"):
+            if q.get("kind") in CONTAINER_KINDS:
+                # one kind of container: archives, documents or app cache pieces
+                where.append(f"kind = 'archive' AND {CONTAINER_KINDS[q['kind']]('files')}")
+            elif q.get("kind"):
                 eq("kind", q["kind"])
             else:
                 # An archive container (a .zip / .tar found in a source) is kept
@@ -1195,7 +1249,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             if q.get("origin") in ORIGINS:
                 eq("origin", q["origin"])
             if q.get("in_archive") == "1":
-                where.append("container_id IS NOT NULL")
+                where.append(_pulled_from_sql(_archive_sql))
+            if q.get("in_document") == "1":
+                where.append(_pulled_from_sql(_doc_sql))
             if q.get("category") not in (None, "", "any"):
                 eq("category", int(q["category"]))
             if q.get("flag") not in (None, "", "any"):
@@ -1408,6 +1464,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             d["cluster_size"] = case.db.conn.execute(
                 "SELECT COUNT(*) n FROM files WHERE cluster_id=?", (r["cluster_id"],)
             ).fetchone()["n"]
+        if r["container_id"]:
+            d["container"] = _container_info(case, r)
+        if r["kind"] == "archive":
+            d["members"] = _member_counts(case, r)
         return jsonify(d)
 
     @app.get("/api/similar/<int:file_id>")
@@ -1767,6 +1827,20 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         scr = {"n": one["n"], "wf": one["wf"], "ws": one["ws"]}
         n_err = one["n_err"]
         arch = {"total": one["arch_total"], "expanded": one["arch_expanded"]}
+        # the archive count leaves out documents and ExoPlayer cache pieces, which are
+        # kept as containers too; each count below links to the filter that shows it
+        cont = case.db.conn.execute(
+            f"SELECT COALESCE(SUM({_archive_sql('files')}), 0) a_total, "
+            f"COALESCE(SUM({_doc_sql('files')}), 0) d_total, "
+            f"COALESCE(SUM({_doc_sql('files')} AND id IN (SELECT container_id FROM files "
+            "WHERE container_id IS NOT NULL)), 0) d_opened "
+            "FROM files WHERE kind = 'archive'").fetchone()
+        a_items = case.db.conn.execute(
+            f"SELECT COUNT(*) FROM files WHERE kind != 'archive' AND "
+            f"{_pulled_from_sql(_archive_sql)}").fetchone()[0]
+        d_items = case.db.conn.execute(
+            f"SELECT COUNT(*) FROM files WHERE kind != 'archive' AND "
+            f"{_pulled_from_sql(_doc_sql)}").fetchone()[0]
         from .. import hashstore, stash
         cst = case.db.stats()
         try:
@@ -1804,6 +1878,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "errors": n_err,
             "archives": {"total": arch["total"] or 0,
                          "expanded": arch["expanded"] or 0},
+            "containers": {"archives": cont["a_total"], "archive_items": a_items,
+                           "documents": cont["d_total"], "documents_opened": cont["d_opened"],
+                           "document_items": d_items},
             "known_hash": {
                 "hits": cst.get("hashset_hits", 0),
                 "known_good": cst.get("known_good", 0),
@@ -2532,6 +2609,83 @@ def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
     return made
 
 
+# What kind of container a ``kind = 'archive'`` row is, as SQL over the row aliased
+# ``a``: a document gleapp/docmedia.py opens (by extension, or a PDF saved with none,
+# recognized by the names its items were given), a piece of an app's ExoPlayer cache
+# (gleapp/exocache.py joins those), or else an archive (zip, 7z, tar, gz and the rest).
+_DOC_EXT_SQL = ", ".join(f"'{e}'" for e in sorted(DOCUMENT_EXTS))
+
+
+def _doc_sql(a: str) -> str:
+    return (f"(lower({a}.ext) IN ({_DOC_EXT_SQL}) OR (COALESCE({a}.ext, '') = '' AND "
+            f"EXISTS (SELECT 1 FROM files dc WHERE dc.container_id = {a}.id AND "
+            "(dc.orig_name LIKE 'p____!_obj%' ESCAPE '!' OR "
+            "dc.orig_name LIKE 'unused!_obj%' ESCAPE '!' OR "
+            "dc.orig_name LIKE 'attachment!_obj%' ESCAPE '!'))))")
+
+
+def _cache_sql(a: str) -> str:
+    return f"is_exo_cache_name(COALESCE(NULLIF({a}.orig_path, ''), {a}.rel_path, {a}.path))"
+
+
+def _archive_sql(a: str) -> str:
+    return f"(NOT {_doc_sql(a)} AND NOT {_cache_sql(a)})"
+
+
+# Type filter values for the three kinds of container, and the SQL for each
+CONTAINER_KINDS = {"archive:archive": _archive_sql, "archive:document": _doc_sql,
+                   "archive:cache": _cache_sql}
+
+
+def _pulled_from_sql(pred) -> str:
+    """Rows extracted from a container the predicate picks."""
+    return (f"container_id IN (SELECT p.id FROM files p WHERE p.kind = 'archive' "
+            f"AND {pred('p')})")
+
+
+def _is_document_row(row) -> bool:
+    """A container row that is a PDF / HTML / MHTML / web archive rather than a zip:
+    by extension, or, for a PDF an app saved without one, by the names
+    gleapp/docmedia.py gave what it extracted."""
+    return (row["ext"] or "").lower() in DOCUMENT_EXTS
+
+
+def _container_info(case, row) -> dict | None:
+    """The archive or document an extracted file came out of, for the details pane,
+    and where in a document it sat (``docmedia.describe``)."""
+    parent = case.db.get_file(row["container_id"])
+    if parent is None:
+        return None
+    pext = (parent["ext"] or "").lower()
+    found = docmedia.describe(row["orig_name"] or row["rel_path"] or "", pext)
+    return {
+        "id": parent["id"],
+        "name": parent["orig_name"] or Path(parent["rel_path"] or parent["path"]).name,
+        "path": parent["orig_path"] or parent["rel_path"] or "",
+        "is_document": _is_document_row(parent) or found is not None,
+        "where": found["where"] if found else "",
+        "copy": found["copy"] if found else "",
+    }
+
+
+def _member_counts(case, row) -> dict:
+    """What an archive or document gave up: media rows and nested containers."""
+    got = {k: 0 for k in ("media", "containers")}
+    for r in case.db.conn.execute(
+            "SELECT kind, COUNT(*) n FROM files WHERE container_id = ? GROUP BY kind",
+            (row["id"],)):
+        got["containers" if r["kind"] == "archive" else "media"] += r["n"]
+    first = case.db.conn.execute(
+        "SELECT orig_name, rel_path FROM files WHERE container_id = ? LIMIT 1",
+        (row["id"],)).fetchone()
+    got["is_document"] = _is_document_row(row) or bool(
+        first and docmedia.describe(first["orig_name"] or first["rel_path"] or "",
+                                    (row["ext"] or "").lower()))
+    got["is_cache"] = is_exoplayer_cache_name(row["orig_path"] or row["rel_path"]
+                                              or row["path"] or "")
+    return got
+
+
 def _run_job(state: dict, sources, opts: dict) -> None:
     job = state["job"]
     case = state["case"]
@@ -2542,6 +2696,7 @@ def _run_job(state: dict, sources, opts: dict) -> None:
             case, sources,
             progress=lambda k: job.update(done=k, message=f"Registering files… {k:,}"),
             expand_archives=bool(opts.get("expand_archives", True)),
+            expand_documents=bool(opts.get("expand_documents", False)),
         )
         if n:
             # now that the case has content, it's worth remembering

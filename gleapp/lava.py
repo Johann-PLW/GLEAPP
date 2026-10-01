@@ -82,6 +82,7 @@ _MIME = {
     ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
     ".tif": "image/tiff", ".tiff": "image/tiff", ".heic": "image/heic",
     ".heif": "image/heif", ".avif": "image/avif", ".dng": "image/x-adobe-dng",
+    ".jp2": "image/jp2", ".jpf": "image/jpx", ".jpx": "image/jpx",
     ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
     ".3gp": "video/3gpp", ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
     ".webm": "video/webm", ".wmv": "video/x-ms-wmv", ".mpg": "video/mpeg",

@@ -124,6 +124,11 @@ case.</p>
   extraction that holds many compressed files, and open them later with <strong>Expand
   archives</strong> in the sidebar (&sect;16). The <strong>+&nbsp;Add evidence</strong> dialog
   has the same box.</li>
+  <li><em>Extract media from documents (PDF, HTML, MHTML, web archive)</em>: off by default.
+  Opens each PDF, web page, MHTML and Safari web archive in the sources and registers the
+  images and videos inside it (&sect;13). Off, those documents are not kept. Run it later with
+  <strong>Extract media from documents</strong> in the sidebar (&sect;16). The
+  <strong>+&nbsp;Add evidence</strong> dialog has the same box.</li>
   <li><em>Recover media</em>: disk images only, off by default (&sect;16).</li>
   <li><em>Enable hash stash matching</em>: on by default. Turn it off for a case that isn't
   CSAM / Project VIC related, so an old stashed hit can't re-flag unrelated media. You can
@@ -489,7 +494,7 @@ matches across all of:</p>
 <table>
   <tr><th>Control</th><th>What it does</th></tr>
   <tr><td><strong>Category</strong></td><td><strong>Any</strong>, a specific category (presets and your own, hidden ones marked), or <strong>Uncategorized</strong>, which enables the auto-advance review flow.</td></tr>
-  <tr><td><strong>Type</strong></td><td><strong>image</strong>, <strong>video</strong>, or <strong>other</strong> (non-decodable, documents, unknown formats). A fourth value, <strong>archive (container)</strong>, is the only way to see the <code>.zip</code> / <code>.tar</code> / <code>.gz</code> files themselves: they are <strong>hidden from the gallery and reports by default</strong>; only the image and video members found inside them are shown.</td></tr>
+  <tr><td><strong>Type</strong></td><td><strong>image</strong>, <strong>video</strong>, or <strong>other</strong> (non-decodable, documents, unknown formats). Under <em>Containers (not pictures themselves)</em>, <strong>Archives (zip, 7z, tar, gz)</strong>, <strong>Documents (PDF, web pages)</strong> and <strong>App cache pieces (ExoPlayer)</strong> are the only way to see those files themselves: they are <strong>hidden from the gallery and reports by default</strong>; only the images and videos found inside them are shown.</td></tr>
   <tr><td><strong>Source</strong></td><td>Restrict to one ingest source (its folder or file name; a Project&nbsp;VIC JSON is listed by its file name).</td></tr>
 </table>
 <p><strong>Reattach to source…</strong> in the top bar appears when the case holds a folder
@@ -523,12 +528,18 @@ Processing history.</p>
     <strong>Carve again</strong> button: see &sect;16.</li>
 </ul>
 
-<h3>Archives <em>(when the case holds any <code>.zip</code> / <code>.7z</code> / <code>.tar</code> / <code>.gz</code>)</em></h3>
+<h3>Archives and documents</h3>
 <ul>
-  <li><strong>Extracted from an archive</strong>: only files that came out of a
-  container.</li>
-  <li>Below it, the archive count and the <strong>Expand archives</strong> /
-  <strong>Re-check archives</strong> button: see &sect;16.</li>
+  <li><strong>Archives</strong>: how many archives the case holds and how many files came out
+  of them. Below it, <strong>Expand archives</strong> / <strong>Re-check archives</strong> (when
+  the case holds any archive; see &sect;16), and <strong>Only files pulled from an
+  archive</strong>.</li>
+  <li><strong>Documents</strong>: the same two counts for PDFs, web pages, MHTML and web
+  archives, <strong>Extract media from documents</strong> (see &sect;16), and <strong>Only files
+  pulled from a document</strong>.</li>
+  <li>Each button's tooltip says what it opens. Type <em>Archives</em> or <em>Documents</em>
+  lists the containers themselves. A video joined from an app's ExoPlayer cache is in neither
+  checkbox.</li>
 </ul>
 
 <h3>Known hashes</h3>
@@ -1047,7 +1058,7 @@ Archives nested inside archives are followed.</p>
   as ordinary rows, named <code>&lt;archive&gt;/&lt;member&gt;</code>, linked back to the
   container.</li>
   <li><strong>The container file itself does not show in the gallery or in reports</strong>; set
-  the Type filter to <em>archive (container)</em> to see the list of them. It is still in the case
+  the Type filter to <em>Archives</em> to see the list of them. It is still in the case
   (its own name, path, dates and hashes), so a report of that scope can account for every archive
   in evidence.</li>
   <li><strong>RAR</strong> is recognized but not opened: GLEAPP has no RAR reader (they need an
@@ -1056,6 +1067,40 @@ Archives nested inside archives are followed.</p>
   <li>Encrypted members (and password-protected <code>.7z</code>) are skipped and counted.</li>
   <li>Unticked, or on a case that was ingested earlier, use <strong>Expand archives</strong> in the
   sidebar (&sect;16).</li>
+</ul>
+
+<h3>Documents: PDF, web pages, MHTML and web archives</h3>
+<p>With <em>Extract media from documents</em> ticked at ingest, or <strong>Extract media from
+documents</strong> run later from the sidebar, each <strong>PDF</strong>, <strong>HTML</strong>
+page (<code>.html</code>, <code>.htm</code>, <code>.xhtml</code>), <strong>MHTML</strong>
+(<code>.mht</code>, <code>.mhtml</code>) and Safari <strong>web archive</strong>
+(<code>.webarchive</code>) in the sources is kept as a container and the images and videos inside
+it are registered, named <code>&lt;document&gt;/&lt;item&gt;</code> and linked back to it. A PDF
+with no extension is recognized by its first bytes. A document inside an archive is opened when
+that archive is.</p>
+<ul>
+  <li><strong>PDF</strong>: every image in the file, whether a page draws it or not, and every
+  attached file (a video, a photo). A JPEG or JPEG 2000 image is stored in the PDF as the file it
+  was, so it comes out <strong>byte for byte</strong> and its hashes can match a known-hash set.
+  Any other image is stored as pixels; it is rebuilt as a PNG and named
+  <code>&hellip;_rebuilt.png</code>, and <strong>its hashes are GLEAPP's, not an original
+  file's</strong>. An encrypted PDF that opens without a password (only printing or copying
+  restricted) is read. Images placed inline in a page's drawing instructions are not
+  extracted.</li>
+  <li><strong>HTML</strong>: images and videos embedded in the page (<code>data:</code> addresses
+  in <code>&lt;img&gt;</code>, <code>&lt;video&gt;</code>, <code>srcset</code> and CSS). An
+  ordinary link to <code>photo.jpg</code> is not content; that file sits beside the page and is
+  ingested on its own.</li>
+  <li><strong>MHTML</strong> and <strong>web archives</strong>: every image and video saved with
+  the page, named from the address it was fetched from, plus anything embedded in the page
+  itself. Byte for byte.</li>
+  <li>Images under 32 pixels on a side (icons, bullets, spacers) are left out.</li>
+  <li><strong>Details pane</strong>: <em>Found in</em> names the document, <em>Where in it</em>
+  says the page, the attachment or the saved resource, and <em>Copy</em> says byte for byte or
+  rebuilt. <strong>Show everything from this document</strong> lists what came out of it.</li>
+  <li>Office files (<code>.docx</code>, <code>.xlsx</code>, <code>.pptx</code>), OpenDocument,
+  EPUB and Apple Pages, Keynote and Numbers files are zip files, so their images come out with
+  <strong>Expand archives</strong>, as an archive's do.</li>
 </ul>
 
 <h3>ExoPlayer media caches (Android)</h3>
@@ -1070,7 +1115,7 @@ the piece's own name instead.</p>
 <ul>
   <li><strong>The pieces and the index files are kept as containers</strong>, whatever
   their bytes look like, so they stay out of the gallery and are listed under
-  <em>archive (container)</em>.</li>
+  <em>App cache pieces</em>.</li>
   <li><strong>Each item's pieces are joined in order, from the start of the item, until
   the first gap</strong>, into one file under <code>extracted/exoplayer/</code>, processed
   like any other video and linked to its first piece.</li>
@@ -1277,12 +1322,18 @@ text) and size:</p>
   <li><strong>Re-scan for duplicates</strong>: rebuild groupings only.</li>
   <li><strong>Re-check</strong> (<em>Known hashes</em>): rebuild hash-set matches only.</li>
   <li><strong>Run face / skin screening</strong>: face/skin pass only.</li>
-  <li><strong>Expand archives</strong>: shown below the Source list when the case
+  <li><strong>Expand archives</strong> (<em>Archives and documents</em> section): shown when the case
   holds any <code>.zip</code> / <code>.tar</code> / <code>.gz</code>. Opens each
   one not expanded yet and processes what comes out; <strong>Re-check
   archives</strong> re-opens them all. Archives expand at ingest only when <em>Expand archives
   found inside the sources</em> is ticked; use this when it was not, or for a case ingested
   before that option existed.</li>
+  <li><strong>Extract media from documents</strong> (<em>Archives and documents</em> section):
+  goes back over the case's sources for the PDFs, web pages, MHTML and web archives an ingest
+  without <em>Extract media from documents</em> left out, opens them, and processes what comes
+  out. A document already opened is not opened again, so a second run adds nothing. The sources
+  must still be where the case recorded them; one that is not is named in the result and
+  skipped.</li>
 </ul>
 <p>Each reports progress next to its own button. A full reprocess is available from
 the command line (<code>gleapp process --force</code>).</p>
@@ -1611,6 +1662,7 @@ This product includes software developed by SecureAuth Corporation
   <tr><td><strong>pyliblzfse</strong> + <strong>LZFSE</strong></td><td>Apple LZFSE-compressed assets: Ivan&nbsp;Kozík (bindings); LZFSE by Apple&nbsp;Inc. (BSD-3)</td></tr>
   <tr><td><strong>python-zstandard</strong> + <strong>Zstandard</strong></td><td>Zstd-compressed assets: Gregory&nbsp;Szorc (bindings); Zstd by Meta / Yann&nbsp;Collet (BSD-3)</td></tr>
   <tr><td><strong>py7zr</strong> (+ pyppmd, pybcj, inflate64, brotli, pycryptodomex)</td><td>reading <code>.7z</code> archives found inside a source: Hiroshi&nbsp;Miura &amp; contributors (LGPL-2.1 / MIT / BSD)</td></tr>
+  <tr><td><strong>pypdf</strong> (+ pycryptodome)</td><td>reading the images and embedded files inside a PDF, including an encrypted one: Mathieu&nbsp;Fenniak &amp; contributors; pycryptodome by Helder&nbsp;Eijs (BSD-3 / BSD-2 and public domain)</td></tr>
   <tr><td><strong>Flask</strong> &amp; the <strong>Pallets</strong> stack</td><td>the local review-gallery server: Werkzeug, Jinja, Click, MarkupSafe, ItsDangerous, Blinker: Armin&nbsp;Ronacher &amp; contributors (BSD-3)</td></tr>
   <tr><td><strong>tzdata</strong> / <strong>IANA Time Zone Database</strong></td><td>timezone conversion &amp; DST for the display-timezone setting: IANA (public domain); PyPI packaging by the CPython team</td></tr>
   <tr><td><strong>SQLite</strong></td><td>the case database, via Python's <code>sqlite3</code>: D.&nbsp;Richard&nbsp;Hipp &amp; the SQLite team (public domain)</td></tr>

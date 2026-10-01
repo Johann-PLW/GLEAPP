@@ -93,6 +93,11 @@ your user settings, not in any case.
   videos in it. Leave it off for a full file-system extraction that holds many
   compressed files, and open them later with **Expand archives** in the sidebar
   (§16). The **+ Add evidence** dialog has the same box.
+- *Extract media from documents (PDF, HTML, MHTML, web archive)*: off by
+  default. Opens each PDF, web page, MHTML and Safari web archive in the sources
+  and registers the images and videos inside it (§13). Off, those documents are
+  not kept. Run it later with **Extract media from documents** in the sidebar
+  (§16). The **+ Add evidence** dialog has the same box.
 - *Recover media*: disk images only, off by default (§16).
 - *Enable hash stash matching*: on by default. Turn it off for a case that
   isn't CSAM / Project VIC related, so an old stashed hit can't re-flag
@@ -444,7 +449,7 @@ So `dcim 2024-07` finds files whose path mentions DCIM and whose date is in July
 | Control | What it does |
 |---|---|
 | **Category** | **Any**, a specific category (presets and your own, hidden ones marked), or **Uncategorized**, which enables the auto-advance review flow. |
-| **Type** | **image**, **video**, or **other** (non-decodable, documents, unknown formats). A fourth value, **archive (container)**, is the only way to see the `.zip` / `.tar` / `.gz` files themselves: they are **hidden from the gallery and reports by default**; only the image and video members found inside them are shown. |
+| **Type** | **image**, **video**, or **other** (non-decodable, documents, unknown formats). Under *Containers (not pictures themselves)*, **Archives (zip, 7z, tar, gz)**, **Documents (PDF, web pages)** and **App cache pieces (ExoPlayer)** are the only way to see those files themselves: they are **hidden from the gallery and reports by default**; only the images and videos found inside them are shown. |
 | **Source** | Restrict to one ingest source (its folder or file name; a Project VIC JSON is listed by its file name). |
 
 **Reattach to source…** in the top bar appears when the case holds a folder or
@@ -475,11 +480,17 @@ was. A reattach is recorded in Processing history.
   deleted records* / *carved* counts and a **Carve for deleted media** / **Carve
   again** button; see §16.
 
-### Archives *(when the case holds any `.zip` / `.7z` / `.tar` / `.gz`)*
+### Archives and documents
 
-- **Extracted from an archive**: only files that came out of a container.
-- Below it, the archive count and the **Expand archives** / **Re-check
-  archives** button; see §16.
+- **Archives**: how many archives the case holds and how many files came out of
+  them. Below it, **Expand archives** / **Re-check archives** (when the case holds
+  any archive; see §16), and **Only files pulled from an archive**.
+- **Documents**: the same two counts for PDFs, web pages, MHTML and web archives,
+  **Extract media from documents** (see §16), and **Only files pulled from a
+  document**.
+- Each button's tooltip says what it opens. Type *Archives* or *Documents* lists the
+  containers themselves. A video joined from an app's ExoPlayer cache is in
+  neither checkbox.
 
 ### Known hashes
 
@@ -1032,7 +1043,7 @@ Archives nested inside archives are followed.
 - Its image and video members are written to `extracted/<id>/` and registered as
   ordinary rows, named `<archive>/<member>`, linked back to the container.
 - **The container file itself does not show in the gallery or in reports**; set
-  the Type filter to *archive (container)* to see the list of them. It is still
+  the Type filter to *Archives* to see the list of them. It is still
   in the case (its own name, path, dates and hashes), so a report of that scope
   can account for every archive in evidence.
 - **RAR** is recognized but not opened: GLEAPP has no RAR reader (they need an
@@ -1041,6 +1052,38 @@ Archives nested inside archives are followed.
 - Encrypted members (and password-protected `.7z`) are skipped and counted.
 - Unticked, or on a case that was ingested earlier, use **Expand archives** in
   the sidebar (§16).
+
+### Documents: PDF, web pages, MHTML and web archives
+
+With *Extract media from documents* ticked at ingest, or **Extract media from
+documents** run later from the sidebar, each **PDF**, **HTML** page (`.html`,
+`.htm`, `.xhtml`), **MHTML** (`.mht`, `.mhtml`) and Safari **web archive**
+(`.webarchive`) in the sources is kept as a container and the images and videos
+inside it are registered, named `<document>/<item>` and linked back to it. A PDF
+with no extension is recognized by its first bytes. A document inside an archive
+is opened when that archive is.
+
+- **PDF**: every image in the file, whether a page draws it or not, and every
+  attached file (a video, a photo). A JPEG or JPEG 2000 image is stored in the PDF
+  as the file it was, so it comes out **byte for byte** and its hashes can match a
+  known-hash set. Any other image is stored as pixels; it is rebuilt as a PNG and
+  named `…_rebuilt.png`, and **its hashes are GLEAPP's, not an original file's**.
+  An encrypted PDF that opens without a password (only printing or copying
+  restricted) is read. Images placed inline in a page's drawing instructions are
+  not extracted.
+- **HTML**: images and videos embedded in the page (`data:` addresses in `<img>`,
+  `<video>`, `srcset` and CSS). An ordinary link to `photo.jpg` is not content;
+  that file sits beside the page and is ingested on its own.
+- **MHTML** and **web archives**: every image and video saved with the page, named
+  from the address it was fetched from, plus anything embedded in the page itself.
+  Byte for byte.
+- Images under 32 pixels on a side (icons, bullets, spacers) are left out.
+- **Details pane**: *Found in* names the document, *Where in it* says the page, the
+  attachment or the saved resource, and *Copy* says byte for byte or rebuilt. **Show
+  everything from this document** lists what came out of it.
+- Office files (`.docx`, `.xlsx`, `.pptx`), OpenDocument, EPUB and Apple Pages,
+  Keynote and Numbers files are zip files, so their images come out with **Expand
+  archives**, as an archive's do.
 
 ### ExoPlayer media caches (Android)
 
@@ -1059,7 +1102,7 @@ or an archive found inside a source:
 
 - **The pieces and the index files are kept as containers**, whatever their
   bytes look like, so they stay out of the gallery like any other container and
-  are listed under *archive (container)*. The first piece of an MP4 opens with a
+  are listed under *App cache pieces*. The first piece of an MP4 opens with a
   video header, and before this it was registered as a truncated video.
 - **Each item's pieces are joined in order, from the start of the item, until the
   first gap**, into one file under `extracted/exoplayer/`. That file is an
@@ -1294,13 +1337,19 @@ date, label (`auto`, `manual`, or your text) and size:
 - **Re-scan for duplicates**: rebuild groupings only.
 - **Re-check** (*Known hashes*): rebuild hash-set matches only.
 - **Run face / skin screening**: face/skin pass only.
-- **Expand archives**: appears below the Source list when the case holds any
+- **Expand archives** (*Archives and documents* section): appears when the case holds any
   `.zip` / `.tar` / `.gz` etc. Opens each one that has not been expanded yet
   and processes what comes out; **Re-check archives** re-opens them all (use
   after fixing a source that was unavailable). Archives are expanded at ingest
   only when *Expand archives found inside the sources* is ticked; use this when
   it was not, for a case ingested before that option existed, or after a
   partial run.
+- **Extract media from documents** (*Archives and documents* section): goes back
+  over the case's sources for the PDFs, web pages, MHTML and web archives an
+  ingest without *Extract media from documents* left out, opens them, and
+  processes what comes out. A document already opened is not opened again, so a
+  second run adds nothing. The sources must still be where the case recorded
+  them; one that is not is named in the result and skipped.
 
 Each reports progress next to its own button. A full reprocess is available
 from the command line: `gleapp process --force`.
@@ -1737,6 +1786,7 @@ This product includes software developed by SecureAuth Corporation
 | **pyliblzfse** + **LZFSE** | decoding Apple LZFSE-compressed assets | Ivan Kozík (bindings); LZFSE by Apple Inc. | BSD-3 |
 | **python-zstandard** + **Zstandard** | decoding Zstd-compressed assets | Gregory Szorc (bindings); Zstd by Meta / Yann Collet | BSD-3 |
 | **py7zr** (+ pyppmd, pybcj, inflate64, brotli, pycryptodomex) | reading `.7z` archives found inside a source | Hiroshi Miura & contributors | LGPL-2.1 (py7zr) / MIT / BSD |
+| **pypdf** (+ pycryptodome) | reading the images and embedded files inside a PDF, including an encrypted one | Mathieu Fenniak & contributors; pycryptodome by Helder Eijs | BSD-3 / BSD-2 and public domain |
 | **Flask** and the **Pallets** stack (Werkzeug, Jinja, Click, MarkupSafe, ItsDangerous, Blinker) | the local review-gallery server | Pallets, Armin Ronacher & contributors | BSD-3 |
 | **tzdata** / **IANA Time Zone Database** | timezone conversion and DST for the display-timezone setting | IANA (data, public domain); PyPI packaging by the CPython team | Public domain / Apache-2.0 |
 | **SQLite** | the case database, via Python's `sqlite3` | D. Richard Hipp & the SQLite team | Public domain |
