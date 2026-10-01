@@ -53,8 +53,9 @@ def test_an_older_case_has_its_0_and_5_swapped_once(tmp_path):
     for _ in range(2):                 # the second open must not swap back
         reopened = CaseDB(Path(root) / "case.gleapp")
         try:
-            cat = lambda fid: reopened.get_file(fid)["category"]
-            assert (cat(uncat), cat(nonpert), cat(cam), cat(null)) == (5, 0, 1, 5)
+            got = tuple(reopened.get_file(fid)["category"]
+                        for fid in (uncat, nonpert, cam, null))
+            assert got == (5, 0, 1, 5)
             assert reopened.category_name(0) == "Non-pertinent"
             assert reopened.category_name(5) == "Uncategorized"
             assert reopened.get_meta("schema_version") == "18"
