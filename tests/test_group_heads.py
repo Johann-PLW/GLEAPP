@@ -139,19 +139,19 @@ def test_a_cached_count_never_outlives_a_change(tmp_path):
     ref = open_case(root).db
     fresh = {
         "&dupes=collapse": f"SELECT COUNT(DISTINCT {GRP}) FROM files "
-                           "WHERE kind != 'archive' AND category = 0",
-        "": "SELECT COUNT(*) FROM files WHERE kind != 'archive' AND category = 0",
+                           "WHERE kind != 'archive' AND category = 5",
+        "": "SELECT COUNT(*) FROM files WHERE kind != 'archive' AND category = 5",
     }
     try:
         for collapse, sql in fresh.items():
-            base = f"/api/files?category=0&sort=file_path{collapse}"
+            base = f"/api/files?category=5&sort=file_path{collapse}"
             before = client.get(base + "&limit=200").get_json()
             assert client.get(base + "&limit=1500").get_json()["total"] == before["total"]
             # a file alone in its group, so categorizing it must change the count
             target = next(f["id"] for f in before["files"]
                           if f["stack_count"] == 1 and not f["vstack_count"])
             assert client.post("/api/categorize",
-                               json={"ids": [target], "category": 5}).status_code == 200
+                               json={"ids": [target], "category": 0}).status_code == 200
             after = client.get(base + "&limit=1500").get_json()
             assert target not in [f["id"] for f in after["files"]]
             assert after["total"] == ref.conn.execute(sql).fetchone()[0], collapse
@@ -172,7 +172,7 @@ def test_the_default_path_order_is_read_from_an_index(tmp_path):
     assert _col_sql("file_path") == FILE_PATH_SQL
     case = open_case(tmp_path / "pcase", create=True, examiner="t")
     try:
-        for where in ("kind != 'archive'", "kind != 'archive' AND category = 0",
+        for where in ("kind != 'archive'", "kind != 'archive' AND category = 5",
                       "grp_head = 1 AND kind != 'archive'"):
             for d in ("ASC", "DESC"):
                 plan = " ".join(str(r[-1]) for r in case.db.conn.execute(
@@ -206,14 +206,14 @@ def test_categorizing_a_collapsed_tile_categorizes_its_whole_group(tmp_path):
         "SELECT category FROM files WHERE id = ?", (fid,)).fetchone()[0]
     try:
         one, other = multi[0], multi[1]
-        r = client.post("/api/categorize", json={"ids": [one[0]], "category": 5,
+        r = client.post("/api/categorize", json={"ids": [one[0]], "category": 0,
                                                   "with_group": True}).get_json()
         assert r["count"] == len(one) and r["tiles"] == 1
-        assert all(cat_of(fid) == 5 for fid in one)
+        assert all(cat_of(fid) == 0 for fid in one)
         # without it, just the one file
-        client.post("/api/categorize", json={"ids": [other[0]], "category": 5})
-        assert cat_of(other[0]) == 5
-        assert all(cat_of(fid) != 5 for fid in other[1:])
+        client.post("/api/categorize", json={"ids": [other[0]], "category": 0})
+        assert cat_of(other[0]) == 0
+        assert all(cat_of(fid) != 0 for fid in other[1:])
         audit = [json.loads(a["detail"]) for a in client.get("/api/audit").get_json()
                  if a["action"] == "categorize"]
         grouped = next(d for d in audit if d.get("tiles") == 1)

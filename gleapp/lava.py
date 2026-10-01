@@ -44,6 +44,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 
+from .db import category_code, is_uncategorized
 from . import (__version__, archive, basemaps, categories, exocache, hashstore, stash,
                staticmap, timeutil, vicdetails)
 from .case import Case
@@ -501,7 +502,7 @@ def _rows(case: Case, where: str) -> list[dict]:
     out = []
     for record in case.db.iter_files(where):
         row = dict(record)
-        row["category_label"] = categories.label(case.db, row.get("category") or 0)
+        row["category_label"] = categories.label(case.db, row.get("category"))
         row["flags"] = ", ".join(f["name"] for f in case.db.flags_for(row["id"]))
         row["disp_path"] = _disp_path(row)
         row["disp_name"] = _disp_name(row)
@@ -706,7 +707,7 @@ def _artifact_media_files(writer: "_Writer", rows: list[dict], media: dict[int, 
 def _artifact_categorized(writer: "_Writer", rows: list[dict],
                           media: dict[int, str]) -> None:
     name = "Categorized Media"
-    marked = [r for r in rows if (r.get("category") or 0) != 0]
+    marked = [r for r in rows if not is_uncategorized(r.get("category"))]
     headers = [("Reviewed Timestamp", "datetime"), "Category", "File Name", "Path",
                ("Media", "media"), "Reviewed By", "Examiner Notes", "Flags",
                "MD5", "SHA1", "Kind", ("Size", "integer")]
@@ -1343,7 +1344,7 @@ def _artifact_categories(writer: "_Writer", case: Case, rows: list[dict]) -> Non
     name = "Category Definitions"
     counts: dict[int, int] = {}
     for row in rows:
-        code = row.get("category") or 0
+        code = category_code(row.get("category"))
         counts[code] = counts.get(code, 0) + 1
     headers = [("Code", "integer"), "Category", "Origin", "Treated As Evidential",
                "Shown In The Picker", ("Files In This Report", "integer")]

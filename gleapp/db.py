@@ -16,7 +16,7 @@ from typing import Any, Iterable
 
 from . import vicdetails
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # Bits of files.hashset_mask: which kinds of source matched a file. A file that
 # matched two places carries both bits, so a filter can ask for either or both.
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS files (
     camera        TEXT,
     faces         INTEGER DEFAULT 0,      -- detected face count
     skin_ratio    REAL,                   -- fraction of frame that is skin-toned
-    category      INTEGER DEFAULT 0,      -- Project VIC code, 0 = uncategorized
+    category      INTEGER DEFAULT 5,      -- Project VIC code, 5 = uncategorized
     triage        TEXT,                   -- free triage bucket
     reviewed      INTEGER DEFAULT 0,      -- 0/1 examiner has looked at it
     reviewed_at   REAL,
@@ -292,20 +292,38 @@ CATEGORY_PALETTE = [
     "#c0392b", "#e67e22", "#f1c40f", "#27ae60", "#16a085", "#2980b9",
     "#8e44ad", "#c0398f", "#7f8c8d", "#795548", "#2c3e50", "#d35400",
 ]
-UNCATEGORIZED = {"code": 0, "name": "Uncategorized", "color": "#8b93a3",
+UNCATEGORIZED = {"code": 5, "name": "Uncategorized", "color": "#8b93a3",
                  "notable": 0, "position": 0, "active": 1}
 
 # Project VIC 2.0 (US) preset categories, locked in every case.
-# (code, name, color, notable)
-NONPERTINENT_CATEGORY = 5   # a known-good (NSRL) hash hit auto-lands here
+# (code, name, color, notable, position). Position is display order, the
+# code itself; the number keys are the codes too (5 clears to Uncategorized).
+UNCATEGORIZED_CATEGORY = 5  # a file nobody has categorized yet
+NONPERTINENT_CATEGORY = 0   # a known-good (NSRL) hash hit auto-lands here
 VIC_PRESETS = [
-    (0, "Uncategorized",                       "#8b93a3", 0),
-    (1, "CAM (Child Abuse Material)",           "#c0392b", 1),
-    (2, "Child Exploitative / Age Difficult",   "#f1c40f", 1),
-    (3, "CGI / Animation (Child Exploitative)", "#8e44ad", 1),
-    (4, "Comparison Images (Non-pertinent)",    "#2980b9", 0),
-    (5, "Non-pertinent",                        "#8bc34a", 0),
+    (0, "Non-pertinent",                        "#8bc34a", 0, 0),
+    (1, "CAM (Child Abuse Material)",           "#c0392b", 1, 1),
+    (2, "Child Exploitative / Age Difficult",   "#f1c40f", 1, 2),
+    (3, "CGI / Animation (Child Exploitative)", "#8e44ad", 1, 3),
+    (4, "Comparison Images (Non-pertinent)",    "#2980b9", 0, 4),
+    (5, "Uncategorized",                        "#8b93a3", 0, 5),
 ]
+
+
+def is_uncategorized(code: int | None) -> bool:
+    """True for a file with no category yet (NULL is read the same way)."""
+    return code is None or int(code) == UNCATEGORIZED_CATEGORY
+
+
+def category_code(code: int | None) -> int:
+    """A stored category as a code, NULL read as Uncategorized."""
+    return UNCATEGORIZED_CATEGORY if code is None else int(code)
+
+
+def severity_key(code: int) -> tuple[bool, int]:
+    """Sort key putting the most severe category first: lowest code, except
+    that Non-pertinent (0) ranks after every other category."""
+    return (int(code) == NONPERTINENT_CATEGORY, int(code))
 
 
 # The list view's File path column: the device path a Project VIC import recorded,
@@ -358,6 +376,8 @@ class CaseDB:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
             self.set_meta("created_at", str(time.time()))
         self._migrate()
+        if cur is not None and int(cur) < 18:
+            self._swap_vic_codes()
         self._seed_categories()
         if cur is not None and int(cur) < SCHEMA_VERSION:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
@@ -512,6 +532,23 @@ class CaseDB:
                 (r["file_id"], name_to_code[r["tag"]]))
         self.conn.execute("DROP TABLE tags")
 
+    def _swap_vic_codes(self) -> None:
+        """One-time (schema v18): cases before it stored Uncategorized as 0 and
+        Non-pertinent as 5, the reverse of Project VIC. Swap the two on every
+        file and category row; a NULL category becomes Uncategorized."""
+        with self.lock:
+            self.conn.execute(
+                "UPDATE files SET category = CASE WHEN category IS NULL OR "
+                "category = 0 THEN 5 ELSE 0 END "
+                "WHERE category IS NULL OR category IN (0, 5)")
+            # through negative codes: code is the primary key, so a direct
+            # swap would collide
+            self.conn.execute(
+                "UPDATE categories SET code = -1 - code WHERE code IN (0, 5)")
+            self.conn.execute(
+                "UPDATE categories SET code = CASE code WHEN -1 THEN 5 "
+                "ELSE 0 END WHERE code IN (-1, -6)")
+
     def _seed_categories(self) -> None:
         """Seed the locked Project VIC presets (codes 0-5) and give any category
         code already used by a file at least a placeholder row.
@@ -521,7 +558,7 @@ class CaseDB:
         missing rows are filled and locked.
         """
         with self.lock:
-            for code, name, color, notable in VIC_PRESETS:
+            for code, name, color, notable, pos in VIC_PRESETS:
                 row = self.conn.execute(
                     "SELECT name, locked FROM categories WHERE code=?", (code,)
                 ).fetchone()
@@ -529,20 +566,21 @@ class CaseDB:
                     self.conn.execute(
                         "INSERT INTO categories(code, name, color, notable, "
                         "position, active, locked) VALUES(?,?,?,?,?,1,1)",
-                        (code, name, color, notable, code),
+                        (code, name, color, notable, pos),
                     )
-                elif row["locked"] or code == 0 or not (row["name"] or "").strip():
+                elif (row["locked"] or code == UNCATEGORIZED_CATEGORY
+                      or not (row["name"] or "").strip()):
                     # keep locked presets in sync with the canonical VIC scheme
                     # (names/colors); an unnamed slot in an old case adopts it too
                     self.conn.execute(
                         "UPDATE categories SET name=?, color=?, notable=?, "
                         "position=?, active=1, locked=1 WHERE code=?",
-                        (name, color, notable, code, code),
+                        (name, color, notable, pos, code),
                     )
             used = [
                 r["category"] for r in self.conn.execute(
                     "SELECT DISTINCT category FROM files "
-                    "WHERE category IS NOT NULL AND category != 0"
+                    "WHERE category IS NOT NULL AND category NOT IN (0, 5)"
                 )
             ]
             for i, code in enumerate(sorted(used), start=1):
@@ -572,7 +610,7 @@ class CaseDB:
         ).fetchone()
 
     def category_name(self, code: int | None) -> str:
-        if not code:
+        if is_uncategorized(code):
             return "Uncategorized"
         row = self.get_category(code)
         if row and row["name"]:
@@ -605,7 +643,7 @@ class CaseDB:
                              "Project VIC preset and cannot be changed")
         allowed = {"name", "color", "notable", "position", "active"}
         fields = {k: v for k, v in fields.items() if k in allowed}
-        if not fields or code == 0 and "active" in fields:
+        if not fields or code == UNCATEGORIZED_CATEGORY and "active" in fields:
             fields.pop("active", None)
         if not fields:
             return
@@ -621,7 +659,7 @@ class CaseDB:
     def delete_category(self, code: int, *, reassign: bool = False) -> None:
         """Soft-delete: hide from the picker but keep the label on tagged files.
         If ``reassign`` is True, move those files to Uncategorized first."""
-        if code == 0:
+        if code == UNCATEGORIZED_CATEGORY:
             return
         row = self.get_category(code)
         if row is not None and row["locked"]:
@@ -630,7 +668,8 @@ class CaseDB:
         with self.lock:
             if reassign:
                 self.conn.execute(
-                    "UPDATE files SET category=0 WHERE category=?", (code,)
+                    "UPDATE files SET category=? WHERE category=?",
+                    (UNCATEGORIZED_CATEGORY, code)
                 )
             in_use = self.conn.execute(
                 "SELECT COUNT(*) n FROM files WHERE category=?", (code,)
@@ -706,6 +745,9 @@ class CaseDB:
                     )
                 return int(row["id"])
             fields.setdefault("ingested_at", time.time())
+            # set explicitly: a case made before schema v18 still has DEFAULT 0
+            if fields.get("category") is None:
+                fields["category"] = UNCATEGORIZED_CATEGORY
             keys = ["path", *fields.keys()]
             placeholders = ", ".join("?" * len(keys))
             cur = self.conn.execute(

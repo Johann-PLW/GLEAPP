@@ -452,8 +452,8 @@ def test_local_hash_stash(tmp_path):
     try:
         c.db.upsert_file("/x/a.jpg", kind="image", md5="a" * 32, category=1)
         c.db.upsert_file("/x/b.jpg", kind="image", md5="b" * 32, category=3)
-        c.db.upsert_file("/x/c.jpg", kind="image", md5="c" * 32, category=5)  # not notable
-        c.db.upsert_file("/x/d.jpg", kind="image", md5="d" * 32, category=0)  # uncategorized
+        c.db.upsert_file("/x/c.jpg", kind="image", md5="c" * 32, category=0)  # not notable
+        c.db.upsert_file("/x/d.jpg", kind="image", md5="d" * 32, category=5)  # uncategorized
         c.db.commit()
 
         res = stash.add(
@@ -728,7 +728,7 @@ def test_vic_presets_seeded_and_locked(tmp_path):
         # every case ships with the locked Project VIC presets 0-5
         rows = {r["code"]: r for r in c.db.list_categories()}
         assert sorted(rows) == [0, 1, 2, 3, 4, 5]
-        for code, name, color, notable in VIC_PRESETS:
+        for code, name, color, notable, _pos in VIC_PRESETS:
             assert rows[code]["name"] == name
             assert rows[code]["color"] == color
             assert rows[code]["notable"] == notable
@@ -773,7 +773,7 @@ def test_category_delete_keeps_label_when_in_use(tmp_path):
         assert c.db.category_name(code) == "Temp"
 
         c.db.delete_category(code, reassign=True)  # now wipe
-        assert c.db.get_file(fid)["category"] == 0
+        assert c.db.get_file(fid)["category"] == 5
         assert c.db.get_category(code) is None
     finally:
         c.close()
@@ -1359,7 +1359,7 @@ def test_report_scopes_and_md5(tmp_path, evidence):
     c = open_case(tmp_path / "rep", create=True, examiner="t")
     try:
         c.db.upsert_file("/a/1.jpg", kind="image", md5="a" * 32, category=1)
-        c.db.upsert_file("/a/2.jpg", kind="image", md5="b" * 32, category=0)
+        c.db.upsert_file("/a/2.jpg", kind="image", md5="b" * 32, category=5)
         c.db.upsert_file("/a/3.jpg", kind="image", md5="a" * 32, category=2)  # dup md5
         c.db.commit()
 
@@ -1370,11 +1370,11 @@ def test_report_scopes_and_md5(tmp_path, evidence):
         assert sorted(lines[1:]) == ["a" * 32, "b" * 32]
 
         # categorized-only scope
-        p = report.export_md5(c, tmp_path / "cat.csv", "category != 0")
+        p = report.export_md5(c, tmp_path / "cat.csv", "category != 5")
         assert p.read_text().splitlines()[1:] == ["a" * 32]
 
         # CSV report honours the where filter
-        p = report.export_csv(c, tmp_path / "r.csv", "category = 0")
+        p = report.export_csv(c, tmp_path / "r.csv", "category = 5")
         import csv as _csv
         rows = list(_csv.DictReader(open(p, encoding="utf-8")))
         assert len(rows) == 1 and rows[0]["md5"] == "b" * 32
@@ -1399,9 +1399,9 @@ def test_html_report_header_fields_grouping(tmp_path, evidence):
                          created_dt="2024-01-02T03:04:05",
                          camera="Apple iPhone 14", category=1)
         c.db.upsert_file("/a/two.jpg", kind="image", rel_path="a/two.jpg",
-                         md5="b" * 32, category=5)
+                         md5="b" * 32, category=0)
         c.db.upsert_file("/a/three.jpg", kind="image", rel_path="a/three.jpg",
-                         md5="d" * 32, category=0)
+                         md5="d" * 32, category=5)
         vid = tmp_path / "clip.mp4"
         vid.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 400)
         Image.new("RGB", (200, 150), (0, 0, 0)).save(c.thumb_dir / "vk.jpg")
@@ -1427,7 +1427,7 @@ def test_html_report_header_fields_grouping(tmp_path, evidence):
         assert "<nav class='toc'>" in doc
         assert "id='cat-1'" in doc and "id='cat-5'" in doc and "id='cat-0'" in doc
         assert "href='#cat-1'" in doc                     # TOC anchor
-        assert doc.index("id='cat-1'") < doc.index("id='cat-0'")
+        assert doc.index("id='cat-0'") < doc.index("id='cat-1'") < doc.index("id='cat-5'")
         # metadata collapsed by default; dark + blur toggles; blur on by default
         assert "<details class='meta'><summary>one.jpg</summary>" in doc
         assert "<details class='meta' open" not in doc
@@ -1462,12 +1462,12 @@ def test_html_report_header_fields_grouping(tmp_path, evidence):
         app.config["STATE"]["case"] = c
         cl = app.test_client()
         r = cl.post("/api/report", json={"format": ["csv"], "scope": "categories",
-                                         "categories": [1, 5]}).get_json()
+                                         "categories": [1, 0]}).get_json()
         assert r["ok"]
         import csv as _csv
         rows = list(_csv.DictReader(open(
             Path(r["dir"]) / "report_selection.csv", encoding="utf-8")))
-        assert {x["md5"] for x in rows} == {"a" * 32, "b" * 32, "e" * 32}  # cats 1+5, not 3
+        assert {x["md5"] for x in rows} == {"a" * 32, "b" * 32, "e" * 32}  # cats 1+0, not 5
 
         # header + fields + blur still round-trip as case prefs
         cl.post("/api/report", json={"format": ["html"], "scope": "all",

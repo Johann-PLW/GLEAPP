@@ -41,7 +41,8 @@ from pathlib import Path
 from typing import Generator, Iterator, Mapping
 
 from . import jsonstream, vicdetails
-from .db import PHASH_ALGO, PHOTODNA_ALGO, CaseDB, is_empty_file_hash
+from .db import (PHASH_ALGO, PHOTODNA_ALGO, CaseDB, is_empty_file_hash,
+                 is_uncategorized, severity_key)
 from .hashing import hamming
 
 _HEX = re.compile(r"^[0-9a-fA-F]+$")
@@ -103,7 +104,7 @@ def iter_json_entries(path: str | Path, *,
 
 def _category(low: Mapping[str, object]) -> int | None:
     # The first category field actually present. Category 0 is a real value
-    # (Project VIC's Uncategorized), so it must not fall through to the next
+    # (Project VIC's Non-pertinent), so it must not fall through to the next
     # field the way a falsy test would let it.
     for field in ("category", "mediacategory", "vicscategory"):
         val = low.get(field)
@@ -667,11 +668,11 @@ def sources_json(hits: list[dict]) -> str:
 
 def asserted_category(hits: list[dict]) -> int | None:
     """The category a file takes from its hits, when it has none of its own: the
-    lowest (most severe) one a notable set asserts. None when no notable set
-    asserts one."""
+    most severe one a notable set asserts (the lowest code, Non-pertinent last).
+    None when no notable set asserts one; Uncategorized (5) asserts nothing."""
     cats = [int(h["category"]) for h in hits
-            if h["kind"] == "known" and h["category"]]
-    return min(cats) if cats else None
+            if h["kind"] == "known" and not is_uncategorized(h["category"])]
+    return min(cats, key=severity_key) if cats else None
 
 
 def vic_record(db: CaseDB, hit: Mapping[str, object] | None) -> dict | None:

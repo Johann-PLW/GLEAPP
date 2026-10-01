@@ -375,21 +375,22 @@ A field appears only when the file has a value for it.
 Every case is seeded with **codes 0-5**, the Project VIC 2.0 (US) category
 scheme. They are **locked**: cannot be renamed, recolored, reordered, hidden or
 deleted (they show read-only with a 🔒 in the ⚙ Categories editor). Number keys
-`1`-`5` apply them; `0` clears a category.
+match the codes: `0` applies Non-pertinent, `1`-`4` apply codes 1-4, and `5`
+clears a category back to Uncategorized.
 
 | Code | Name | What it is for |
 |---|---|---|
-| **0** | Uncategorized | Not yet reviewed, no decision made. The default and the backlog you work down. Filter to it and categorize each file; the cursor advances to the next automatically, and ↻ Refresh clears the done ones. |
+| **0** | Non-pertinent | Everything else: not CSAM, no evidentiary value, family photos, memes, screenshots, app assets, OS/application files. Not notable. **An NSRL known-good hash hit auto-categorizes an uncategorized file here.** |
 | **1** | CAM (Child Abuse Material) | Depicts a real prepubescent child, or a minor not obviously past puberty, engaged in a sexual act; the lascivious exhibition of the genitals or pubic area; or sadistic/masochistic abuse of a minor. The most serious category: illegal contraband. Notable / evidential. |
 | **2** | Child Exploitative / Age Difficult | A sexualized depiction of a minor below the Category 1 threshold (non-penetrative sexual posing, sexualized "child erotica", a pubescent minor), or a person whose age is genuinely difficult to determine and could be a minor. Notable. |
 | **3** | CGI / Animation (Child Exploitative) | Computer-generated imagery, drawings, cartoons, anime or rendered art depicting Category 1 or 2 content. Not a real child, still exploitative material. Notable. |
 | **4** | Comparison Images (Non-pertinent) | Images kept for comparison or identification: known-series reference images, images used to identify a victim, location or offender, that are themselves non-pertinent to the primary offense. Also for non-pertinent images an examiner wants specifically flagged. Not notable. |
-| **5** | Non-pertinent | Everything else: not CSAM, no evidentiary value, family photos, memes, screenshots, app assets, OS/application files. Not notable. **An NSRL known-good hash hit auto-categorizes an uncategorized file here.** |
+| **5** | Uncategorized | Not yet reviewed, no decision made. The default and the backlog you work down. Filter to it and categorize each file; the cursor advances to the next automatically, and ↻ Refresh clears the done ones. |
 
 **Adding your own.** "+ Add category" in the editor creates **code 6** and up.
 Your categories are fully editable: rename, recolor (click the color swatch
 next to the name), delete (soft while in use), drag to reorder (they always
-sort after the presets). They get number-key shortcuts 6, 7, ... in order and
+sort after the presets). The first four get number-key shortcuts 6-9 in order and
 start with an auto-assigned color.
 
 ### Flags: an independent, per-file label
@@ -1485,8 +1486,9 @@ partition on a dual-boot disk is enough to do that.
 
 | Key | Action |
 |---|---|
-| `1`-`9` | categorize the selection (1-5 = VIC presets, 6+ = your categories) |
-| `0` | clear category |
+| `0`-`4` | categorize the selection with that VIC code (0 = Non-pertinent) |
+| `5` | clear category (Uncategorized) |
+| `6`-`9` | your own categories, in order |
 | `F` | find similar images to the focused file |
 | `H` | hex view of the focused file |
 | `I` | toggle the details pane |

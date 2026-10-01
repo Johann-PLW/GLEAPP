@@ -13,8 +13,8 @@ original name/path, MIME type and any existing category into the case DB.
 
 `export_vic` re-reads the original file and writes a copy with each entry's
 ``Category`` (and Comments / Tags) updated from the examiner's work, so the
-result can go back into Project VIC.  GLEAPP category codes map 1:1 to VIC codes;
-category 0 ("Uncategorized") maps to ``null``.
+result can go back into Project VIC.  GLEAPP category codes map 1:1 to VIC codes
+(0 is Non-pertinent); Uncategorized (5) maps to ``null``.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Iterator
 
 from . import jsonstream, vicdetails
+from .db import is_uncategorized
 
 
 def _as_text(value) -> str | None:
@@ -440,8 +441,9 @@ def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = Non
         # A category recorded on any entry of the group is the group's category.
         # Reading it only off the first entry would drop a recorded verdict that
         # happened to sit on the second.
-        cat = next((x.category for x in recs if x.category), None)
-        if cat:
+        cat = next((x.category for x in recs if not is_uncategorized(x.category)),
+                   None)
+        if cat is not None:
             fields["category"] = cat
             seen_cats.add(cat)
         if not r.exists:
@@ -523,7 +525,7 @@ def export_vic(case, dest: str | Path, *, only_categorized: bool = False) -> Pat
     by_media: dict[int, dict] = {}
     by_md5: dict[str, dict] = {}
     for row in case.db.iter_files():
-        info = {"category": row["category"] or 0, "notes": row["notes"],
+        info = {"category": row["category"], "notes": row["notes"],
                 "reviewed": row["reviewed"]}
         if row["media_id"] is not None:
             by_media[row["media_id"]] = info
@@ -538,18 +540,19 @@ def export_vic(case, dest: str | Path, *, only_categorized: bool = False) -> Pat
             if info is None:
                 info = by_md5.get((m.get("MD5") or "").strip().lower())
             if info is not None:
-                code = info["category"] or 0
-                m["Category"] = code if code else None
-                if code:
+                code = info["category"]
+                m["Category"] = None if is_uncategorized(code) else code
+                if m["Category"] is not None:
                     m["IsPrecategorized"] = True
                 if info["notes"]:
                     m["Comments"] = info["notes"]
                 updated += 1
-            if only_categorized and not m.get("Category"):
+            if only_categorized and m.get("Category") is None:
                 continue
             kept.append(m)
         c["Media"] = kept
-        c["TotalPrecategorized"] = sum(1 for m in c["Media"] if m.get("Category"))
+        c["TotalPrecategorized"] = sum(1 for m in c["Media"]
+                                       if m.get("Category") is not None)
 
     dest = Path(dest)
     dest.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")

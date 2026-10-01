@@ -86,10 +86,10 @@ def test_global_store_matches_across_a_case(tmp_path):
         assert hits == 2                          # known + tagged both match NSRL
         k = c.db.get_file(known)
         assert k["hashset_hit"] == "NSRL" and k["hashset_kind"] == "known-good"
-        assert k["category"] == 5                  # known-good hit -> Non-pertinent
+        assert k["category"] == 0                  # known-good hit -> Non-pertinent
         assert c.db.get_file(tagged)["category"] == 1   # examiner's call is kept
         assert c.db.get_file(other)["hashset_hit"] is None
-        assert (c.db.get_file(other)["category"] or 0) == 0
+        assert c.db.get_file(other)["category"] == 5     # still Uncategorized
 
         # the "Hide known-NSRL" filter drops the NSRL matches from the listing
         from gleapp.web.app import create_app

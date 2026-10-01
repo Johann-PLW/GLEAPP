@@ -99,12 +99,12 @@ def test_a_hit_in_both_project_vic_and_the_stash_keeps_both(tmp_path):
 
 
 def test_a_category_the_examiner_set_is_never_overridden(tmp_path):
-    case, (fid,) = _case(tmp_path, category=5)
+    case, (fid,) = _case(tmp_path, category=0)
     hashdb.import_hashset(case.db, _vics(tmp_path / "v.json", [_record(1, 1)]),
                           name="VICS test", kind="known")
     rematch_hashes(case)
     row = case.db.get_file(fid)
-    assert row["category"] == 5
+    assert row["category"] == 0
     assert row["hashset_mask"] == MATCH_VIC          # still flagged, just not moved
 
 

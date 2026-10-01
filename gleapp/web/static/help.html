@@ -386,15 +386,17 @@ number key, context menu, details pane) applies to the whole selection.</p>
 <p>Every case is seeded with <strong>codes 0–5</strong>, the Project&nbsp;VIC 2.0 (US)
 category scheme. They are <strong>locked</strong>: they cannot be renamed,
 recolored, reordered, hidden or deleted (in the ⚙&nbsp;Categories editor they show
-read-only with a 🔒). Number keys map to them: <kbd>1</kbd>–<kbd>5</kbd>, and
-<kbd>0</kbd> clears a category.</p>
+read-only with a 🔒). Number keys match the codes: <kbd>0</kbd> applies Non-pertinent,
+<kbd>1</kbd>–<kbd>4</kbd> apply codes 1–4, and <kbd>5</kbd> clears a category back to
+Uncategorized.</p>
 <table>
   <tr><th>Code</th><th>Name</th><th>What it is for</th></tr>
   <tr>
-    <td><b>0</b></td><td>Uncategorized</td>
-    <td>Not yet reviewed, no decision made. The default state and the backlog you
-    work down. Filter to it and categorize each file; the cursor advances to the
-    next one automatically, and ↻&nbsp;Refresh clears the done ones from view.</td>
+    <td><b>0</b></td><td>Non-pertinent</td>
+    <td>Everything else: not child-exploitation material and of no evidentiary
+    value for this offense: family photos, memes, screenshots, app assets, OS and
+    application files. Not notable. <strong>An NSRL known-good hash hit
+    auto-categorizes an uncategorized file here.</strong></td>
   </tr>
   <tr>
     <td><b>1</b></td><td>CAM (Child Abuse Material)</td>
@@ -425,18 +427,17 @@ read-only with a 🔒). Number keys map to them: <kbd>1</kbd>–<kbd>5</kbd>, an
     notable.</td>
   </tr>
   <tr>
-    <td><b>5</b></td><td>Non-pertinent</td>
-    <td>Everything else: not child-exploitation material and of no evidentiary
-    value for this offense: family photos, memes, screenshots, app assets, OS and
-    application files. Not notable. <strong>An NSRL known-good hash hit
-    auto-categorizes an uncategorized file here.</strong></td>
+    <td><b>5</b></td><td>Uncategorized</td>
+    <td>Not yet reviewed, no decision made. The default state and the backlog you
+    work down. Filter to it and categorize each file; the cursor advances to the
+    next one automatically, and ↻&nbsp;Refresh clears the done ones from view.</td>
   </tr>
 </table>
 <p><strong>Adding your own.</strong> The ⚙&nbsp;Categories editor's "+ Add category"
 creates <strong>code 6</strong> and up. Your categories are fully editable:
 rename, recolor (click the color swatch next to the name), delete (soft-deleted
 while in use so labels are kept), drag to reorder (they always sort after the
-presets). They get number-key shortcuts 6, 7, ... in order and start with an
+presets). The first four get number-key shortcuts 6–9 in order and start with an
 auto-assigned color.</p>
 
 <h3 id="flags">Flags: an independent, per-file label</h3>
@@ -1475,8 +1476,9 @@ that.</p>
 
 <h2 id="keys">17. Keyboard shortcuts</h2>
 <table>
-  <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>categorize the selection (1–5 = VIC presets, 6+ = your categories)</td></tr>
-  <tr><td><kbd>0</kbd></td><td>clear category</td></tr>
+  <tr><td><kbd>0</kbd>–<kbd>4</kbd></td><td>categorize the selection with that VIC code (0 = Non-pertinent)</td></tr>
+  <tr><td><kbd>5</kbd></td><td>clear category (Uncategorized)</td></tr>
+  <tr><td><kbd>6</kbd>–<kbd>9</kbd></td><td>your own categories, in order</td></tr>
   <tr><td><kbd>F</kbd></td><td>find similar images to the focused file</td></tr>
   <tr><td><kbd>H</kbd></td><td>hex view of the focused file</td></tr>
   <tr><td><kbd>I</kbd></td><td>toggle the details pane</td></tr>
