@@ -2815,6 +2815,19 @@ function updateScreenInfo(scr) {
     btn.textContent = "Re-run screening";
   }
 }
+// The sidebar is narrow, so a long job message is cut off with an ellipsis; hovering
+// the bar shows all of it. Several jobs write the text, so the tooltip follows it.
+{
+  const bar = $("#taskProg");
+  if (bar) {
+    const sync = () => {
+      const t = bar.querySelector(".jbtxt")?.textContent || "";
+      const p = bar.querySelector(".jbpct")?.textContent || "";
+      bar.title = p ? `${t}\n${p}` : t;
+    };
+    new MutationObserver(sync).observe(bar, { childList: true, characterData: true, subtree: true });
+  }
+}
 /* Poll the shared background job and mirror its progress into a
    section-local status line (so each action reports where it lives: "Retry
    failed files" under Other, "Re-scan for duplicates" under Display,
@@ -4308,7 +4321,12 @@ function renderSourcePanel(list) {
   if (!el) return;
   list = list || [];
   if (!list.length) { el.innerHTML = ""; return; }
-  el.innerHTML = list.map(s => {
+  // collapsible like the sections below it: closed when the case opens, and left as
+  // the examiner set it when the list is drawn again
+  const open = !!$("#srcFold")?.open;
+  el.innerHTML = `<details class="fsec" id="srcFold"${open ? " open" : ""}>`
+    + `<summary>Source storage (${list.length})</summary><div class="fbody">`
+    + list.map(s => {
     const ok = s.status === "ok";
     const state = ok ? "" : ` <span style="color:#c98a2b" title="${esc(s.path)}">(${esc(s.status)})</span>`;
     const image = s.format === "ewf" || s.format === "raw";
@@ -4378,7 +4396,7 @@ function renderSourcePanel(list) {
         <span class="muted">· ${(s.files || 0).toLocaleString()} files · ${mode}</span>${state}</summary>
       <div class="srcd-body">${origin}${vols}</div>
       </details><div style="margin-top:2px">${btn}</div></div>`;
-  }).join("");
+  }).join("") + "</div></details>";
   const post = (url, body) => api(url, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
