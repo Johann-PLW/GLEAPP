@@ -883,6 +883,10 @@
   <label title="A LAVA project folder: the media, a location map per geolocated file and an overview, the video key frames, and the artifact tables LAVA opens. Built offline from the basemap you imported. This one takes minutes rather than seconds, and the bar at the bottom follows it."><input type="checkbox" class="rfmt" value="lava"> LAVA report
     <span class="muted" style="font-size:11px">— a folder LAVA opens; takes longer than the others</span></label>
 
+  <div style="margin:12px 0 6px"><b>Images</b></div>
+  <label title="For discovery, when the images themselves cannot be handed over. The HTML report keeps every field, category, flag and map but carries no thumbnail, full-size copy or video frame, and says so in its header; the KMZ carries no thumbnails. CSV, JSON, the MD5 list and Project VIC JSON never carry images. A LAVA report is built around the media, so it is unavailable while this is ticked."><input type="checkbox" id="rNoMedia"> Metadata only — no images
+    <span class="muted" style="font-size:11px">— no thumbnails, full-size copies or video frames in any format (for discovery)</span></label>
+
   <div id="rhMapsRow" style="display:none">
     <div style="margin:12px 0 6px"><b>Maps</b></div>
     <label><input type="checkbox" id="rhMaps" checked> Draw location maps
@@ -907,6 +911,7 @@
       </span>
     </label>
 
+    <div id="rhMediaOpts">
     <div style="margin:14px 0 6px"><b>Media</b></div>
     <label><input type="checkbox" id="rhFull" checked> Include full-size images
       <span class="muted" style="font-size:11px">— copied into a folder beside the report; click a thumbnail to open one in a new tab</span></label>
@@ -914,6 +919,7 @@
       <span class="muted" style="font-size:11px">— copied into the same folder; click to play in a new tab</span></label>
     <label><input type="checkbox" id="rhBlur" checked> Blur images by default
       <span class="muted" style="font-size:11px">— whoever opens this report can still toggle it off with the "Blur images" button</span></label>
+    </div>
 
     <div style="margin:14px 0 6px"><b>Fields under each image</b></div>
     <div id="rptFields" class="rfields"></div>

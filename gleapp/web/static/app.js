@@ -2624,6 +2624,7 @@ async function openReportDlg() {
   $("#rhVideo").checked = p.full_videos !== false;
   $("#rhBlur").checked = p.blur !== false;
   $("#rhMaps").checked = p.maps !== false;
+  $("#rNoMedia").checked = p.no_media === true;
   $("#rhMapsRow").style.display = state.basemap ? "" : "none";
   const chosen = new Set(p.fields || ["name", "created_dt", "md5", "hash_matches", "vic_record",
     "vic_series", "vic_flags", "vic_tags", "vic_exif"]);
@@ -2661,6 +2662,13 @@ function setRptLogo(uri) {
 function syncRptHtmlOpts() {
   const on = $("#reportDlg").querySelector('.rfmt[value=html]').checked;
   $("#rptHtmlOpts").style.display = on ? "" : "none";
+  // metadata only: the media choices do not apply, and LAVA (built around the
+  // media) cannot be written
+  const noMedia = $("#rNoMedia").checked;
+  $("#rhMediaOpts").style.display = noMedia ? "none" : "";
+  const lava = $("#reportDlg").querySelector('.rfmt[value=lava]');
+  if (noMedia) lava.checked = false;
+  lava.disabled = noMedia;
 }
 $("#rhLogoFile").addEventListener("change", e => {
   const f = e.target.files[0];
@@ -2672,7 +2680,7 @@ $("#rhLogoFile").addEventListener("change", e => {
 });
 $("#rhLogoClear").onclick = () => { $("#rhLogoFile").value = ""; setRptLogo(null); };
 $("#reportDlg").addEventListener("change", e => {
-  if (e.target.classList.contains("rfmt")) syncRptHtmlOpts();
+  if (e.target.classList.contains("rfmt") || e.target.id === "rNoMedia") syncRptHtmlOpts();
   if (e.target.name === "rscope") syncRptScope();
 });
 
@@ -2710,6 +2718,7 @@ $("#reportGo").onclick = async () => {
   body.full_videos = $("#rhVideo").checked;
   body.blur = $("#rhBlur").checked;
   body.maps = $("#rhMaps").checked;
+  body.no_media = $("#rNoMedia").checked;
   closeReportDlg();
   const r = await api("/api/report", {
     method: "POST", headers: { "Content-Type": "application/json" },

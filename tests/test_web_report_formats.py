@@ -187,3 +187,86 @@ def test_maps_are_drawn_when_the_request_says_nothing(tmp_path, monkeypatch):
     cl.post("/api/report", json={"format": ["html"], "scope": "all"})
     _wait_for_export(cl)
     assert seen.get("maps") is True, seen
+
+
+def test_the_dialog_offers_metadata_only_and_sends_it():
+    dlg = _dialog()
+    assert 'id="rNoMedia"' in dlg, "the export dialog has no metadata-only control"
+    js = APP_JS.read_text(encoding="utf-8")
+    assert 'body.no_media = $("#rNoMedia").checked;' in js, "the dialog does not send it"
+    assert '$("#rNoMedia").checked = p.no_media === true;' in js, "the choice is not restored"
+
+
+def test_a_metadata_only_html_report_holds_no_picture_of_any_file(tmp_path):
+    """For discovery: every field stays, and no thumbnail, full-size copy or video
+    frame is embedded or written beside the report."""
+    from gleapp.web.app import create_app              # pylint: disable=import-outside-toplevel
+    path = _case_with_one_image(tmp_path)
+    cl = create_app(None).test_client()
+    cl.post("/api/case/open", json={"path": str(path)})
+
+    # the control: an ordinary report does carry the picture
+    cl.post("/api/report", json={"format": ["html"], "scope": "all"})
+    job = _wait_for_export(cl)
+    plain = Path(job["stats"]["written"][0])
+    page = plain.read_text(encoding="utf-8")
+    assert "class='rimg" in page and "data:image/jpeg;base64," in page
+    assert (plain.parent / f"{plain.stem}_media").is_dir()
+
+    cl.post("/api/report", json={"format": ["html"], "scope": "all", "no_media": True})
+    job = _wait_for_export(cl)
+    out = Path(job["stats"]["written"][0])
+    assert out.name == "report_metadata.html", "it must not overwrite the report with pictures"
+    page = out.read_text(encoding="utf-8")
+    assert "class='rimg" not in page and "class='thumbwrap'" not in page
+    assert "data:image/jpeg;base64," not in page
+    assert "id='btnBlur'" not in page
+    assert not (out.parent / f"{out.stem}_media").exists()
+    assert "Not included: metadata only" in page
+    assert "<details class='meta' open><summary>a.jpg</summary>" in page
+    assert cl.get("/api/report/prefs").get_json()["no_media"] is True
+
+
+def test_a_metadata_only_kmz_carries_no_thumbnail(tmp_path):
+    import zipfile                                     # pylint: disable=import-outside-toplevel
+    from gleapp import report                          # pylint: disable=import-outside-toplevel
+    from gleapp.case import open_case                  # pylint: disable=import-outside-toplevel
+    case = open_case(_case_with_one_image(tmp_path))
+    with case.db.lock:
+        case.db.conn.execute("UPDATE files SET gps_lat=28.5, gps_lon=-81.4")
+        case.db.conn.commit()
+    with_pic = report.export_kml(case, tmp_path / "a.kmz")
+    without = report.export_kml(case, tmp_path / "b.kmz", thumbs=False)
+    case.close()
+    with zipfile.ZipFile(with_pic) as z:
+        assert any(n.endswith(".jpg") for n in z.namelist())
+    with zipfile.ZipFile(without) as z:
+        assert z.namelist() == ["doc.kml"]
+        kml = z.read("doc.kml").decode("utf-8")
+    assert "<img" not in kml and "<Placemark>" in kml
+
+
+def test_lava_is_refused_when_the_export_is_metadata_only(tmp_path):
+    from gleapp.web.app import create_app              # pylint: disable=import-outside-toplevel
+    path = _case_with_one_image(tmp_path)
+    cl = create_app(None).test_client()
+    cl.post("/api/case/open", json={"path": str(path)})
+    r = cl.post("/api/report", json={"format": ["html", "lava"], "scope": "all",
+                                     "no_media": True})
+    assert r.status_code == 400
+    assert not cl.get("/api/job").get_json()["running"]
+
+
+def test_a_report_without_media_removes_the_folder_an_earlier_export_left(tmp_path):
+    """Written over a report that had a media folder, a metadata-only report must
+    not end up sitting beside that folder of pictures."""
+    from gleapp import report                          # pylint: disable=import-outside-toplevel
+    from gleapp.case import open_case                  # pylint: disable=import-outside-toplevel
+    case = open_case(_case_with_one_image(tmp_path))
+    dest = tmp_path / "out" / "r.html"
+    dest.parent.mkdir()
+    report.export_html(case, dest, maps=False)
+    assert any((tmp_path / "out" / "r_media").rglob("*.*"))
+    report.export_html(case, dest, maps=False, thumbs=False)
+    case.close()
+    assert not (tmp_path / "out" / "r_media").exists()

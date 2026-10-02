@@ -2381,6 +2381,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "full_videos": case.db.get_meta("report_full_videos") != "0",
             "maps": case.db.get_meta("report_maps") != "0",
             "blur": case.db.get_meta("report_blur") != "0",
+            "no_media": case.db.get_meta("report_no_media") == "1",
         })
 
     @app.post("/api/report")
@@ -2403,6 +2404,12 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         full_videos = body.get("full_videos", True)
         want_maps = body.get("maps", True)
         blur = body.get("blur", True)
+        no_media = bool(body.get("no_media", False))
+        if no_media and "lava" in fmts:
+            # a LAVA project is built around the media it copies; it has no
+            # metadata-only form, so refuse rather than write images anyway
+            abort(400, description="a LAVA report carries the media itself and cannot be "
+                                   "metadata-only; untick LAVA or Metadata only")
         if header is not None:  # remember for next time (logo can be large - cap it)
             store = dict(header)
             if isinstance(store.get("logo"), str) and len(store["logo"]) > 4_000_000:
@@ -2416,8 +2423,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case.db.set_meta("report_full_videos", "1" if full_videos else "0")
         case.db.set_meta("report_maps", "1" if want_maps else "0")
         case.db.set_meta("report_blur", "1" if blur else "0")
+        case.db.set_meta("report_no_media", "1" if no_media else "0")
 
-        tz = case.db.get_meta("display_tz") or appconfig.get_timezone()
+        tz =case.db.get_meta("display_tz") or appconfig.get_timezone()
 
         tag = "" if not where else "_" + {
             "categorized only": "categorized",
@@ -2426,6 +2434,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "all files, Project VIC matches only": "vicmatches",
             "all files, Project VIC matches left out": "novicmatches",
         }.get(label, "selection")
+        if no_media:
+            # its own name, so it never overwrites a report that carries pictures
+            tag += "_metadata"
 
         # A LAVA project stages every file's media, draws a locator map for each
         # geolocated one and copies the frames out of every video, and an HTML
@@ -2447,7 +2458,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                         case, fmts, out, tag, where, label, header=header,
                         fields=fields, full_images=full_images,
                         full_videos=full_videos, maps=want_maps, tz=tz, blur=blur,
-                        by_flag=by_flag, only_flags=only_flags,
+                        no_media=no_media, by_flag=by_flag, only_flags=only_flags,
                         only_categorized=body.get("scope") == "categorized"
                         or bool(body.get("only_categorized")),
                         progress=lambda d, t: j.update(done=d, total=t),
@@ -2468,7 +2479,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             made = _write_reports(
                 case, fmts, out, tag, where, label, header=header, fields=fields,
                 full_images=full_images, full_videos=full_videos,
-                maps=want_maps, tz=tz, blur=blur, by_flag=by_flag, only_flags=only_flags,
+                maps=want_maps, tz=tz, blur=blur, no_media=no_media,
+                by_flag=by_flag, only_flags=only_flags,
                 only_categorized=body.get("scope") == "categorized"
                 or bool(body.get("only_categorized")))
         except FileNotFoundError as exc:
@@ -2588,13 +2600,17 @@ REPORT_FORMATS = ("html", "csv", "json", "kml", "md5", "vic", "lava")
 
 def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
                    full_images, full_videos, maps, tz, only_categorized, blur=True,
-                   by_flag=False, only_flags=None,
+                   no_media=False, by_flag=False, only_flags=None,
                    progress=None, stage_cb=None) -> list[str]:
     """Write every picked format into ``out`` and return the paths written.
 
     Shared by the inline route and the job the LAVA format runs in, so the two
     cannot drift into writing different things for the same request.
+    ``no_media`` leaves every picture out of the HTML report and the KMZ; the
+    CSV, JSON, MD5 list and Project VIC JSON never carry one.
     """
+    if no_media and "lava" in fmts:
+        raise ValueError("a LAVA report cannot be metadata-only")
     made: list[str] = []
     if "csv" in fmts:
         made.append(str(report.export_csv(case, out / f"report{tag}.csv", where, tz=tz)))
@@ -2608,9 +2624,11 @@ def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
             case, out / f"report{tag}.html", where,
             header=header, fields=fields, scope_label=label,
             full_images=full_images, full_videos=full_videos, tz=tz, maps=maps,
-            blur=blur, by_flag=by_flag, only_flags=only_flags, progress=progress)))
+            blur=blur, thumbs=not no_media, by_flag=by_flag, only_flags=only_flags,
+            progress=progress)))
     if "kml" in fmts:
-        made.append(str(report.export_kml(case, out / f"geolocation{tag}.kmz", where)))
+        made.append(str(report.export_kml(case, out / f"geolocation{tag}.kmz", where,
+                                          thumbs=not no_media)))
     if "md5" in fmts:
         made.append(str(report.export_md5(case, out / f"md5{tag}.csv", where)))
     if "vic" in fmts:
