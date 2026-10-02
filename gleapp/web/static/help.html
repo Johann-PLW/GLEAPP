@@ -116,7 +116,7 @@ case.</p>
 <ul>
   <li><em>Face / skin tone pre-processing</em>: on by default, and can be run later.</li>
   <li><em>Video preview key frames</em>: default 6.</li>
-  <li><em>Copy media out of extraction archives</em>: off keeps the case small but the
+  <li><em>Copy media out of extraction/acquisition into the case</em>: off keeps the case small but the
   archive must stay in place. On makes the case self-contained.</li>
   <li><em>Expand archives found inside the sources</em>: off by default. Opens each
   <code>.zip</code>, <code>.7z</code>, <code>.tar</code> or <code>.gz</code> found inside a
@@ -154,7 +154,7 @@ is blocked until then.</p>
   <tr><td><code>views/</code></td><td>full-size JPEGs transcoded from formats the browser can't show (HEIC, TIFF, KTX, ...)</td></tr>
   <tr><td><code>cache/</code></td><td>on-demand copies for the viewer (bounded, oldest evicted)</td></tr>
   <tr><td><code>tmp/</code></td><td>on-demand copies for processing, removed after use</td></tr>
-  <tr><td><code>staged/</code></td><td>archive members copied into the case, when <em>Copy media out of extraction archives</em> is on</td></tr>
+  <tr><td><code>staged/</code></td><td>archive members copied into the case, when <em>Copy media out of extraction/acquisition into the case</em> is on</td></tr>
   <tr><td><code>extracted/</code></td><td>media unpacked from container files: archives (<code>.zip</code> / <code>.tar</code> / <code>.gz</code>) found in a source, Snapchat <code>LZC</code> bundles, and videos joined from ExoPlayer caches</td></tr>
   <tr><td><code>reports/</code></td><td>exported reports: CSV/JSON, MD5 lists, KMZ, Project VIC exports, LAVA projects</td></tr>
   <tr><td><code>backups/</code></td><td>timestamped snapshot copies of <code>case.gleapp</code></td></tr>

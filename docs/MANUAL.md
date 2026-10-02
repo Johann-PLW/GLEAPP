@@ -86,7 +86,7 @@ your user settings, not in any case.
 
 - *Face / skin tone pre-processing*: on by default, and can be run later.
 - *Video preview key frames*: default 6.
-- *Copy media out of extraction archives*: off keeps the case small but the
+- *Copy media out of extraction/acquisition into the case*: off keeps the case small but the
   archive must stay in place. On makes the case self-contained.
 - *Expand archives found inside the sources*: off by default. Opens each `.zip`,
   `.7z`, `.tar` or `.gz` found inside a source and registers the images and
@@ -128,7 +128,7 @@ One case is one folder. Inside it:
 | `views/` | full-size JPEGs transcoded from formats the browser can't show (HEIC, TIFF, KTX, ...) |
 | `cache/` | on-demand copies for the viewer (bounded, oldest evicted) |
 | `tmp/` | on-demand copies for processing, removed after use |
-| `staged/` | archive members copied into the case, when *Copy media out of extraction archives* is on |
+| `staged/` | archive members copied into the case, when *Copy media out of extraction/acquisition into the case* is on |
 | `extracted/` | media unpacked from container files: archives (`.zip` / `.tar` / `.gz`) found in a source, Snapchat `LZC` bundles, and videos joined from ExoPlayer caches |
 | `reports/` | exported reports: CSV/JSON, MD5 lists, KMZ, Project VIC exports, LAVA projects |
 | `backups/` | timestamped snapshot copies of `case.gleapp` |
