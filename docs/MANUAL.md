@@ -1255,6 +1255,11 @@ want, or current selection) and one or more **formats**:
 | Project VIC JSON | the original VIC file with Category / Comments / Tags written back, keyed by MediaID and MD5 (VIC cases); Uncategorized is written as `null` |
 | LAVA report | a project folder LAVA opens: the media, a location map for each geolocated file the basemap covers and an overview map drawn offline from the basemap you imported (§19), the video key frames, and the artifact tables. Takes minutes rather than seconds, so it runs as a job and the bar at the bottom follows it |
 
+Each part of the dialog (Which files, Format, Media, Maps, Report header,
+Fields under each image) is a box you can fold by clicking its heading.
+**Which files** and **Fields under each image** start open; the rest start
+folded.
+
 Filesystem / ingest times in the HTML and CSV are rendered in the case's
 **timezone** (section 3), with the abbreviation shown (e.g. `2024-07-01 11:00
 CDT`); the HTML header states which zone. **Captured (EXIF)** is left as
@@ -1297,7 +1302,8 @@ street names the basemap holds, where Pillow can supply a scalable font. Untick
 **Draw location maps** in the Export dialog, or pass `--no-maps` to `gleapp
 report`, to leave them out.
 
-**Media** (dialog checkboxes, on by default, saved with the case):
+**Media** (dialog checkboxes, on by default, saved with the case; shown while
+**HTML report** is ticked and **Metadata only** is not):
 
 - **Include full-size images**: each original image is copied, byte for byte,
   into a folder beside the report named after it (`report.html` gets
@@ -1318,6 +1324,31 @@ and its `_media` folder together when you copy or hand over a report: the links
 are relative, so they work wherever the two go, and nothing else. Exporting again
 replaces the folder. CLI `report --thumbs-only` for thumbnails only, with no
 folder.
+
+### Metadata only (no images and videos)
+
+For discovery, when the images and videos themselves cannot be handed over,
+tick **Metadata only — no images and videos**, the first option in the
+dialog's **Media** section. It applies to every format in that export:
+
+- **HTML report**: every field you ticked, the categories, flags and location
+  maps, with no thumbnail, full-size copy or video frame of any file, and no
+  `_media` folder. The header gets an **Images** row stating that none are
+  included, each card's metadata starts open, and there is no Blur switch.
+- **KMZ**: the placemarks and their details, with no thumbnails.
+- **CSV, JSON, MD5 list, Project VIC JSON**: unchanged; they never carry images.
+- **LAVA report**: unavailable (greyed out) while the option is ticked, because
+  a LAVA project is built around the media.
+
+Outputs get a `_metadata` suffix (`report_metadata.html`,
+`geolocation_metadata.kmz`, ...), so they never overwrite a report that carries
+pictures. The choice is saved with the case, and while it is on the Media
+section opens by itself when you open the dialog, so it is never hidden in a
+folded box. An HTML export that writes no media folder also removes the
+`_media` folder an earlier export of the same name left beside it. The
+`reports/` folder can still hold earlier exports that do carry pictures, so
+hand over the metadata-only files themselves, not the whole folder. CLI:
+`gleapp report --no-media` (refused together with `--format lava`).
 
 A **Report contents** breakdown near the top gives the file count for the
 report's scope, split by type and by category (with a percentage and a color
