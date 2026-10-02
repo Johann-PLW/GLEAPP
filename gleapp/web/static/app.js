@@ -4145,8 +4145,9 @@ function showLauncher(ctx) {
   $("#optSavedFlagsN").textContent = `(${nf})`;
   $("#optSavedCatsRow").title = "Adds: " + (ss.categories || []).map(c => `${c.name} ${c.code}`).join(", ");
   $("#optSavedFlagsRow").title = "Adds: " + (ss.flags || []).map(f => f.name).join(", ");
-  $("#optSavedCats").checked = nc > 0 && ss.use_categories !== false;
-  $("#optSavedFlags").checked = nf > 0 && ss.use_flags === true;
+  // never ticked for you: the examiner chooses each time
+  $("#optSavedCats").checked = false;
+  $("#optSavedFlags").checked = false;
   watchLauncherJob();                  // an import may already be running
 }
 /* The launcher follows a background import started from its ☰ Menu (a map, reference
@@ -4399,10 +4400,8 @@ $("#createGo").onclick = async () => {
     body: JSON.stringify({
       path, name: $("#newName").value.trim(), examiner: $("#newExaminer").value.trim(),
       use_stash: $("#optStash").checked,
-      ...((Lr.savedSet && (Lr.savedSet.categories.length || Lr.savedSet.flags.length)) ? {
-        use_categories: Lr.savedSet.categories.length ? $("#optSavedCats").checked : !!Lr.savedSet.use_categories,
-        use_flags: Lr.savedSet.flags.length ? $("#optSavedFlags").checked : !!Lr.savedSet.use_flags
-      } : {})
+      use_categories: $("#optSavedCats").checked,
+      use_flags: $("#optSavedFlags").checked
     })
   }).catch(() => ({ error: true, message: "request failed" }));
   if (cr.error) return fail(cr.message || "Could not create case");

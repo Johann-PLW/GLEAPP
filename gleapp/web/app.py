@@ -525,12 +525,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             # only write the flag when the examiner turned it off at creation
             state["case"].db.set_meta("use_stash", "0")
         # the examiner's saved categories / flags (savedset.py), each only if
-        # its New case box was ticked; how the boxes were left is remembered
-        if "use_categories" in data or "use_flags" in data:
-            use_c, use_f = bool(data.get("use_categories")), bool(data.get("use_flags"))
-            savedset.set_defaults(use_categories=use_c, use_flags=use_f)
-            if use_c or use_f:
-                _apply_saved_set(state["case"], cats=use_c, fls=use_f)
+        # its New case box was ticked
+        use_c, use_f = bool(data.get("use_categories")), bool(data.get("use_flags"))
+        if use_c or use_f:
+            _apply_saved_set(state["case"], cats=use_c, fls=use_f)
         # Deliberately NOT pushed to "recent" yet - only cases that get files
         # ingested land there (see _run_job), so abandoned shells don't show.
         return jsonify({"ok": True, "case": state["case"].db.get_meta("case_name")})

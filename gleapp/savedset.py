@@ -25,7 +25,7 @@ def _path():
 
 
 def load() -> dict:
-    """``{categories: [...], flags: [...], use_categories, use_flags}``."""
+    """``{categories: [...], flags: [...]}``."""
     try:
         raw = json.loads(_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -36,21 +36,11 @@ def load() -> dict:
             if isinstance(c, dict) and str(c.get("name") or "").strip()]
     flags = [f for f in raw.get("flags") or []
              if isinstance(f, dict) and str(f.get("name") or "").strip()]
-    return {"categories": cats, "flags": flags,
-            "use_categories": raw.get("use_categories") is not False,
-            "use_flags": raw.get("use_flags") is True}
+    return {"categories": cats, "flags": flags}
 
 
 def _write(data: dict) -> None:
     _path().write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def set_defaults(*, use_categories: bool, use_flags: bool) -> None:
-    """Remember how the New case checkboxes were left."""
-    data = load()
-    data["use_categories"] = bool(use_categories)
-    data["use_flags"] = bool(use_flags)
-    _write(data)
 
 
 def case_categories(db) -> list[dict]:

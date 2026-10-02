@@ -82,7 +82,7 @@ your user settings, not in any case.
       MediaID, category, original path, MIME and victim-offender flags are
       imported. See §3 for how duplicate entries are handled.
 
-**Ingest options:**
+**Ingest options** (under **Processing options**, collapsed until you click it):
 
 - *Face / skin tone pre-processing*: on by default, and can be run later.
 - *Video preview key frames*: default 6.
@@ -105,8 +105,8 @@ your user settings, not in any case.
   (§12).
 - *Start with my saved categories* / *Start with my saved flags*: shown only
   once you have saved some with **Save as my set…** (§7). Each adds that part
-  of your saved set to the new case. The boxes remember how you left them;
-  categories start ticked, flags unticked.
+  of your saved set to the new case. Both start unticked;
+  you choose each time.
 
 Click **Create case & ingest**.
 

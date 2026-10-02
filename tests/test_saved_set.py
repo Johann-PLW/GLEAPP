@@ -25,11 +25,9 @@ def test_the_file_is_in_the_config_dir():
     assert savedset._path().parent == appconfig.config_dir()  # pylint: disable=protected-access
 
 
-def test_nothing_saved_reads_as_empty_with_categories_on_by_default():
+def test_nothing_saved_reads_as_empty():
     savedset._path().unlink(missing_ok=True)  # pylint: disable=protected-access
-    got = savedset.load()
-    assert got == {"categories": [], "flags": [], "use_categories": True,
-                   "use_flags": False}
+    assert savedset.load() == {"categories": [], "flags": []}
 
 
 def test_save_keeps_only_the_examiners_own_named_shown_categories(tmp_path):
@@ -203,8 +201,6 @@ def test_web_save_then_new_case_starts_with_the_set(tmp_path):
     names = [c["name"] for c in cl.get("/api/categories").get_json()]
     assert "Weapons" in names
     assert cl.get("/api/flags").get_json() == []
-    got = savedset.load()
-    assert got["use_categories"] is True and got["use_flags"] is False
 
     res = cl.post("/api/savedset/apply", json={"flags": True}).get_json()
     assert res["flags"] == [{"name": "Evidence", "status": "added"}]
@@ -227,3 +223,23 @@ def test_the_ui_has_the_buttons_dialog_and_new_case_boxes():
     assert html.count('data-setdlg="apply"') == 2
     assert 'id="setDlg"' in html
     assert 'id="optSavedCats"' in html and 'id="optSavedFlags"' in html
+
+
+def test_the_new_case_boxes_never_start_ticked():
+    js = (TEMPLATE.parents[1] / "static/app.js").read_text(encoding="utf-8")
+    assert '$("#optSavedCats").checked = false;' in js
+    assert '$("#optSavedFlags").checked = false;' in js
+    html = TEMPLATE.read_text(encoding="utf-8")
+    assert 'id="optSavedCats" checked' not in html
+    assert 'id="optSavedFlags" checked' not in html
+
+
+def test_the_ingest_options_sit_in_a_collapsed_section():
+    html = TEMPLATE.read_text(encoding="utf-8")
+    start = html.index('<details class="psec" id="procOpts">')
+    end = html.index("</details>", start)
+    sec = html[start:end]
+    assert "<summary>Processing options</summary>" in sec
+    for opt in ("optScreen", "optStash", "optSavedCats", "optSavedFlags", "optStage",
+                "optExpand", "optDocs", "optCarve", "optKf"):
+        assert f'id="{opt}"' in sec
