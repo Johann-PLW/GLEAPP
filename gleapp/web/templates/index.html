@@ -345,6 +345,10 @@
   #reportDlg .rgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
   #reportDlg .rfields{display:grid;grid-template-columns:1fr 1fr;gap:1px 12px;border:1px solid var(--line);border-radius:6px;padding:8px;max-height:180px;overflow:auto}
   #reportDlg .rfields label{margin:2px 0;font-size:12px}
+  #reportDlg details.rsec > summary{cursor:pointer;font-weight:700;margin:12px 0 6px;list-style:none}
+  #reportDlg details.rsec > summary::-webkit-details-marker{display:none}
+  #reportDlg details.rsec > summary::before{content:"\25B8 ";color:var(--muted,#8b93a3);display:inline-block;width:14px}
+  #reportDlg details.rsec[open] > summary::before{content:"\25BE "}
   #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg{z-index:100}
   /* intro video: over everything, launcher included; closes with the button, Esc, a click outside it, or its end */
   #introDlg{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:110;display:none;align-items:center;justify-content:center}
@@ -854,7 +858,7 @@
 
 <div id="reportDlg"><div class="box">
   <h2>Export</h2>
-  <div style="margin:6px 0"><b>Which files</b></div>
+  <details class="rsec" open><summary>Which files</summary>
   <label><input type="radio" name="rscope" value="all" checked> All files <span class="muted" id="scAll"></span></label>
   <label><input type="radio" name="rscope" value="categorized"> Categorized only <span class="muted" id="scCat"></span></label>
   <label><input type="radio" name="rscope" value="uncategorized"> Uncategorized only <span class="muted" id="scUncat"></span></label>
@@ -873,7 +877,8 @@
         <option value="exclude">Leave them out</option>
       </select></label>
   </div>
-  <div style="margin:12px 0 6px"><b>Format</b></div>
+  </details>
+  <details class="rsec" open><summary>Format</summary>
   <label><input type="checkbox" class="rfmt" value="html" checked> HTML report</label>
   <label><input type="checkbox" class="rfmt" value="csv"> CSV (full metadata)</label>
   <label><input type="checkbox" class="rfmt" value="json"> JSON</label>
@@ -882,20 +887,23 @@
   <label id="rfmtVic" style="display:none"><input type="checkbox" class="rfmt" value="vic"> Project VIC JSON</label>
   <label title="A LAVA project folder: the media, a location map per geolocated file and an overview, the video key frames, and the artifact tables LAVA opens. Built offline from the basemap you imported. This one takes minutes rather than seconds, and the bar at the bottom follows it."><input type="checkbox" class="rfmt" value="lava"> LAVA report
     <span class="muted" style="font-size:11px">— a folder LAVA opens; takes longer than the others</span></label>
+  </details>
 
-  <div style="margin:12px 0 6px"><b>Images</b></div>
+  <details class="rsec" open><summary>Files</summary>
   <label title="For discovery, when the images themselves cannot be handed over. The HTML report keeps every field, category, flag and map but carries no thumbnail, full-size copy or video frame, and says so in its header; the KMZ carries no thumbnails. CSV, JSON, the MD5 list and Project VIC JSON never carry images. A LAVA report is built around the media, so it is unavailable while this is ticked."><input type="checkbox" id="rNoMedia"> Metadata only — no images
     <span class="muted" style="font-size:11px">— no thumbnails, full-size copies or video frames in any format (for discovery)</span></label>
+  </details>
 
   <div id="rhMapsRow" style="display:none">
-    <div style="margin:12px 0 6px"><b>Maps</b></div>
+    <details class="rsec" open><summary>Maps</summary>
     <label><input type="checkbox" id="rhMaps" checked> Draw location maps
       <span class="muted" style="font-size:11px">(an overview, and a locator on each geolocated
       file, in the HTML report and the LAVA project)</span></label>
+    </details>
   </div>
 
   <div id="rptHtmlOpts">
-    <div style="margin:14px 0 6px"><b>Report header</b> <span class="muted" style="font-size:11px">— saved with the case</span></div>
+    <details class="rsec" open><summary>Report header <span class="muted" style="font-size:11px;font-weight:400">— saved with the case</span></summary>
     <div class="rgrid">
       <label>Agency<input type="text" id="rhAgency"></label>
       <label>Case number<input type="text" id="rhCase"></label>
@@ -910,19 +918,22 @@
         <button type="button" class="btn sm" id="rhLogoClear" style="display:none">Clear</button>
       </span>
     </label>
+    </details>
 
     <div id="rhMediaOpts">
-    <div style="margin:14px 0 6px"><b>Media</b></div>
+    <details class="rsec" open><summary>Media</summary>
     <label><input type="checkbox" id="rhFull" checked> Include full-size images
       <span class="muted" style="font-size:11px">— copied into a folder beside the report; click a thumbnail to open one in a new tab</span></label>
     <label><input type="checkbox" id="rhVideo" checked> Include videos
       <span class="muted" style="font-size:11px">— copied into the same folder; click to play in a new tab</span></label>
     <label><input type="checkbox" id="rhBlur" checked> Blur images by default
       <span class="muted" style="font-size:11px">— whoever opens this report can still toggle it off with the "Blur images" button</span></label>
+    </details>
     </div>
 
-    <div style="margin:14px 0 6px"><b>Fields under each image</b></div>
+    <details class="rsec" open><summary>Fields under each image</summary>
     <div id="rptFields" class="rfields"></div>
+    </details>
   </div>
 
   <div class="row" style="margin-top:14px">
