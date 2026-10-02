@@ -143,6 +143,32 @@ def test_every_file_windows_hashed_and_the_reader_reads_hashes_the_same(
     assert case.db.get_meta(f"archive:{name}:failed") == "5"
 
 
+# lznt1/text_100000.txt is two NTFS compression units, each stored in two clusters. The
+# second begins at cluster 1548 of the volume, which begins at byte 65,536 of the image,
+# and Windows wrote f7 b1 there: the unit's first chunk header.
+SECOND_UNIT = 65536 + 1548 * 4096
+# That file with its second unit read as zeros, which is what The Sleuth Kit 4.15.0
+# (icat) returned for the same changed image.
+SHORT_UNIT_SHA256 = "2178bd1ed448997552310b525dd2f83a6049978b291fe6afd0f8cb4ee2cc40b1"
+
+
+@pytest.mark.parametrize("stage", [False, True], ids=["on-demand", "copied-in"])
+def test_a_compressed_file_with_a_unit_that_ends_early_is_read_whole(tmp_path, image, stage):
+    """A compression unit can end at a zero chunk header, and the rest of it is zeros.
+    Until the vendored reader's 1.57 the file was read as its first 65,536 bytes."""
+    data = bytearray(image.read_bytes())
+    assert bytes(data[SECOND_UNIT:SECOND_UNIT + 2]) == b"\xf7\xb1"
+    data[SECOND_UNIT:SECOND_UNIT + 2] = b"\x00\x00"
+    changed = tmp_path / "short-unit.img"
+    changed.write_bytes(data)
+    case, _name = _ingest(tmp_path, changed, include_other=True, stage=stage)
+    process(case, screen=False, similar=False)
+    row = _rows(case)["lznt1/text_100000.txt"]
+    assert row["size"] == 100000
+    assert row["sha256"] == SHORT_UNIT_SHA256
+    assert not row["error"]
+
+
 def test_a_file_the_volume_holds_under_two_names_is_copied_once(tmp_path, image):
     case, name = _ingest(tmp_path, image, stage=True)
     rows = _rows(case)
