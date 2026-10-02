@@ -2625,6 +2625,8 @@ async function openReportDlg() {
   $("#rhBlur").checked = p.blur !== false;
   $("#rhMaps").checked = p.maps !== false;
   $("#rNoMedia").checked = p.no_media === true;
+  // a remembered "no images" must not sit unseen in a collapsed section
+  if (p.no_media === true) $("#rMediaSec").open = true;
   $("#rhMapsRow").style.display = state.basemap ? "" : "none";
   const chosen = new Set(p.fields || ["name", "created_dt", "md5", "hash_matches", "vic_record",
     "vic_series", "vic_flags", "vic_tags", "vic_exif"]);
@@ -2665,7 +2667,7 @@ function syncRptHtmlOpts() {
   // metadata only: the media choices do not apply, and LAVA (built around the
   // media) cannot be written
   const noMedia = $("#rNoMedia").checked;
-  $("#rhMediaOpts").style.display = noMedia ? "none" : "";
+  $("#rhMediaOpts").style.display = on && !noMedia ? "" : "none";
   const lava = $("#reportDlg").querySelector('.rfmt[value=lava]');
   if (noMedia) lava.checked = false;
   lava.disabled = noMedia;
