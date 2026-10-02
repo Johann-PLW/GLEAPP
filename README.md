@@ -569,7 +569,7 @@ gleapp -c CASE  similar   FILE_ID  [--threshold N] [--limit N]
 gleapp -c CASE  stats
 gleapp -c CASE  report    [--format {csv,json,html,kml,md5,vic,lava} ...]
                           [--scope {all,categorized,uncategorized}] [--where "SQL"]
-                          [--thumbs-only] [--no-maps] [--lava-thumbs] [--link]
+                          [--thumbs-only] [--no-media] [--no-maps] [--lava-thumbs] [--link]
 gleapp -c CASE  web       [--host H] [--port P] [--no-browser]
 gleapp -c CASE  desktop   # native window (offline)
 ```

@@ -169,12 +169,14 @@ def export_json(case: Case, dest: str | Path, where: str = "",
     return dest
 
 
-def export_kml(case: Case, dest: str | Path, where: str = "") -> Path:
+def export_kml(case: Case, dest: str | Path, where: str = "", *,
+               thumbs: bool = True) -> Path:
     """KMZ of every in-scope file that carries GPS coordinates.
 
     The archive bundles a thumbnail (or, for a video, its middle key frame)
     for each placemark, so clicking a pin in Google Earth shows the picture
-    right at its location.
+    right at its location. With ``thumbs=False`` it bundles no picture at all,
+    for a metadata-only export.
     """
     dest = Path(dest).with_suffix(".kmz")
     pts = _rows(case, _and("gps_lat IS NOT NULL AND gps_lon IS NOT NULL", where))
@@ -187,7 +189,7 @@ def export_kml(case: Case, dest: str | Path, where: str = "") -> Path:
     ]
     for d in pts:
         img_html = ""
-        thumb = _thumb_bytes(case, d)
+        thumb = _thumb_bytes(case, d) if thumbs else None
         if thumb:
             arc = f"files/{d['id']}.jpg"
             media[arc] = thumb
@@ -630,7 +632,7 @@ _HTML_HEAD = """<!doctype html><html class="{blur_cls}"><head><meta charset="utf
 """
 
 
-def _header_html(case: Case, header: dict | None) -> str:
+def _header_html(case: Case, header: dict | None, *, thumbs: bool = True) -> str:
     h = header or {}
     def g(k):
         return html.escape(str(h.get(k) or "")).replace("\n", "<br>")
@@ -644,7 +646,10 @@ def _header_html(case: Case, header: dict | None) -> str:
             ("Examiner", g("examiner") or html.escape(case.examiner)),
             ("Generated", _fmt_ts(time.time())),
             ("Times shown in", html.escape(timeutil.label(_TZ)))]
-    meta = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows if v)
+    if not thumbs:
+        rows.append(("Images", "Not included: metadata only. This report holds no image, "
+                               "thumbnail or video frame of any file."))
+    meta ="".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows if v)
     notes = f"<div class='hnotes'>{g('notes')}</div>" if h.get("notes") else ""
     return (f"<header class='rpt'>{logo_html}<div class='hmeta'>"
             f"<h1>{case_name or 'Media report'}</h1>"
@@ -1153,7 +1158,7 @@ def _copy_full_size(case: Case, d: dict, media_dir: Path, *, want_video: bool,
 
 def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
                full_images: bool, full_videos: bool, loc_map: str = "",
-               media_dir: Path | None = None) -> str:
+               media_dir: Path | None = None, thumbs: bool = True) -> str:
     code = d.get("category")
     catbar = (f"<div class='catbar' style='background:"
               f"{html.escape(categories.color(case.db, code))}'>"
@@ -1173,7 +1178,7 @@ def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
     is_video = d.get("kind") == "video"
     img = ""
     original = ""
-    if d.get("thumb"):
+    if thumbs and d.get("thumb"):
         src = _img_data_uri(thumb_root / d["thumb"])
         if src:
             cls = "rimg" + (" video" if is_video else "")
@@ -1223,8 +1228,10 @@ def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
               f"data-full='{html.escape(loc_map, quote=True)}' data-name='location of {name}' "
               f"alt='location of {name}' title='drawn on the imported offline basemap'>"
               if loc_map else "")
+    # with no picture on the card the metadata is all there is, so it starts open
+    meta_open = "" if thumbs else " open"
     return (f"<div class='card' id='file-{d['id']}'>{img}{catbar}{flagrow}"
-            f"<details class='meta'><summary>{name}</summary>{locimg}"
+            f"<details class='meta'{meta_open}><summary>{name}</summary>{locimg}"
             f"<div class='fields'>{''.join(parts)}</div></details></div>")
 
 
@@ -1251,9 +1258,14 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 only_flags: list[int] | None = None,
                 progress=None) -> Path:
     """Write the HTML report. ``progress(done, total)``, when given, is called as
-    each file's card is written, so the gallery's bottom bar can follow a long export."""
+    each file's card is written, so the gallery's bottom bar can follow a long export.
+
+    ``thumbs=False`` writes a metadata-only report: no thumbnail, full-size copy or
+    video frame of any file, embedded or beside it, and the header says so."""
     global _TZ
     _TZ = tz
+    if not thumbs:
+        full_images = full_videos = False
     dest = Path(dest)
     rows = _rows(case, where)
     total = len(rows)
@@ -1261,11 +1273,14 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
     # report links to them; only the thumbnails are embedded. The folder is this
     # report's own output, so an export replaces it rather than leaving files
     # from a previous export of a different scope behind.
+    # An export that writes no media folder still removes one an earlier export
+    # left, so a report never sits beside pictures it does not link to.
     media_dir = None
+    stale = dest.parent / f"{dest.stem}_media"
+    if stale.is_dir():
+        shutil.rmtree(stale)
     if full_images or full_videos:
-        media_dir = dest.parent / f"{dest.stem}_media"
-        if media_dir.is_dir():
-            shutil.rmtree(media_dir)
+        media_dir = stale
         media_dir.mkdir(parents=True, exist_ok=True)
     written = 0
     if progress:
@@ -1283,7 +1298,7 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
             case, rows, flavor=map_flavor, cap=map_cap)
 
     body = [_HTML_HEAD.format(case=cn, blur_cls="blur" if blur else "")]
-    body.append(_header_html(case, header))
+    body.append(_header_html(case, header, thumbs=thumbs))
     body.append(_summary_html(case, rows, scope_label, flag_mode=by_flag))
     body.append(_overview_html(case, overview_uri, map_tally, drawn_rows, marker_px))
     rptbar_html = (
@@ -1293,8 +1308,9 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
         "<button type='button' onclick=\"document.querySelectorAll("
         "'details.meta').forEach(d=>d.open=false)\">collapse all</button>"
         "<span class='sep'></span>"
-        "<button type='button' id='btnBlur' class='tgl'><span class='sw'></span>Blur images</button>"
-        "<button type='button' id='btnDark' class='tgl'><span class='sw'></span>Dark mode</button></div>")
+        + ("<button type='button' id='btnBlur' class='tgl'><span class='sw'></span>"
+           "Blur images</button>" if thumbs else "")
+        + "<button type='button' id='btnDark' class='tgl'><span class='sw'></span>Dark mode</button></div>")
 
     def _kind_grids(items: list[dict]) -> None:
         """One collapsible Images/Videos/Other grid per kind present."""
@@ -1307,7 +1323,7 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 body.append(_card_html(case, d, keys, thumb_root,
                                        full_images, full_videos,
                                        loc_map=loc_maps.get(d["id"], ""),
-                                       media_dir=media_dir))
+                                       media_dir=media_dir, thumbs=thumbs))
                 written += 1
                 if progress:
                     # a flag report shows a file once per flag, so cap at the total

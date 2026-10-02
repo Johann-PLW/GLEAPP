@@ -1227,6 +1227,10 @@ current selection) and one or more <strong>formats</strong>:</p>
   <tr><td>Project VIC JSON</td><td>the original VIC file with your Category / Comments / Tags written back, keyed by MediaID and MD5 (shown for VIC cases); Uncategorized is written as <code>null</code></td></tr>
   <tr><td>LAVA report</td><td>a project folder LAVA opens: the media, a location map for each geolocated file and an overview map drawn offline from the basemap you imported (&sect;19), the video key frames, and the artifact tables. Takes minutes rather than seconds, so it runs as a job and the bar at the bottom follows it</td></tr>
 </table>
+<p>Each part of the dialog (Which files, Format, Media, Maps, Report header,
+Fields under each image) is a box you can fold by clicking its heading.
+<strong>Which files</strong> and <strong>Fields under each image</strong> start open;
+the rest start folded.</p>
 <p>Filesystem / ingest times in the HTML and CSV are rendered in the case's
 <strong>timezone</strong> (section&nbsp;3) with the abbreviation shown
 (e.g. <code>2024-07-01 11:00 CDT</code>); the HTML header states which zone.
@@ -1274,7 +1278,9 @@ count - hover it (or tab to it) to fan the files out into individual points you 
 click, same as a map app spreading out a stacked pin. Untick <strong>Draw location
 maps</strong> in the Export dialog, or pass <code>--no-maps</code> to
 <code>gleapp report</code>, to leave them out.</p>
-<p><strong>Media</strong> (dialog checkboxes, on by default, saved with the case):</p>
+<p><strong>Media</strong> (dialog checkboxes, on by default, saved with the case;
+shown while <strong>HTML report</strong> is ticked and <strong>Metadata only</strong>
+is not):</p>
 <ul>
   <li><strong>Include full-size images</strong>: each original image is copied,
   byte for byte, into a folder beside the report named after it
@@ -1296,6 +1302,32 @@ maps</strong> in the Export dialog, or pass <code>--no-maps</code> to
 page and its <code>_media</code> folder together when you copy or hand over a
 report: the links are relative, so they work wherever the two go, and nothing
 else. Exporting again replaces the folder.</p>
+<h3>Metadata only (no images and videos)</h3>
+<p>For discovery, when the images and videos themselves cannot be handed over,
+tick <strong>Metadata only — no images and videos</strong>, the first option in the
+dialog's <strong>Media</strong> section. It applies to every format in that export:</p>
+<ul>
+  <li><strong>HTML report</strong>: every field you ticked, the categories, flags
+  and location maps, with no thumbnail, full-size copy or video frame of any file,
+  and no <code>_media</code> folder. The header gets an <strong>Images</strong> row
+  stating that none are included, each card's metadata starts open, and there is
+  no Blur switch.</li>
+  <li><strong>KMZ</strong>: the placemarks and their details, with no thumbnails.</li>
+  <li><strong>CSV, JSON, MD5 list, Project VIC JSON</strong>: unchanged; they never
+  carry images.</li>
+  <li><strong>LAVA report</strong>: unavailable (greyed out) while the option is
+  ticked, because a LAVA project is built around the media.</li>
+</ul>
+<p>Outputs get a <code>_metadata</code> suffix (<code>report_metadata.html</code>,
+<code>geolocation_metadata.kmz</code>, ...), so they never overwrite a report that
+carries pictures. The choice is saved with the case, and while it is on the Media
+section opens by itself when you open the dialog, so it is never hidden in a folded
+box. An HTML export that writes no media folder also removes the <code>_media</code>
+folder an earlier export of the same name left beside it. The <code>reports/</code>
+folder can still hold earlier exports that do carry pictures, so hand over the
+metadata-only files themselves, not the whole folder. Command line:
+<code>gleapp report --no-media</code> (refused together with
+<code>--format lava</code>).</p>
 <p>A <strong>Report contents</strong> breakdown near the top gives the file count
 for the report's scope, split by type and by category (with a percentage and a
 color key matching your categories), a thin composition bar, known-hash matches,

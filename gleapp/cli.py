@@ -627,6 +627,13 @@ def cmd_report(args: argparse.Namespace) -> int:
     out_dir = case.report_dir
     made = []
     fmts = args.format or ["html", "csv", "json"]
+    if args.no_media and "lava" in fmts:
+        _p("A LAVA report carries the media itself and cannot be metadata-only; "
+           "drop --no-media or the lava format.")
+        case.close()
+        return 2
+    if args.no_media:
+        tag += "_metadata"
     if "csv" in fmts:
         made.append(report.export_csv(case, out_dir / f"report{tag}.csv", where))
     if "json" in fmts:
@@ -636,9 +643,11 @@ def cmd_report(args: argparse.Namespace) -> int:
                                        full_images=not args.thumbs_only,
                                        full_videos=not args.thumbs_only,
                                        maps=not args.no_maps, fields=fields,
+                                       thumbs=not args.no_media,
                                        by_flag=args.scope == "flags"))
     if "kml" in fmts:
-        made.append(report.export_kml(case, out_dir / f"geolocation{tag}.kmz", where))
+        made.append(report.export_kml(case, out_dir / f"geolocation{tag}.kmz", where,
+                                      thumbs=not args.no_media))
     if "md5" in fmts:
         made.append(report.export_md5(case, out_dir / f"md5{tag}.csv", where))
     if "vic" in fmts:
@@ -847,6 +856,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "flags, tags and Exif out of the fields under each image")
     s.add_argument("--thumbs-only", action="store_true",
                    help="HTML report: thumbnails only - no media folder of full-size images or videos")
+    s.add_argument("--no-media", action="store_true",
+                   help="metadata only, for discovery: the HTML report and the KMZ carry "
+                        "no thumbnail, full-size copy or video frame of any file (CSV, "
+                        "JSON, MD5 and VIC never do); refused with the lava format")
     s.add_argument("--no-maps", action="store_true",
                    help="HTML and LAVA reports: skip the location maps (drawn from "
                         "the active basemap)")
