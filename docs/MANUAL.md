@@ -103,6 +103,10 @@ your user settings, not in any case.
   isn't CSAM / Project VIC related, so an old stashed hit can't re-flag
   unrelated media. You can change it later from the *Known hashes* section
   (§12).
+- *Start with my saved categories* / *Start with my saved flags*: shown only
+  once you have saved some with **Save as my set…** (§7). Each adds that part
+  of your saved set to the new case. The boxes remember how you left them;
+  categories start ticked, flags unticked.
 
 Click **Create case & ingest**.
 
@@ -397,6 +401,25 @@ Your categories are fully editable: rename, recolor (click the color swatch
 next to the name), delete (soft while in use), drag to reorder (they always
 sort after the presets). The first four get number-key shortcuts 6-9 in order and
 start with an auto-assigned color.
+
+**Carrying your own categories and flags to other cases.** In the ⚙ Categories
+or ⚙ Flags editor, **Save as my set…** keeps this case's own categories and,
+if you tick it, its flags, for other cases. Each part has its own box, so flags
+travel only when you choose. Only named, shown categories are saved; the
+Project VIC presets (0–5) are in every case already and are never saved. Saving
+a part replaces what you saved of it before (the dialog warns you); the part you
+leave unticked stays as it was. The set lives in `categories.json` in your
+GLEAPP settings folder (`%APPDATA%\GLEAPP` on Windows), outside any case.
+
+A new case can start with the set (the boxes on the New case form, §1), or
+**Add my saved set…** in either editor adds it to the open case. Names the case
+already has (ignoring upper/lower case) are skipped, and a category hidden in
+the case is shown again. A category keeps its saved code so it is the same
+number in every case and every Project VIC export. If the case already uses
+that code for a different category, it gets the next free code and the result
+says so. Every save and add is written to the case audit log. It is a copy, not
+a link: editing a case's categories never changes the saved set, and saving a
+new set never changes an older case.
 
 **Project VIC JSON.** A `Category` of 0 is imported as Non-pertinent; an empty
 (`null`) category or 5 is imported as Uncategorized. On export, Uncategorized is

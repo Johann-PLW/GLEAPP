@@ -39,7 +39,7 @@ and mirrored at [`docs/MANUAL.md`](docs/MANUAL.md).
 | **Video** | Dimensions/duration (OpenCV, no ffmpeg needed), evenly-spaced **key-frame** extraction, per-frame pHash so a still can find its source video |
 | **Visual screening** | **YuNet** DNN face detection + broad **skin-tone ratio** as triage aids (pluggable: swap in another model behind the same functions) |
 | **Similarity search** | *Right-click → Find similar* across stills **and** video key frames; also on the CLI |
-| **Categories** | Locked **Project VIC 2.0 (US)** presets (codes 0–5) in every case; examiner adds their own (code 6+: rename / delete / reorder, auto colors); shown as a color bar + name on every tile |
+| **Categories** | Locked **Project VIC 2.0 (US)** presets (codes 0–5) in every case; examiner adds their own (code 6+: rename / delete / reorder, auto colors), and can save them, plus flags if they choose, as a set that new cases start with; shown as a color bar + name on every tile |
 | **Flags** | Independent of category: a file can carry any number (Evidence, Bondage, whatever the case calls for); examiner-defined, none preseeded or locked; searchable, filterable, and shown as colored labels in every report |
 | **Saving** | Every action commits to `case.gleapp` immediately (SQLite WAL); notes autosave; header shows save status; timestamped snapshots in `<case>/backups/` on a timer, on close, and on demand |
 | **Review workflow** | Filter to Uncategorized and work the backlog: categorizing *is* the review step, cursor auto-advances, ↻ Refresh clears done files; flags, per-file notes, audit log of every action |
