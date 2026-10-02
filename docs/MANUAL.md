@@ -411,6 +411,11 @@ a part replaces what you saved of it before (the dialog warns you); the part you
 leave unticked stays as it was. The set lives in `categories.json` in your
 GLEAPP settings folder (`%APPDATA%\GLEAPP` on Windows), outside any case.
 
+You can also edit your saved categories with no case open: **☰ Menu →
+Categories** on the launcher adds, renames, recolors, reorders and deletes them.
+A change there applies to cases you start or add the set to afterward, never to
+an existing case.
+
 A new case can start with the set (the boxes on the New case form, §1), or
 **Add my saved set…** in either editor adds it to the open case. Names the case
 already has (ignoring upper/lower case) are skipped, and a category hidden in

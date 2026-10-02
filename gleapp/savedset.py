@@ -43,6 +43,45 @@ def _write(data: dict) -> None:
     _path().write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def set_categories(items: list[dict]) -> list[dict]:
+    """Replace the saved categories with ``items`` as edited on the launcher
+    (no case open). Blank names are dropped, a repeated name (ignoring case)
+    keeps its first entry, and a code that is missing, a preset's (0-5) or
+    already used gets the next free one."""
+    kept: list[tuple[dict, str, int | None]] = []
+    names: set[str] = set()
+    codes: set[int] = set()
+    for it in items or []:                 # first pass: names, and codes as given
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        if not name or name.lower() in names:
+            continue
+        names.add(name.lower())
+        try:
+            code = int(it.get("code"))
+        except (TypeError, ValueError):
+            code = None
+        if code is None or code < len(VIC_PRESETS) or code in codes:
+            code = None
+        else:
+            codes.add(code)
+        kept.append((it, name, code))
+    nxt = max(codes, default=len(VIC_PRESETS) - 1) + 1
+    out: list[dict] = []
+    for it, name, code in kept:            # second pass: number the rest
+        if code is None:
+            code, nxt = nxt, nxt + 1
+        color = it.get("color") if _is_color(it.get("color")) else \
+            CATEGORY_PALETTE[(code - 1) % len(CATEGORY_PALETTE)]
+        out.append({"code": code, "name": name, "color": color,
+                    "notable": bool(it.get("notable", True))})
+    data = load()
+    data["categories"] = out
+    _write(data)
+    return out
+
+
 def case_categories(db) -> list[dict]:
     """The case's own categories that can be saved: named, shown, unlocked."""
     return [{"code": int(r["code"]), "name": r["name"].strip(),
