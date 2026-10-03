@@ -279,6 +279,12 @@ def test_web_edits_the_saved_categories_with_no_case_open():
     assert cl.post("/api/savedset/categories", json={"categories": "x"}).status_code == 400
 
 
+def test_the_launcher_editor_gets_the_project_vic_presets():
+    from gleapp.db import VIC_PRESETS  # pylint: disable=import-outside-toplevel
+    got = _client().get("/api/savedset").get_json()["presets"]
+    assert [(p["code"], p["name"]) for p in got] == [(c, n) for c, n, *_ in VIC_PRESETS]
+
+
 def test_the_launcher_menu_has_categories():
     html = TEMPLATE.read_text(encoding="utf-8")
     menu = html[html.index('id="refMenuLauncher"'):]

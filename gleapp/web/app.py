@@ -28,7 +28,7 @@ from werkzeug.exceptions import HTTPException
 from .. import (appconfig, archive, backup, basemaps, categories, docmedia, exocache, flags,
                lava, relink, report, savedset)
 from ..case import open_case, parse_source_spec
-from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
+from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR, VIC_PRESETS
 from ..facematch import find_matching_faces
 from ..ingest import DOCUMENT_EXTS, is_exoplayer_cache_name
 from ..pipeline import ingest_sources, process
@@ -1692,8 +1692,11 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     @app.get("/api/savedset")
     def savedset_get():
-        """The saved set - no case needed (the launcher reads it)."""
-        return jsonify(savedset.load())
+        """The saved set - no case needed (the launcher reads it) - plus the
+        locked Project VIC presets every case has, for the launcher's editor."""
+        presets = [{"code": c, "name": n, "color": col}
+                   for c, n, col, _notable, _pos in VIC_PRESETS]
+        return jsonify({**savedset.load(), "presets": presets})
 
     @app.post("/api/savedset/categories")
     def savedset_categories():

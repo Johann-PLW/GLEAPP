@@ -4155,7 +4155,7 @@ function renderSavedOpts(ss) {
 }
 
 /* ---------- launcher: edit the saved categories with no case open ---------- */
-let myCats = [];
+let myCats = [], myPresets = [];
 async function saveMyCats() {
   const r = await api("/api/savedset/categories", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -4170,14 +4170,22 @@ async function saveMyCats() {
   renderMyCats();
 }
 function renderMyCats() {
-  $("#myCatRows").innerHTML = myCats.length ? myCats.map((c, i) => `
+  // the locked Project VIC presets, read-only, as in a case's category editor
+  const locked = myPresets.map(p => `
+    <div class="cat locked">
+      <span class="grip" title="Project VIC preset — locked">🔒</span>
+      <span class="vcode">${p.code}</span>
+      <span class="dot" style="background:${esc(p.color)}"></span>
+      <span class="lockname">${esc(p.name)}</span>
+    </div>`).join("");
+  $("#myCatRows").innerHTML = locked + (myCats.length ? myCats.map((c, i) => `
     <div class="cat" draggable="true" data-i="${i}">
       <span class="grip">☰</span>
       <span class="vcode">${c.code}</span>
       <input type="color" value="${esc(c.color)}" title="Category color">
       <input type="text" value="${esc(c.name)}" placeholder="Category name">
       <button class="btn sm" data-del="${i}">Delete</button>
-    </div>`).join("") : `<div class="empty muted">No saved categories yet — add one below, or use Save as my set… in a case's category editor.</div>`;
+    </div>`).join("") : `<div class="empty muted" style="padding:8px 0">No categories of your own saved yet — add one below, or use Save as my set… in a case's category editor.</div>`);
   const rows = $("#myCatRows");
   rows.querySelectorAll("input[type=text]").forEach(inp => inp.addEventListener("change", () => {
     const i = +inp.closest(".cat").dataset.i, name = inp.value.trim();
@@ -4194,7 +4202,7 @@ function renderMyCats() {
     myCats.splice(+b.dataset.del, 1); saveMyCats();
   });
   let from = null;
-  rows.querySelectorAll(".cat").forEach(row => {
+  rows.querySelectorAll(".cat:not(.locked)").forEach(row => {
     row.addEventListener("dragstart", () => { from = +row.dataset.i; row.classList.add("drag"); });
     row.addEventListener("dragend", () => row.classList.remove("drag"));
     row.addEventListener("dragover", e => e.preventDefault());
@@ -4207,7 +4215,9 @@ function renderMyCats() {
   });
 }
 $("#btnCatsLauncher").onclick = async () => {
-  myCats = (await api("/api/savedset")).categories || [];
+  const ss = await api("/api/savedset");
+  myCats = ss.categories || [];
+  myPresets = ss.presets || [];
   renderMyCats();
   $("#myCatDlg").style.display = "block";
 };
@@ -4216,7 +4226,7 @@ $("#myCatAdd").onclick = () => {
   while (myCats.some(c => c.name.toLowerCase() === `new category ${n}`)) n++;
   myCats.push({ name: `New category ${n}` });   // the server numbers and colors it
   saveMyCats().then(() => {
-    const inp = $("#myCatRows").querySelector(".cat:last-child input[type=text]");
+    const inp = [...$("#myCatRows").querySelectorAll(".cat:not(.locked) input[type=text]")].pop();
     if (inp) { inp.focus(); inp.select(); }
   });
 };

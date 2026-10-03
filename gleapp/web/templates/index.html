@@ -420,8 +420,9 @@
   #catEd .cat input[type=text],#myCatDlg .cat input[type=text]{flex:1;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px}
   #catEd .cat .grip{cursor:grab;color:var(--muted)}
   #catEd .cat.drag{opacity:.4}
-  #catEd .cat.locked .grip{cursor:default}
-  #catEd .cat .lockname{flex:1;font-weight:600;padding:5px 0}
+  #catEd .cat.locked .grip,#myCatDlg .cat.locked .grip{cursor:default}
+  #catEd .cat .lockname,#myCatDlg .cat .lockname{flex:1;font-weight:600;padding:5px 0}
+  #myCatDlg .cat .dot{width:22px;height:22px;flex:0 0 22px;border-radius:4px}
   #catEd .cat .vcode{font-size:15px;font-weight:400;color:var(--fg);white-space:nowrap}
   #catEd .cat .vcode b{font-weight:700}
   /* flag editor (⚙ Flags) - same shape as the category editor, no locked rows */
