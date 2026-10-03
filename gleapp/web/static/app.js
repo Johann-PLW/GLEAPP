@@ -2255,7 +2255,6 @@ document.addEventListener("keydown", e => {
     $("#histDlg").style.display = "none";
     $("#addEvDlg").style.display = "none"; $("#flagDlg").style.display = "none";
     $("#flagEd").style.display = "none"; $("#setDlg").style.display = "none";
-    $("#myCatDlg").style.display = "none";
     $("#mainMenu").style.display = "none"; $("#notifyMenu").style.display = "none";
     return;
   }
@@ -4136,11 +4135,8 @@ function showLauncher(ctx) {
   renderRecent();
   Lr.logo = ctx.agency_logo || null;
   setSettingsLogoPreview(Lr.logo);
-  renderSavedOpts(ctx.saved_set || { categories: [], flags: [] });
-  watchLauncherJob();                  // an import may already be running
-}
-// New case: start with the saved categories / flags (each only when some are saved)
-function renderSavedOpts(ss) {
+  // New case: start with the saved categories / flags (each only when some are saved)
+  const ss = ctx.saved_set || { categories: [], flags: [] };
   Lr.savedSet = ss;
   const nc = (ss.categories || []).length, nf = (ss.flags || []).length;
   $("#optSavedCatsRow").style.display = nc ? "" : "none";
@@ -4152,76 +4148,8 @@ function renderSavedOpts(ss) {
   // never ticked for you: the examiner chooses each time
   $("#optSavedCats").checked = false;
   $("#optSavedFlags").checked = false;
+  watchLauncherJob();                  // an import may already be running
 }
-
-/* ---------- launcher: edit the saved categories with no case open ---------- */
-let myCats = [];
-async function saveMyCats() {
-  const r = await api("/api/savedset/categories", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ categories: myCats })
-  }).catch(() => ({ error: true }));
-  if (r.error) { toast(r.message || "Could not save your categories"); return; }
-  myCats = r.categories;
-  const was = [$("#optSavedCats").checked, $("#optSavedFlags").checked];
-  renderSavedOpts({ ...Lr.savedSet, categories: myCats });
-  [$("#optSavedCats").checked, $("#optSavedFlags").checked] = was;
-  if (!myCats.length) $("#optSavedCats").checked = false;
-  renderMyCats();
-}
-function renderMyCats() {
-  $("#myCatRows").innerHTML = myCats.length ? myCats.map((c, i) => `
-    <div class="cat" draggable="true" data-i="${i}">
-      <span class="grip">☰</span>
-      <span class="vcode">${c.code}</span>
-      <input type="color" value="${esc(c.color)}" title="Category color">
-      <input type="text" value="${esc(c.name)}" placeholder="Category name">
-      <button class="btn sm" data-del="${i}">Delete</button>
-    </div>`).join("") : `<div class="empty muted">No saved categories yet — add one below, or use Save as my set… in a case's category editor.</div>`;
-  const rows = $("#myCatRows");
-  rows.querySelectorAll("input[type=text]").forEach(inp => inp.addEventListener("change", () => {
-    const i = +inp.closest(".cat").dataset.i, name = inp.value.trim();
-    if (!name) { toast("A saved category needs a name"); renderMyCats(); return; }
-    if (myCats.some((c, j) => j !== i && c.name.toLowerCase() === name.toLowerCase())) {
-      toast(`You already have "${name}"`); renderMyCats(); return;
-    }
-    myCats[i].name = name; saveMyCats();
-  }));
-  rows.querySelectorAll("input[type=color]").forEach(inp => inp.addEventListener("change", () => {
-    myCats[+inp.closest(".cat").dataset.i].color = inp.value; saveMyCats();
-  }));
-  rows.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
-    myCats.splice(+b.dataset.del, 1); saveMyCats();
-  });
-  let from = null;
-  rows.querySelectorAll(".cat").forEach(row => {
-    row.addEventListener("dragstart", () => { from = +row.dataset.i; row.classList.add("drag"); });
-    row.addEventListener("dragend", () => row.classList.remove("drag"));
-    row.addEventListener("dragover", e => e.preventDefault());
-    row.addEventListener("drop", e => {
-      e.preventDefault();
-      const to = +row.dataset.i;
-      if (from == null || from === to) return;
-      const [m] = myCats.splice(from, 1); myCats.splice(to, 0, m); saveMyCats();
-    });
-  });
-}
-$("#btnCatsLauncher").onclick = async () => {
-  myCats = (await api("/api/savedset")).categories || [];
-  renderMyCats();
-  $("#myCatDlg").style.display = "block";
-};
-$("#myCatAdd").onclick = () => {
-  let n = 1;
-  while (myCats.some(c => c.name.toLowerCase() === `new category ${n}`)) n++;
-  myCats.push({ name: `New category ${n}` });   // the server numbers and colors it
-  saveMyCats().then(() => {
-    const inp = $("#myCatRows").querySelector(".cat:last-child input[type=text]");
-    if (inp) { inp.focus(); inp.select(); }
-  });
-};
-$("#myCatClose").onclick = () => { $("#myCatDlg").style.display = "none"; };
-$("#myCatDlg").addEventListener("click", e => { if (e.target.id === "myCatDlg") $("#myCatClose").click(); });
 /* The launcher follows a background import started from its ☰ Menu (a map, reference
    data, a Project VIC hash set). The bars that follow those jobs belong to the case view,
    behind the launcher, so nothing on this screen showed one was running, and Create case

@@ -1695,15 +1695,6 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         """The saved set - no case needed (the launcher reads it)."""
         return jsonify(savedset.load())
 
-    @app.post("/api/savedset/categories")
-    def savedset_categories():
-        """Edit the saved categories with no case open (launcher ☰ Menu)."""
-        data = request.get_json(silent=True) or {}
-        items = data.get("categories")
-        if not isinstance(items, list):
-            abort(400, description="categories must be a list")
-        return jsonify({"categories": savedset.set_categories(items)})
-
     @app.post("/api/savedset/save")
     def savedset_save():
         case = C()

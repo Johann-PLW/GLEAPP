@@ -273,7 +273,7 @@
   .modal .vbar input[type=range]:disabled{opacity:.4}
   .modal .vbar .amt{width:2.5em;text-align:right;color:var(--muted)}
   /* category editor */
-  #catEd,#reportDlg,#helpDlg,#snapDlg,#histDlg,#stashDlg,#stashWipeDlg,#hashImportDlg,#refDlg,#vicDlg,#mapsDlg,#logoDlg,#vicExportDlg,#addEvDlg,#flagDlg,#flagEd,#setDlg,#myCatDlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:75;display:none}
+  #catEd,#reportDlg,#helpDlg,#snapDlg,#histDlg,#stashDlg,#stashWipeDlg,#hashImportDlg,#refDlg,#vicDlg,#mapsDlg,#logoDlg,#vicExportDlg,#addEvDlg,#flagDlg,#flagEd,#setDlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:75;display:none}
   #hashImportDlg .box,#refDlg .box,#vicDlg .box,#vicExportDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,94vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #addEvDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #hashImportDlg h2,#refDlg h2,#vicDlg h2,#vicExportDlg h2,#addEvDlg h2{margin:0 0 4px;font-size:15px}
@@ -335,9 +335,9 @@
   #snapList .snaprow b{font-size:12px}
   #snapList .tagauto{display:inline-block;padding:1px 7px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:10px;vertical-align:1px}
   #snapList button[data-snap]{white-space:nowrap}
-  #catEd .box,#reportDlg .box,#flagDlg .box,#flagEd .box,#setDlg .box,#myCatDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:440px;max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  #catEd .box,#reportDlg .box,#flagDlg .box,#flagEd .box,#setDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:440px;max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #reportDlg .box{width:520px}
-  #catEd h2,#reportDlg h2,#flagDlg h2,#flagEd h2,#setDlg h2,#myCatDlg h2{margin:0 0 10px;font-size:15px}
+  #catEd h2,#reportDlg h2,#flagDlg h2,#flagEd h2,#setDlg h2{margin:0 0 10px;font-size:15px}
   #flagDlg input[type=text],#flagEd input[type=text]{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:6px;font:inherit}
   #flagDlg .row input[type=text]{width:auto;flex:1}
   #reportDlg label{display:block;margin:4px 0}
@@ -352,7 +352,7 @@
   #reportDlg details.rsec > summary::-webkit-details-marker{display:none}
   #reportDlg details.rsec > summary::before{content:"\25B8 ";color:var(--muted,#8b93a3);display:inline-block;width:14px}
   #reportDlg details.rsec[open] > summary::before{content:"\25BE "}
-  #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg,#myCatDlg{z-index:100}
+  #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg{z-index:100}
   /* intro video: over everything, launcher included; closes with the button, Esc, a click outside it, or its end */
   #introDlg{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:110;display:none;align-items:center;justify-content:center}
   #introDlg.show{display:flex}
@@ -409,15 +409,12 @@
   #setDlg .part input{margin-top:3px}
   #setDlg .names{font-size:11px;color:var(--muted)}
   #setDlg .res div{font-size:12px;padding:2px 0}
-  #myCatDlg .cat{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
-  #myCatDlg .cat.drag{opacity:.4}
-  #myCatDlg .vcode{font-size:11px;color:var(--muted);min-width:22px}
   #catEd .cat{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
   #catEd .dot{width:14px;height:14px;border-radius:4px;flex:0 0 14px}
-  #catEd .cat input[type=color],#myCatDlg .cat input[type=color]{width:22px;height:22px;flex:0 0 22px;padding:0;border:1px solid var(--line);border-radius:4px;background:var(--panel2);cursor:pointer}
-  #catEd .cat input[type=color]::-webkit-color-swatch-wrapper,#myCatDlg .cat input[type=color]::-webkit-color-swatch-wrapper{padding:2px}
-  #catEd .cat input[type=color]::-webkit-color-swatch,#myCatDlg .cat input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
-  #catEd .cat input[type=text],#myCatDlg .cat input[type=text]{flex:1;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px}
+  #catEd .cat input[type=color]{width:22px;height:22px;flex:0 0 22px;padding:0;border:1px solid var(--line);border-radius:4px;background:var(--panel2);cursor:pointer}
+  #catEd .cat input[type=color]::-webkit-color-swatch-wrapper{padding:2px}
+  #catEd .cat input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
+  #catEd .cat input[type=text]{flex:1;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px}
   #catEd .cat .grip{cursor:grab;color:var(--muted)}
   #catEd .cat.drag{opacity:.4}
   #catEd .cat.locked .grip{cursor:default}
@@ -776,9 +773,8 @@
     <img class="brand-logo" src="/static/gleapp-logo.png" alt="">
     <h1>GLEAPP</h1>
     <span style="flex:1"></span>
-    <button class="btn" id="btnRefMenuLauncher" title="Your saved categories, offline maps, hash stash, NSRL reference data, and the agency logo — usable before opening a case">☰ Menu</button>
+    <button class="btn" id="btnRefMenuLauncher" title="Offline maps, hash stash, NSRL reference data, and the agency logo — usable before opening a case">☰ Menu</button>
     <div id="refMenuLauncher" class="hdrmenu">
-      <button id="btnCatsLauncher" title="Your saved categories: the ones a new case can start with (Start with my saved categories). Add, rename, recolor, reorder or delete them here without opening a case.">Categories</button>
       <button id="btnMapsLauncher" title="Offline maps: import a basemap file and see geolocated files on it. Nothing is fetched from the internet.">Maps</button>
       <button id="btnStashLauncher" title="Save the MD5s of your category 1–3 files to the local hash stash, and re-use them in future cases">Hash stash</button>
       <button id="btnRefStoreLauncher" title="Add or manage the shared NSRL / reference-hash store">Reference data (NSRL)</button>
@@ -1380,22 +1376,6 @@
     <button class="btn" data-setdlg="apply" title="Add the flags (and, if you choose, the categories) you saved from another case">Add my saved set…</button>
     <span style="flex:1"></span>
     <button class="btn" id="flagClose">Done</button>
-  </div>
-</div></div>
-
-<div id="myCatDlg"><div class="box">
-  <h2>My categories</h2>
-  <div class="muted" style="font-size:12px;margin-bottom:8px">
-    The categories a new case can start with (tick <em>Start with my saved categories</em>
-    under Processing options), and that <em>Add my saved set…</em> adds to an open case. The
-    Project VIC categories (0–5) are in every case already. Changes here don't change any
-    existing case.
-  </div>
-  <div id="myCatRows"></div>
-  <div class="row" style="margin-top:12px">
-    <button class="btn" id="myCatAdd">+ Add category</button>
-    <span style="flex:1"></span>
-    <button class="btn" id="myCatClose">Done</button>
   </div>
 </div></div>
 
