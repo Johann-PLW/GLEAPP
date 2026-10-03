@@ -112,11 +112,11 @@ case.</p>
     </ul>
   </li>
 </ul>
-<p><strong>Ingest options:</strong></p>
+<p><strong>Ingest options</strong> (under <strong>Processing options</strong>, collapsed until you click it):</p>
 <ul>
   <li><em>Face / skin tone pre-processing</em>: on by default, and can be run later.</li>
   <li><em>Video preview key frames</em>: default 6.</li>
-  <li><em>Copy media out of extraction archives</em>: off keeps the case small but the
+  <li><em>Copy media out of extraction/acquisition into the case</em>: off keeps the case small but the
   archive must stay in place. On makes the case self-contained.</li>
   <li><em>Expand archives found inside the sources</em>: off by default. Opens each
   <code>.zip</code>, <code>.7z</code>, <code>.tar</code> or <code>.gz</code> found inside a
@@ -133,6 +133,10 @@ case.</p>
   <li><em>Enable hash stash matching</em>: on by default. Turn it off for a case that isn't
   CSAM / Project VIC related, so an old stashed hit can't re-flag unrelated media. You can
   change it later from the <em>Known hashes</em> section (&sect;12).</li>
+  <li><em>Start with my saved categories</em> / <em>Start with my saved flags</em>: shown
+  only once you have saved some with <strong>Save as my set…</strong> (&sect;7). Each adds
+  that part of your saved set to the new case. Both start unticked;
+  you choose each time.</li>
 </ul>
 <p>Click <strong>Create case &amp; ingest</strong>.</p>
 <p>The gallery opens as soon as files are registered, and a progress bar along the
@@ -150,7 +154,7 @@ is blocked until then.</p>
   <tr><td><code>views/</code></td><td>full-size JPEGs transcoded from formats the browser can't show (HEIC, TIFF, KTX, ...)</td></tr>
   <tr><td><code>cache/</code></td><td>on-demand copies for the viewer (bounded, oldest evicted)</td></tr>
   <tr><td><code>tmp/</code></td><td>on-demand copies for processing, removed after use</td></tr>
-  <tr><td><code>staged/</code></td><td>archive members copied into the case, when <em>Copy media out of extraction archives</em> is on</td></tr>
+  <tr><td><code>staged/</code></td><td>archive members copied into the case, when <em>Copy media out of extraction/acquisition into the case</em> is on</td></tr>
   <tr><td><code>extracted/</code></td><td>media unpacked from container files: archives (<code>.zip</code> / <code>.tar</code> / <code>.gz</code>) found in a source, Snapchat <code>LZC</code> bundles, and videos joined from ExoPlayer caches</td></tr>
   <tr><td><code>reports/</code></td><td>exported reports: CSV/JSON, MD5 lists, KMZ, Project VIC exports, LAVA projects</td></tr>
   <tr><td><code>backups/</code></td><td>timestamped snapshot copies of <code>case.gleapp</code></td></tr>
@@ -442,6 +446,24 @@ rename, recolor (click the color swatch next to the name), delete (soft-deleted
 while in use so labels are kept), drag to reorder (they always sort after the
 presets). The first four get number-key shortcuts 6–9 in order and start with an
 auto-assigned color.</p>
+<p><strong>Carrying your own categories and flags to other cases.</strong> In the
+⚙&nbsp;Categories or ⚙&nbsp;Flags editor, <strong>Save as my set…</strong> keeps this
+case's own categories and, if you tick it, its flags, for other cases. Each part has
+its own box, so flags travel only when you choose. Only named, shown categories are
+saved; the Project VIC presets (0–5) are in every case already and are never saved.
+Saving a part replaces what you saved of it before (the dialog warns you); the part
+you leave unticked stays as it was. The set lives in <code>categories.json</code> in
+your GLEAPP settings folder (<code>%APPDATA%\GLEAPP</code> on Windows), outside any
+case.</p>
+<p>A new case can start with the set (the boxes on the New case form, &sect;1), or
+<strong>Add my saved set…</strong> in either editor adds it to the open case. Names
+the case already has (ignoring upper/lower case) are skipped, and a category hidden
+in the case is shown again. A category keeps its saved code so it is the same number
+in every case and every Project VIC export. If the case already uses that code for a
+different category, it gets the next free code and the result says so. Every save
+and add is written to the case audit log. It is a copy, not a link: editing a case's
+categories never changes the saved set, and saving a new set never changes an older
+case.</p>
 <p><strong>Project VIC JSON.</strong> A <code>Category</code> of 0 is imported as
 Non-pertinent; an empty (<code>null</code>) category or 5 is imported as
 Uncategorized. On export, Uncategorized is written back as <code>null</code>.</p>

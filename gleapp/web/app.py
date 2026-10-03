@@ -26,7 +26,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from .. import (appconfig, archive, backup, basemaps, categories, docmedia, exocache, flags,
-               lava, relink, report)
+               lava, relink, report, savedset)
 from ..case import open_case, parse_source_spec
 from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
 from ..facematch import find_matching_faces
@@ -524,6 +524,11 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             # default is on (matches an existing case with no meta set yet);
             # only write the flag when the examiner turned it off at creation
             state["case"].db.set_meta("use_stash", "0")
+        # the examiner's saved categories / flags (savedset.py), each only if
+        # its New case box was ticked
+        use_c, use_f = bool(data.get("use_categories")), bool(data.get("use_flags"))
+        if use_c or use_f:
+            _apply_saved_set(state["case"], cats=use_c, fls=use_f)
         # Deliberately NOT pushed to "recent" yet - only cases that get files
         # ingested land there (see _run_job), so abandoned shells don't show.
         return jsonify({"ok": True, "case": state["case"].db.get_meta("case_name")})
@@ -1679,6 +1684,38 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case.db.audit_log(case.examiner, "flag_reorder", json.dumps({"order": codes}))
         return jsonify(list(flags.flagmap(case.db).values()))
 
+    # ---- saved set (categories / flags carried between cases) ----
+    def _apply_saved_set(case, *, cats: bool, fls: bool) -> dict:
+        res = savedset.apply_to_case(case.db, categories=cats, flags=fls)
+        case.db.audit_log(case.examiner, "saved_set_apply", json.dumps(res))
+        return res
+
+    @app.get("/api/savedset")
+    def savedset_get():
+        """The saved set - no case needed (the launcher reads it)."""
+        return jsonify(savedset.load())
+
+    @app.post("/api/savedset/save")
+    def savedset_save():
+        case = C()
+        data = request.get_json(silent=True) or {}
+        cats, fls = bool(data.get("categories")), bool(data.get("flags"))
+        if not (cats or fls):
+            abort(400, description="choose categories, flags or both")
+        counts = savedset.save_from_case(case.db, categories=cats, flags=fls)
+        case.db.audit_log(case.examiner, "saved_set_save", json.dumps(
+            {"categories": cats, "flags": fls, "counts": counts}))
+        return jsonify({"ok": True, **counts})
+
+    @app.post("/api/savedset/apply")
+    def savedset_apply():
+        case = C()
+        data = request.get_json(silent=True) or {}
+        cats, fls = bool(data.get("categories")), bool(data.get("flags"))
+        if not (cats or fls):
+            abort(400, description="choose categories, flags or both")
+        return jsonify(_apply_saved_set(case, cats=cats, fls=fls))
+
     # ---- mutations ------------------------------------------
     @app.post("/api/categorize")
     def categorize():
@@ -1781,6 +1818,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                             # the app-wide default report-header logo - see
                             # /api/settings {agency_logo} and /api/report/prefs
                             "agency_logo": appconfig.get_agency_logo(),
+                            # the saved categories / flags the New case form
+                            # offers to start with (savedset.py)
+                            "saved_set": savedset.load(),
                             # whether the intro video opens with the launcher -
                             # see /api/settings {show_intro}
                             "show_intro": appconfig.get_show_intro()})

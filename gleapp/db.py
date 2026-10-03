@@ -739,6 +739,24 @@ class CaseDB:
             self.conn.commit()
             return code
 
+    def insert_category(self, code: int, name: str, *, color: str,
+                        notable: bool = True) -> None:
+        """Add an examiner category at a chosen code (a saved set keeps its
+        codes - see savedset.py), placed after the existing ones."""
+        if code < len(VIC_PRESETS):
+            raise ValueError(f"code {code} is a Project VIC preset")
+        with self.lock:
+            pos_row = self.conn.execute(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM categories"
+            ).fetchone()
+            self.conn.execute(
+                "INSERT INTO categories(code, name, color, notable, position, active) "
+                "VALUES(?,?,?,?,?,1)",
+                (int(code), name.strip(), color, 1 if notable else 0, int(pos_row["p"])),
+            )
+            self._touch()
+            self.conn.commit()
+
     def update_category(self, code: int, **fields: Any) -> None:
         row = self.get_category(code)
         if row is not None and row["locked"]:

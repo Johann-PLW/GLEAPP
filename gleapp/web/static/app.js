@@ -2133,6 +2133,80 @@ $("#flagAdd").onclick = async () => {
   await refreshFlags(); renderFlagEd();
 };
 
+/* ---------- saved set (categories / flags carried between cases) ----------
+   One dialog for both editors. "save" copies this case's own categories and/or
+   flags into the examiner's saved set; "apply" adds the saved ones to this
+   case. Each part has its own box, ticked by default only for the editor the
+   dialog was opened from, so flags travel only when asked for. */
+const setNames = list => list.map(x => x.code != null ? `${x.name} ${x.code}` : x.name).join(", ");
+async function openSetDlg(mode, from) {
+  const saved = await api("/api/savedset");
+  const ownCats = state.cats.filter(c => !c.locked && c.active && (c.name || "").trim())
+    .sort((a, b) => a.position - b.position);
+  const ownFlags = (state.flags || []).filter(f => (f.name || "").trim())
+    .sort((a, b) => a.position - b.position);
+  const cats = mode === "save" ? ownCats : saved.categories;
+  const fls = mode === "save" ? ownFlags : saved.flags;
+  $("#setTitle").textContent = mode === "save" ? "Save as my set" : "Add my saved set";
+  $("#setIntro").textContent = mode === "save"
+    ? "New cases can start with these. The Project VIC categories (0–5) are in every case already and aren't saved."
+    : "Names this case already has are skipped. A category keeps its number unless this case uses it already.";
+  $("#setCatsLbl").textContent = `Categories (${cats.length})`;
+  $("#setFlagsLbl").textContent = `Flags (${fls.length})`;
+  $("#setCatsNames").textContent = cats.length ? setNames(cats) : (mode === "save" ? "This case has none of its own." : "None saved.");
+  $("#setFlagsNames").textContent = fls.length ? setNames(fls.map(f => ({ name: f.name }))) : (mode === "save" ? "This case has none." : "None saved.");
+  $("#setCats").checked = from === "cat" && (mode === "save" || cats.length > 0);
+  $("#setFlags").checked = from === "flag" && (mode === "save" || fls.length > 0);
+  $("#setCats").disabled = mode === "apply" && !cats.length;
+  $("#setFlags").disabled = mode === "apply" && !fls.length;
+  const warn = () => {
+    const w = [];
+    if (mode === "save") {
+      if ($("#setCats").checked && saved.categories.length)
+        w.push(cats.length ? `Replaces the ${saved.categories.length} categories you saved before.` : "Clears the categories you saved before.");
+      if ($("#setFlags").checked && saved.flags.length)
+        w.push(fls.length ? `Replaces the ${saved.flags.length} flags you saved before.` : "Clears the flags you saved before.");
+    }
+    $("#setWarn").innerHTML = w.map(x => "&#9888; " + esc(x)).join("<br>");
+  };
+  $("#setCats").onchange = $("#setFlags").onchange = warn; warn();
+  $("#setRes").style.display = "none"; $("#setRes").innerHTML = "";
+  $("#setGo").textContent = mode === "save" ? "Save" : "Add";
+  $("#setGo").style.display = ""; $("#setCancel").textContent = "Cancel";
+  $("#setGo").onclick = async () => {
+    const body = { categories: $("#setCats").checked, flags: $("#setFlags").checked };
+    if (!body.categories && !body.flags) { $("#setWarn").textContent = "Tick categories, flags or both."; return; }
+    const r = await save("/api/savedset/" + mode, body);
+    if (!r || r.error) return;
+    if (mode === "save") {
+      $("#setDlg").style.display = "none";
+      toast(`Saved: ${r.categories} categories, ${r.flags} flags`);
+      return;
+    }
+    await refreshCats(); await refreshFlags();
+    if ($("#catEd").style.display === "block") renderCatEd();
+    if ($("#flagEd").style.display === "block") renderFlagEd();
+    refreshAllTiles();
+    const line = (ok, t) => `<div>${ok ? "✓" : "–"} ${esc(t)}</div>`;
+    const out = [];
+    (r.categories || []).forEach(c => out.push(
+      c.status === "added" ? line(true, `${c.name} added as ${c.code}`)
+      : c.status === "renumbered" ? line(true, `${c.name} added as ${c.code} (${c.saved_code} is already used in this case)`)
+      : c.status === "shown" ? line(true, `${c.name} was hidden in this case; shown again (${c.code})`)
+      : line(false, `${c.name} already in this case (${c.code}), skipped`)));
+    (r.flags || []).forEach(f => out.push(f.status === "added"
+      ? line(true, `Flag ${f.name} added`) : line(false, `Flag ${f.name} already in this case, skipped`)));
+    $("#setRes").innerHTML = out.join("") + `<div class="muted" style="margin-top:4px">Recorded in the case audit log.</div>`;
+    $("#setRes").style.display = "block"; $("#setWarn").textContent = "";
+    $("#setGo").style.display = "none"; $("#setCancel").textContent = "Done";
+  };
+  $("#setDlg").style.display = "block";
+}
+document.querySelectorAll("[data-setdlg]").forEach(b => b.onclick = () =>
+  openSetDlg(b.dataset.setdlg, b.closest("#flagEd") ? "flag" : "cat"));
+$("#setCancel").onclick = () => { $("#setDlg").style.display = "none"; };
+$("#setDlg").addEventListener("click", e => { if (e.target.id === "setDlg") $("#setCancel").click(); });
+
 /* ---------- grid / list events ---------- */
 $("#grid").addEventListener("click", e => {
   const t = e.target.closest(".tile, .lvrow"); if (!t) return;
@@ -2180,7 +2254,7 @@ document.addEventListener("keydown", e => {
     $("#refDlg").style.display = "none"; $("#vicDlg").style.display = "none";
     $("#histDlg").style.display = "none";
     $("#addEvDlg").style.display = "none"; $("#flagDlg").style.display = "none";
-    $("#flagEd").style.display = "none";
+    $("#flagEd").style.display = "none"; $("#setDlg").style.display = "none";
     $("#mainMenu").style.display = "none"; $("#notifyMenu").style.display = "none";
     return;
   }
@@ -4061,6 +4135,19 @@ function showLauncher(ctx) {
   renderRecent();
   Lr.logo = ctx.agency_logo || null;
   setSettingsLogoPreview(Lr.logo);
+  // New case: start with the saved categories / flags (each only when some are saved)
+  const ss = ctx.saved_set || { categories: [], flags: [] };
+  Lr.savedSet = ss;
+  const nc = (ss.categories || []).length, nf = (ss.flags || []).length;
+  $("#optSavedCatsRow").style.display = nc ? "" : "none";
+  $("#optSavedFlagsRow").style.display = nf ? "" : "none";
+  $("#optSavedCatsN").textContent = `(${nc})`;
+  $("#optSavedFlagsN").textContent = `(${nf})`;
+  $("#optSavedCatsRow").title = "Adds: " + (ss.categories || []).map(c => `${c.name} ${c.code}`).join(", ");
+  $("#optSavedFlagsRow").title = "Adds: " + (ss.flags || []).map(f => f.name).join(", ");
+  // never ticked for you: the examiner chooses each time
+  $("#optSavedCats").checked = false;
+  $("#optSavedFlags").checked = false;
   watchLauncherJob();                  // an import may already be running
 }
 /* The launcher follows a background import started from its ☰ Menu (a map, reference
@@ -4312,7 +4399,9 @@ $("#createGo").onclick = async () => {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       path, name: $("#newName").value.trim(), examiner: $("#newExaminer").value.trim(),
-      use_stash: $("#optStash").checked
+      use_stash: $("#optStash").checked,
+      use_categories: $("#optSavedCats").checked,
+      use_flags: $("#optSavedFlags").checked
     })
   }).catch(() => ({ error: true, message: "request failed" }));
   if (cr.error) return fail(cr.message || "Could not create case");
