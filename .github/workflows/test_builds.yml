@@ -2,9 +2,12 @@ name: Test builds
 
 # Builds the frozen desktop executable on each platform with packaging/build.py and
 # smoke-tests what came out, headlessly: --version must print the package version, and
-# --texworker must decode an image inside the frozen bundle. The Windows leg goes on to
-# build the Inno Setup installer and each macOS leg the .dmg, so phase 2 and the version
-# pass-through are exercised somewhere real on both. Artifacts are uploaded for inspection; nothing here is a release.
+# --texworker must decode an image inside the frozen bundle. Each leg builds what its
+# platform ships: the single-file GLEAPP.exe on Windows, whose window is then opened, and
+# the one-folder build elsewhere, with each macOS leg going on to the .dmg so phase 2 and
+# the version pass-through are exercised somewhere real. Nothing here is signed: signing
+# is release.yml's, with SignPath. Artifacts are uploaded for inspection; nothing here is
+# a release.
 #
 # Advisory rather than required, so a paths filter is fine here, and it deliberately
 # leaves gleapp/** out: a logic change inside an existing module almost never breaks the
@@ -85,21 +88,32 @@ jobs:
           python -m pip install --prefer-binary -e ".[build]"
           python -c "import cv2; print('cv2', cv2.__version__, cv2.__file__)"
 
+      # Windows ships only the single-file executable, in its portable zip; see release.yml.
+      # The Inno Setup installer is no longer built here, since no release carries it.
       - name: Phase 1, the executable
         shell: bash
-        run: python packaging/build.py exe
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python packaging/build.py exe --onefile
+            echo "BIN=dist/GLEAPP.exe" >> "$GITHUB_ENV"
+          else
+            python packaging/build.py exe
+            echo "BIN=dist/GLEAPP/GLEAPP" >> "$GITHUB_ENV"
+          fi
 
       # Windows only. Extracting a downloaded zip with Explorer copies the zip's
       # downloaded-from-the-internet mark (a Zone.Identifier stream, zone 3) onto every
       # file, and .NET Framework will not load an assembly that carries it: the
       # v2026.5.1 portable build failed that way on a user's machine, with "Failed to
-      # resolve Python.Runtime.Loader.Initialize". Marking the build the same way before
-      # the checks below makes them test what a user who downloads the zip gets.
+      # resolve Python.Runtime.Loader.Initialize". The single file carries the mark
+      # itself and unpacks its assemblies to %TEMP% without one, but it is marked the
+      # same way before the checks below so they test what a user who downloads the zip
+      # gets.
       - name: Windows, mark the build as downloaded from the internet
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Recurse -File dist/GLEAPP
+          $files = Get-ChildItem -File dist/GLEAPP.exe
           foreach ($f in $files) {
             Set-Content -LiteralPath $f.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
@@ -114,11 +128,16 @@ jobs:
       - name: Smoke test the frozen binary, headless
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/GLEAPP/GLEAPP.exe; else BIN=dist/GLEAPP/GLEAPP; fi
           WANT="GLEAPP $(python -c "import sys; sys.path.insert(0, 'packaging'); import build; print(build.read_version())")"
           GOT="$("$BIN" --version)"
           echo "--version -> '$GOT'"
           [ "$GOT" = "$WANT" ] || { echo "expected '$WANT'"; exit 1; }
+          # Timed because the Windows single file unpacks itself on every start, and this
+          # is the number that says what that costs a user.
+          python -c 'import subprocess, sys, time
+          for _ in range(3):
+              t = time.perf_counter(); subprocess.run([sys.argv[1], "--version"], check=True, capture_output=True)
+              print(f"--version took {time.perf_counter() - t:.2f} s")' "$BIN"
           python -c 'from PIL import Image; Image.new("RGB", (64, 48), (30, 120, 200)).save("smoke_in.png")'
           "$BIN" --texworker smoke_in.png smoke_out.jpg 32
           [ -s smoke_out.jpg ] || { echo "--texworker produced no output"; exit 1; }
@@ -141,6 +160,9 @@ jobs:
             sleep 1
           done
           kill "$WEBPID" 2>/dev/null || true
+          # The single file runs GLEAPP in a child of the process bash started, and
+          # Windows does not end a child with its parent, so the server is still up.
+          if [ "$RUNNER_OS" = "Windows" ]; then taskkill //F //T //IM GLEAPP.exe > /dev/null 2>&1 || true; fi
           [ -n "$served" ] || { cat web.log; echo "::error::GLEAPP web did not serve the interface"; exit 1; }
           echo "web -> served the interface on port $PORT"
           # With no toolkit the window cannot start. Without a terminal it must name the
@@ -160,7 +182,7 @@ jobs:
           fi
 
       # Windows only. --selfcheck imports the window's backend; this opens the window
-      # itself from the marked build, the way a user starts it: pythonnet loading .NET,
+      # itself from the marked single file, the way a user starts it: pythonnet loading .NET,
       # the WebView2 control, and Flask serving the launcher into it, then closes it
       # (GLEAPP_DESKTOP_SMOKE, see gleapp/desktop.py). The runner image ships Edge but
       # not the WebView2 runtime. An error here opens the windowed build's traceback
@@ -173,7 +195,7 @@ jobs:
           GLEAPP_DESKTOP_SMOKE: "1"
         run: |
           choco install webview2-runtime --no-progress -y
-          dist/GLEAPP/GLEAPP.exe
+          dist/GLEAPP.exe
           echo "window opened, loaded and closed"
 
       - name: Phase 2, the disk image (macOS only)
@@ -183,21 +205,13 @@ jobs:
           python packaging/build.py installer
           ls -l dist/GLEAPP-*.dmg
 
-      - name: Phase 2, the installer (Windows only)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          choco install innosetup --no-progress -y
-          python packaging/build.py installer
-          ls -l dist/GLEAPP-Setup-*.exe
-
       - name: Upload the build
         uses: actions/upload-artifact@v4
         with:
           name: gleapp-${{ matrix.os }}-test
           path: |
             dist/GLEAPP/
-            dist/GLEAPP-Setup-*.exe
+            dist/GLEAPP.exe
             dist/GLEAPP.app/
             dist/GLEAPP-*.dmg
           if-no-files-found: error

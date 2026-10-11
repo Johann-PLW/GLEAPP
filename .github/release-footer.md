@@ -5,10 +5,18 @@
 
 | Platform | File |
 |---|---|
-| Windows 10 or 11, 64-bit | `-windows-x64-setup.exe` (installer), or `-windows-x64-portable.zip` to run without installing |
+| Windows 10 or 11, 64-bit | `-windows-x64-portable.zip` |
 | macOS, Apple silicon | `-macos-arm64.dmg` |
 | macOS, Intel | `-macos-x64.dmg` |
 | Linux, 64-bit | `-linux-x64.tar.gz` |
+
+**On Windows the zip holds the whole program as one file, `GLEAPP.exe`**, which can be put
+wherever you like; there is no installer any more. If an earlier release's installer put
+GLEAPP in Program Files, uninstall it from Settings, Apps; your cases and settings are kept
+elsewhere and stay. `GLEAPP.exe` unpacks itself to a temporary folder each time it starts,
+so it is slower to open than an installed copy was, and it does not run where a policy
+(AppLocker, WDAC) forbids running programs from the temporary folder. There, run GLEAPP
+from source; the README has the steps.
 
 ## First launch
 

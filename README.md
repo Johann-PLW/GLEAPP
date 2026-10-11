@@ -56,7 +56,7 @@ for Python, and no toolchain.
 
 | Platform | File |
 |---|---|
-| Windows 10 or 11, 64-bit | `-windows-x64-setup.exe`, or `-windows-x64-portable.zip` to run without installing |
+| Windows 10 or 11, 64-bit | `-windows-x64-portable.zip`, which holds the whole program as one file, `GLEAPP.exe` |
 | macOS, Apple silicon | `-macos-arm64.dmg` |
 | macOS, Intel | `-macos-x64.dmg` |
 | Linux, 64-bit | `-linux-x64.tar.gz`, built on Ubuntu 24.04 so it needs glibc 2.39 or newer |
@@ -65,18 +65,24 @@ for Python, and no toolchain.
 The macOS disk images are signed with a Developer ID and notarised by Apple, so they
 open without a warning.
 
-**The Windows binaries are not signed**, so the first launch warns.
+**The Windows binaries are not signed yet**, so the first launch warns.
 On Windows, SmartScreen says "Windows protected your PC".
-Choose More info, then Run anyway.
+Choose More info, then Run anyway. Releases will be signed through SignPath once its
+certificate is in place; see [Code signing policy](#code-signing-policy). Running from
+source, below, needs no warning cleared.
 
-If the portable build stops at start with "Failed to resolve Python.Runtime.Loader.Initialize",
-Windows has marked the extracted files as downloaded from the internet and .NET will not load
-them. Builds after v2026.5.1 clear that mark themselves. On v2026.5.1 or earlier, or when the
-folder is read-only, delete the extracted folder, right-click the zip, choose Properties, tick
-Unblock, click OK, and extract it again. Or unblock the extracted folder in PowerShell:
-`Get-ChildItem -Recurse <folder> | Unblock-File`.
+There is no Windows installer any more. If an earlier release's installer put GLEAPP in
+Program Files, uninstall it from Settings, Apps; cases and settings live elsewhere and
+stay. `GLEAPP.exe` unpacks itself to a temporary folder each time it starts, so it is slower
+to open than an installed copy was, and it does not run where a policy (AppLocker, WDAC)
+forbids running programs from the temporary folder; run from source there.
 
-Signing is not wired up yet. Running from source, below, needs no warning cleared.
+If the portable folder of an earlier release stops at start with "Failed to resolve
+Python.Runtime.Loader.Initialize", Windows has marked the extracted files as downloaded from
+the internet and .NET will not load them. Folders after v2026.5.1 clear that mark
+themselves unless the folder is read-only. Otherwise delete the extracted folder,
+right-click the zip, choose Properties, tick Unblock, click OK, and extract it again, or
+unblock the extracted folder in PowerShell: `Get-ChildItem -Recurse <folder> | Unblock-File`.
 
 Every release carries a `SHA256SUMS.txt`. To check what you downloaded:
 
@@ -150,7 +156,7 @@ packages installed on the system.
 ```bash
 pip install -e .[build]
 python packaging/build.py exe               # phase 1 -> dist/GLEAPP/  (one-folder; GLEAPP.exe on Windows)
-python packaging/build.py exe --onefile     # phase 1 -> one file in dist/  (no installer from this)
+python packaging/build.py exe --onefile     # phase 1 -> one file in dist/  (what Windows releases ship; no installer from this)
 python packaging/build.py installer         # phase 2, Windows -> dist/GLEAPP-Setup-<version>.exe (needs Inno Setup)
 python packaging/build.py installer         # phase 2, macOS -> dist/GLEAPP-<version>.dmg around dist/GLEAPP.app
 python packaging/build.py all               # both phases, for unsigned local builds
@@ -163,7 +169,9 @@ with the Sign Tool configured under that name. `python packaging/build.py verify
 checks a signature is present and valid before anything is uploaded. The installer
 version is read from `gleapp/__init__.py`, so it cannot drift from the app. Phase 1 on
 macOS also produces `dist/GLEAPP.app`, unsigned; sign it with `codesign` before phase 2.
-A Linux AppImage is not wired up yet.
+A Linux AppImage is not wired up yet. Windows releases ship neither the folder nor the
+installer but the `--onefile` build, signed by SignPath in `release.yml`; the installer
+remains for local builds.
 
 The Linux build is made on Ubuntu 24.04, so it needs glibc 2.39 or newer and will not
 start on an older distribution; build it there yourself if you need one. The Linux
