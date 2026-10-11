@@ -35,8 +35,9 @@ Windows, and a skipped test reports green.
 ## The frozen build runs on packaging changes, weekly, and on demand
 
 `test_builds` builds on Windows, macOS and Linux, smoke-tests the result headless, builds
-the Windows installer and the macOS disk image, and uploads artifacts. It is advisory. It
-does not run on every change under `gleapp/`: a logic change inside an existing module
+the Windows single file (and opens its window) and the macOS disk image, and uploads
+artifacts. It signs nothing; Windows signing is `release.yml`'s, through SignPath. It is
+advisory. It does not run on every change under `gleapp/`: a logic change inside an existing module
 almost never breaks the frozen build, and the three legs together bill about 35 minutes
 per run while the repository is private. It runs when `packaging/`, `pyproject.toml`,
 `requirements.txt` or its own file change, every Monday on `main`, and by dispatch.
