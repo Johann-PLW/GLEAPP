@@ -49,15 +49,19 @@ file to sign, as well as the folder build inside it. The cost is that the single
 unpacks itself to `%TEMP%` on every start, all of it (the content model alone is 121 MB),
 so it is slower to start and blocked where AppLocker or WDAC forbid running programs from
 `%TEMP%`; the footer sends those users to the source. `test_builds.yml` prints how long
-three `--version` starts took. The video, texture and Windows.edb workers re-run
-`sys.executable` and reuse the parent's unpacked folder rather than unpacking again: that
-is PyInstaller's default since 6.9 (`PYINSTALLER_RESET_ENVIRONMENT` is what turns it off;
-read in the 6.22.2 bootloader, not measured). The bootloader runs GLEAPP in a child process
-and puts it in no job object, so ending the process that was started leaves GLEAPP
-running; `test_builds.yml` ends the `web` smoke test with `taskkill /T /IM GLEAPP.exe` for
-that reason. `test_builds.yml` builds and smoke-tests that single file, marked as
-downloaded, and opens its window; it no longer builds the folder or the installer on
-Windows. The Inno Setup script and `build.py installer` remain for local builds.
+three `--version` starts took. Measured 2026-10-11 on `windows-latest` (run 38125133918):
+the single file is 250,878,057 bytes and the three starts took 8.70, 8.29 and 8.30 s,
+against 0.16 to 0.53 s for the one-folder build on Linux and both Macs in the same run. A
+Windows folder build was not timed, so how much of the 8 s is unpacking is not known. The
+video, texture and Windows.edb workers re-run `sys.executable` and reuse the parent's
+unpacked folder rather than unpacking again: that is PyInstaller's default since 6.9
+(`PYINSTALLER_RESET_ENVIRONMENT` is what turns it off; read in the 6.22.2 bootloader, not
+measured). The bootloader runs GLEAPP in a child process and puts it in no job object, so
+ending the process that was started leaves GLEAPP running; `test_builds.yml` ends the
+`web` smoke test with `taskkill /T /IM GLEAPP.exe` for that reason. `test_builds.yml`
+builds and smoke-tests that single file, marked as downloaded, and opens its window; it no
+longer builds the folder or the installer on Windows. The Inno Setup script and `build.py
+installer` remain for local builds.
 
 macOS: `.app` and `.dmg`; the release workflow signs the `.app` with a Developer ID and
 the hardened runtime (`packaging/entitlements.plist`), then signs, notarises and staples
