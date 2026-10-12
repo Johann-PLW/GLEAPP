@@ -4,6 +4,7 @@ spellings kept on the row, so duplicate stacking only sees real copies."""
 import io
 import json
 import tarfile
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -145,6 +146,63 @@ def test_mirrors_register_once_and_stack_only_real_copies(tmp_path, build):
         assert stats.redundant_duplicates == 1                          # d.jpg twice, nothing else
         stacked = [r for r in c.db.iter_files() if r["stack_id"] and r["stack_id"] != r["id"]]
         assert [r["orig_path"] for r in stacked] == ["Dump/data/media/0/Download/d.jpg"]
+    finally:
+        c.close()
+
+
+# One member name listed twice by the archive, alone and beside a mirror of the same file.
+REPEATED = {
+    "alone": [("Dump/data/data/com.app/files/a.jpg", A)] * 2,
+    "with_mirror": [("Dump/data/data/com.app/files/a.jpg", A)] * 2
+                   + [("Dump/data/user/0/com.app/files/a.jpg", A)],
+}
+
+
+def test_plan_never_drops_the_name_it_keeps():
+    for label, members in REPEATED.items():
+        alts, drop, differ = storage_views.plan((m, len(d), 7) for m, d in members)
+        assert "Dump/data/data/com.app/files/a.jpg" not in drop, label
+        assert differ == 0, label
+    alts, drop, _ = storage_views.plan((m, len(d), 7) for m, d in REPEATED["alone"])
+    assert (alts, drop) == ({}, set())
+    alts, drop, _ = storage_views.plan((m, len(d), 7) for m, d in REPEATED["with_mirror"])
+    assert alts == {"Dump/data/data/com.app/files/a.jpg": ["Dump/data/user/0/com.app/files/a.jpg"]}
+    assert drop == {"Dump/data/user/0/com.app/files/a.jpg"}
+
+
+def _repeated_zip(tmp_path, members):
+    z = tmp_path / "REPEATED.zip"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)       # zipfile warns on a duplicate name
+        with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+            for member, data in members:
+                zf.writestr(member, data)
+    return z
+
+
+def _repeated_tar(tmp_path, members):
+    t = tmp_path / "REPEATED.tar"
+    with tarfile.open(t, "w") as tf:
+        for member, data in members:
+            info = tarfile.TarInfo(member)
+            info.size = len(data)
+            info.mtime = 1_700_000_000
+            tf.addfile(info, io.BytesIO(data))
+    return t
+
+
+@pytest.mark.parametrize("label", list(REPEATED))
+@pytest.mark.parametrize("build", [_repeated_zip, _repeated_tar], ids=["zip", "tar"])
+def test_a_repeated_member_name_is_still_registered(tmp_path, build, label):
+    arc = build(tmp_path, REPEATED[label])
+    c, _ = _ingest(tmp_path, arc, "case", stage=True)
+    try:
+        rows = list(c.db.iter_files())
+        assert [r["orig_path"] for r in rows] == ["Dump/data/data/com.app/files/a.jpg"]
+        assert Path(rows[0]["path"]).is_file()
+        mirrors = json.loads(rows[0]["alt_paths"]) if rows[0]["alt_paths"] else []
+        expected = ["Dump/data/user/0/com.app/files/a.jpg"] if label == "with_mirror" else []
+        assert mirrors == expected
     finally:
         c.close()
 
