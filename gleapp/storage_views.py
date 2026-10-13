@@ -90,7 +90,9 @@ def plan(entries: Iterable[tuple[str, int | None, int | None]]
     drop: set[str] = set()
     differ = 0
     for members in groups.values():
-        if len(members) < 2:
+        # An archive can list one member name more than once. That is one spelling, not
+        # a mirror, and a name that is kept must never also be dropped.
+        if len({m[1] for m in members}) < 2:
             continue
         sizes = {m[2] for m in members}
         crcs = {m[3] for m in members if m[3] is not None}
@@ -99,7 +101,7 @@ def plan(entries: Iterable[tuple[str, int | None, int | None]]
             continue
         members.sort()
         keep = members[0][1]
-        alts[keep] = [m[1] for m in members[1:]]
+        alts[keep] = list(dict.fromkeys(m[1] for m in members[1:] if m[1] != keep))
         drop.update(alts[keep])
     return alts, drop, differ
 
