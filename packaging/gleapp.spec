@@ -45,7 +45,10 @@ for mod in ("webview", "cv2", "imagehash", "PIL", "pi_heif",
             "py7zr", "pyppmd", "pybcj", "inflate64", "brotli", "Cryptodome",
             "multivolumefile",
             # pypdf's AES for encrypted PDFs (gleapp/docmedia.py)
-            "Crypto"):
+            "Crypto",
+            # Argon2 for a LUKS2 key slot (the vendored qnxprobe), and its compiled
+            # bindings
+            "argon2", "_argon2_cffi_bindings"):
     try:
         d, b, h = collect_all(mod)
         datas += d

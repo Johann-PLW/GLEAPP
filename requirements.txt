@@ -41,6 +41,14 @@ pycryptodome>=3.20
 # 3.23.0 has abi3 wheels for Windows x64 and ARM64, macOS universal2 and x86_64,
 # and manylinux x86_64 and aarch64 (PyPI, 2026-09-27).
 pycryptodomex>=3.20
+# Opening a LUKS2 container whose key slot derives its key with Argon2, cryptsetup's
+# default for LUKS2: the vendored qnxprobe imports argon2.low_level, and without it
+# says that key slot needs argon2-cffi. argon2-cffi is pure Python over
+# argon2-cffi-bindings. Bindings 26.1.0 has abi3 wheels for Windows x64 and ARM64,
+# macOS arm64 and manylinux x86_64 and aarch64, and none for macOS x86_64, which
+# 25.1.0 has, so an Intel Mac stays below 26 (PyPI, 2026-10-14).
+argon2-cffi>=23.1
+argon2-cffi-bindings<26; sys_platform == "darwin" and platform_machine == "x86_64"
 imagehash>=4.3
 # OpenCV 4.x cannot load the bundled content model (gleapp/models/dinov2_small.onnx):
 # 4.8 stops on its Expand node and 4.9 through 4.14 on its cubic Resize. 5.0 loads it

@@ -804,8 +804,8 @@ def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
 
 def test_a_luks_container_is_recorded_as_not_read_with_why(tmp_path):
     """A LUKS1 container cryptsetup wrote (qnxprobe's tests/fixtures), wrapped in an
-    E01: GLEAPP takes no LUKS passphrase, so nothing inside is walked, and the
-    container is recorded as not read, saying so."""
+    E01 and ingested with no passphrase given: nothing inside is walked, and the
+    container is recorded as not read, saying what would open it."""
     raw = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
     folder = tmp_path / "ev"
     folder.mkdir()
@@ -813,7 +813,7 @@ def test_a_luks_container_is_recorded_as_not_read_with_why(tmp_path):
     case, _ = _ingest(tmp_path, image, name="luks", include_other=True)
     refused = " ".join(str(v) for (v,) in case.db.conn.execute(
         "SELECT value FROM meta WHERE key LIKE '%:volumes_not_read'").fetchall())
-    assert "LUKS1, locked" in refused and "does not take a LUKS passphrase" in refused, refused
+    assert "LUKS1, locked" in refused and "give its passphrase" in refused, refused
     case.close()
 
 

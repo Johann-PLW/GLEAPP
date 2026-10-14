@@ -39,6 +39,9 @@ dependencies = [
     "pypdf>=5.0",
     "pycryptodome>=3.20",
     "pycryptodomex>=3.20",
+    "argon2-cffi>=23.1",
+    # 26.1.0 has no macOS x86_64 wheel; 25.1.0 has one (requirements.txt)
+    "argon2-cffi-bindings<26; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "imagehash>=4.3",
     "numpy>=2.0",
     # OpenCV 4.x cannot load the bundled content model (requirements.txt)
