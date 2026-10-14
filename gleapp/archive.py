@@ -971,6 +971,17 @@ def _volumes(image) -> list[tuple[int, int | None, str, str]]:
         # not a volume: taking it would hand walker_for a kind of None.
         if got and got[0]:
             out.append((base, size, got[0], name))
+    # The linear logical volumes of an LVM2 physical volume among them, each one
+    # run of extents and so a byte range of the image like a partition, are
+    # volumes too, named as qnxprobe and the LEAPP tools name them. The physical
+    # volume itself stays in the list, and is reported as not walked, with the
+    # logical volumes the reader does not read (_not_walked).
+    lvs, _notes = qnxprobe.lvm_volumes(
+        image, [(name, base, size or 0) for base, size, name in regions], ss)
+    for _label, base, size, vname in lvs:
+        got = qnxprobe.identify_fs(image, base, size)
+        if got and got[0]:
+            out.append((base, size, got[0], vname))
     return out
 
 
@@ -1814,6 +1825,12 @@ def _not_walked(img, base: int, size) -> str:
     bitlocker = qnxprobe.BitLocker.open(img, base, size)
     if bitlocker is not None:
         return bitlocker.locked_note()
+    lvm = qnxprobe.identify_lvm(img, base, size)
+    if lvm is not None:
+        skipped = [ln[len("logical volume "):].replace(": not read (", " (", 1) for ln in lvm[1]
+                   if ln.startswith("logical volume ") and ": not read (" in ln]
+        return ("an LVM2 physical volume: each logical volume read from it is walked as a "
+                "volume of its own" + ("; not read: " + "; ".join(skipped) if skipped else ""))
     return "the vendored reader names this filesystem and does not walk it"
 
 

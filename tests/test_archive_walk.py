@@ -755,6 +755,60 @@ def test_a_catalog_that_cannot_be_read_in_one_pass_is_walked_as_before(
 
 
 
+
+def test_the_linear_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
+    """A GPT disk of two LVM2 physical volumes, written by lvm2 itself (qnxprobe's
+    tests/fixtures, where tools/make_lvm_fixtures.sh says how), wrapped in an E01.
+    The two logical volumes that hold ext4 and are each one run of extents are
+    volumes, every file in them registers with the hash sha256sum recorded over
+    its source tree, and the physical volumes are recorded as not walked, each
+    naming the logical volumes the reader does not read and why."""
+    fx = Path(__file__).parent / "fixtures"
+    raw = gzip.decompress((fx / "lvm-fixture.img.gz").read_bytes())
+    want = {}
+    for line in (fx / "lvm-fixture.sha256").read_text(encoding="utf-8").splitlines():
+        digest, name = line.split("  ", 1)
+        want[name] = digest
+    folder = tmp_path / "ev"
+    folder.mkdir()
+    image = Path(write_ewf(folder, "acq", raw)[0])
+    img = archive.ewfprobe.open_ewf(str(image))
+    vols = archive._volumes(img)                     # pylint: disable=protected-access
+    names = {label: kind for _b, _s, kind, label in vols}
+    assert names.get("lvm_lba4096_fixvg_root") == "ext4", names
+    assert names.get("lvm_lba53248_fixvg_onb") == "ext4", names
+    assert sum(kind == "lvm2 pv" for kind in names.values()) == 2, names
+    for base, size, kind, label in vols:
+        if label not in ("lvm_lba4096_fixvg_root", "lvm_lba53248_fixvg_onb"):
+            continue
+        walker = qnxprobe.walker_for(kind, img, base, size)
+        top = label.rsplit("_", 1)[1]
+        got = {}
+        for path, node, fsize in _files(walker, walker.root):
+            got[f"{top}/{path}"] = hashlib.sha256(b"".join(walker.read_file(node, fsize))).hexdigest()
+        assert got == {k: v for k, v in want.items() if k.startswith(top + "/")}, label
+    img.close()
+    case, _ = _ingest(tmp_path, image, name="lvm", include_other=True)
+    refused = " ".join(str(v) for (v,) in case.db.conn.execute(
+        "SELECT value FROM meta WHERE key LIKE '%:volumes_not_read'").fetchall())
+    assert refused.count("an LVM2 physical volume") == 2, refused
+    for lv in ("data", "striped", "mirror"):
+        assert f"{lv}, " in refused, refused
+    case.close()
+
+
+def _files(walker, node, path=""):
+    for name, child in walker.listdir(node):
+        if name in (".", "..", "lost+found"):
+            continue
+        mode, size = walker.entry(child)[:2]
+        rel = f"{path}/{name}" if path else name
+        if mode & 0o170000 == 0o040000:
+            yield from _files(walker, child, rel)
+        elif mode & 0o170000 == 0o100000:
+            yield rel, child, size
+
+
 # ---- a partition table whose sectors are 4096 bytes --------------------------
 
 # The type GUID the APFS partition carries in the GPT of the public macOS Big
