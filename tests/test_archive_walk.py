@@ -756,13 +756,15 @@ def test_a_catalog_that_cannot_be_read_in_one_pass_is_walked_as_before(
 
 
 
-def test_the_linear_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
+def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     """A GPT disk of two LVM2 physical volumes, written by lvm2 itself (qnxprobe's
     tests/fixtures, where tools/make_lvm_fixtures.sh says how), wrapped in an E01.
-    The two logical volumes that hold ext4 and are each one run of extents are
-    volumes, every file in them registers with the hash sha256sum recorded over
-    its source tree, and the physical volumes are recorded as not walked, each
-    naming the logical volumes the reader does not read and why."""
+    Every logical volume that holds ext4 is a volume: two that are each one run
+    of extents, one split into two runs and one striped across both physical
+    volumes, the last two read through a map of their runs (qnxprobe.lvm_image).
+    Every file registers with the hash sha256sum recorded over its source tree,
+    and the physical volumes are recorded as not walked, naming the RAID1 volume
+    the reader does not read and why."""
     fx = Path(__file__).parent / "fixtures"
     raw = gzip.decompress((fx / "lvm-fixture.img.gz").read_bytes())
     want = {}
@@ -772,17 +774,20 @@ def test_the_linear_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     folder = tmp_path / "ev"
     folder.mkdir()
     image = Path(write_ewf(folder, "acq", raw)[0])
-    img = archive.ewfprobe.open_ewf(str(image))
+    img = archive._open_image_file(str(image))      # pylint: disable=protected-access
     vols = archive._volumes(img)                     # pylint: disable=protected-access
-    names = {label: kind for _b, _s, kind, label in vols}
-    assert names.get("lvm_lba4096_fixvg_root") == "ext4", names
-    assert names.get("lvm_lba53248_fixvg_onb") == "ext4", names
-    assert sum(kind == "lvm2 pv" for kind in names.values()) == 2, names
+    names = {label: (kind, base) for base, _s, kind, label in vols}
+    tops = {"lvm_lba4096_fixvg_root": "root", "lvm_lba53248_fixvg_onb": "onb",
+            "lvm_lba16384_fixvg_data": "data", "lvm_lba32768_fixvg_striped": "striped"}
+    for label in tops:
+        assert names.get(label, ("", 0))[0] == "ext4", names
+    assert names["lvm_lba16384_fixvg_data"][1] >= len(raw), "the split volume is placed past the end"
+    assert sum(kind == "lvm2 pv" for kind, _b in names.values()) == 2, names
     for base, size, kind, label in vols:
-        if label not in ("lvm_lba4096_fixvg_root", "lvm_lba53248_fixvg_onb"):
+        if label not in tops:
             continue
         walker = qnxprobe.walker_for(kind, img, base, size)
-        top = label.rsplit("_", 1)[1]
+        top = tops[label]
         got = {}
         for path, node, fsize in _files(walker, walker.root):
             got[f"{top}/{path}"] = hashlib.sha256(b"".join(walker.read_file(node, fsize))).hexdigest()
@@ -792,9 +797,44 @@ def test_the_linear_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     refused = " ".join(str(v) for (v,) in case.db.conn.execute(
         "SELECT value FROM meta WHERE key LIKE '%:volumes_not_read'").fetchall())
     assert refused.count("an LVM2 physical volume") == 2, refused
-    for lv in ("data", "striped", "mirror"):
-        assert f"{lv}, " in refused, refused
+    assert "mirror, " in refused and "data, " not in refused and "striped, " not in refused, refused
     case.close()
+
+
+def test_an_lvm2_disk_scopes_a_carve_to_its_free_extents_and_mapped_runs(monkeypatch, tmp_path):
+    """A physical volume answers the carve scope with its extents no logical
+    volume holds (lvm2's report leaves the second one's extents 9 to 18 free),
+    and a volume read through a map answers with its free runs where they lie in
+    the image, not where the map places it. The volumes' own readers are stood in
+    for by ones that report nothing free, but for the striped volume's first two
+    64 KiB chunks, which are on the two physical volumes in turn."""
+    fx = Path(__file__).parent / "fixtures"
+    raw = gzip.decompress((fx / "lvm-fixture.img.gz").read_bytes())
+    folder = tmp_path / "ev"
+    folder.mkdir()
+    image = Path(write_ewf(folder, "acq", raw)[0])
+    img = archive._open_image_file(str(image))      # pylint: disable=protected-access
+    vols = archive._volumes(img)                     # pylint: disable=protected-access
+    striped = [b for b, _s, _k, lb in vols if lb == "lvm_lba32768_fixvg_striped"][0]
+
+    class _Reader:
+        def __init__(self, base):
+            self.base = base
+
+        def free_extents(self, min_bytes=0):         # pylint: disable=unused-argument
+            return [(striped, 128 << 10)] if self.base == striped else []
+
+    monkeypatch.setattr(archive.qnxprobe, "walker_for", lambda _k, _i, base, _s=None: _Reader(base))
+    spans = archive._unclaimed_space(img, vols, min_bytes=0)   # pylint: disable=protected-access
+    img.close()
+    mib = 1 << 20
+    pv2 = 51200 * 512 + mib                          # the second physical volume's first extent
+    # the spare extents end where the second physical volume does, and the space
+    # past the last partition starts there too, so the two come back joined
+    assert any(at == pv2 + 9 * mib and n >= 10 * mib for at, n in spans), spans
+    assert not any(at < pv2 + 9 * mib < at + n for at, n in spans), spans
+    assert (2 * mib + 14 * mib, 64 << 10) in spans and (pv2 + 4 * mib, 64 << 10) in spans, spans
+    assert all(at + n <= len(raw) for at, n in spans), "a run past the image's end was reported"
 
 
 def _files(walker, node, path=""):
