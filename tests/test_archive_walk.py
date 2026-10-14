@@ -763,8 +763,8 @@ def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     of extents, one split into two runs and one striped across both physical
     volumes, the last two read through a map of their runs (qnxprobe.lvm_image).
     Every file registers with the hash sha256sum recorded over its source tree,
-    and the physical volumes are recorded as not walked, naming the RAID1 volume
-    the reader does not read and why."""
+    and the physical volumes are recorded as not walked. The RAID1 volume is read
+    from its first copy, a volume of its own."""
     fx = Path(__file__).parent / "fixtures"
     raw = gzip.decompress((fx / "lvm-fixture.img.gz").read_bytes())
     want = {}
@@ -778,7 +778,8 @@ def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     vols = archive._volumes(img)                     # pylint: disable=protected-access
     names = {label: (kind, base) for base, _s, kind, label in vols}
     tops = {"lvm_lba4096_fixvg_root": "root", "lvm_lba53248_fixvg_onb": "onb",
-            "lvm_lba16384_fixvg_data": "data", "lvm_lba32768_fixvg_striped": "striped"}
+            "lvm_lba16384_fixvg_data": "data", "lvm_lba32768_fixvg_striped": "striped",
+            "lvm_lba47104_fixvg_mirror": "mirror"}
     for label in tops:
         assert names.get(label, ("", 0))[0] == "ext4", names
     assert names["lvm_lba16384_fixvg_data"][1] >= len(raw), "the split volume is placed past the end"
@@ -797,7 +798,22 @@ def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     refused = " ".join(str(v) for (v,) in case.db.conn.execute(
         "SELECT value FROM meta WHERE key LIKE '%:volumes_not_read'").fetchall())
     assert refused.count("an LVM2 physical volume") == 2, refused
-    assert "mirror, " in refused and "data, " not in refused and "striped, " not in refused, refused
+    assert "not read:" not in refused, refused
+    case.close()
+
+
+def test_a_luks_container_is_recorded_as_not_read_with_why(tmp_path):
+    """A LUKS1 container cryptsetup wrote (qnxprobe's tests/fixtures), wrapped in an
+    E01: GLEAPP takes no LUKS passphrase, so nothing inside is walked, and the
+    container is recorded as not read, saying so."""
+    raw = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    folder = tmp_path / "ev"
+    folder.mkdir()
+    image = Path(write_ewf(folder, "acq", raw)[0])
+    case, _ = _ingest(tmp_path, image, name="luks", include_other=True)
+    refused = " ".join(str(v) for (v,) in case.db.conn.execute(
+        "SELECT value FROM meta WHERE key LIKE '%:volumes_not_read'").fetchall())
+    assert "LUKS1, locked" in refused and "does not take a LUKS passphrase" in refused, refused
     case.close()
 
 

@@ -1824,10 +1824,15 @@ def _prime_catalog(walker) -> None:
 
 def _not_walked(img, base: int, size) -> str:
     """Why a volume the reader can name has no walker: the locked BitLocker volume's
-    own reason and what would open it, or that the reader walks no such filesystem."""
+    own reason and what would open it, a LUKS container's, an LVM2 physical
+    volume's, or that the reader walks no such filesystem."""
     bitlocker = qnxprobe.BitLocker.open(img, base, size)
     if bitlocker is not None:
         return bitlocker.locked_note()
+    luks = qnxprobe.Luks.open(img, base, size)
+    if luks is not None:
+        return (f"{luks.summary()}; GLEAPP does not take a LUKS passphrase yet, so what it "
+                "holds is not read")
     lvm = qnxprobe.identify_lvm(img, base, size)
     if lvm is not None:
         skipped = [ln[len("logical volume "):].replace(": not read (", " (", 1) for ln in lvm[1]
