@@ -401,10 +401,15 @@ def test_hashset_import_endpoint_flags_and_removes(tmp_path):
     r = cl.post("/api/hashset/import",
                 json={"path": str(lst), "name": "CyberTip 9999", "kind": "known"}).get_json()
     assert r["ok"] and r["entries"] == 2
-    for _ in range(100):
-        if not cl.get("/api/job").get_json()["running"]:
+    # wait for the flagging job's own result, and fail here if it never comes,
+    # rather than reading the flags while the job is still writing them
+    job, deadline = {}, time.monotonic() + 120
+    while time.monotonic() < deadline:
+        job = cl.get("/api/job").get_json()
+        if not job["running"]:
             break
         time.sleep(0.02)
+    assert job["stage"] == "done" and job["stats"] == {"hashset_hits": 1}, job
 
     import_detail = json.loads(next(
         row["detail"] for row in cl.get("/api/audit").get_json()
