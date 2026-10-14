@@ -214,19 +214,22 @@ def _try_bitlocker(path: str, given: dict) -> bool:
 
 def _unlock_sources(sources, data: dict) -> list[dict]:
     """Open each encrypted image source with what the ingest request's body gives for
-    it, and the BitLocker and encrypted APFS volumes in each image, and return what is
-    still locked, one entry per source, for the client to ask about: ``needs`` is
-    ``password``, ``private key``, ``bitlocker`` or ``apfs`` (a volume, with its
-    ``volume`` label and the reader's ``note``; for APFS the ``hint`` it stores too),
-    and ``wrong`` is true when something was given and did not open it. An image the
-    body lists in ``bitlocker_skip`` or ``apfs_skip`` has those volumes left locked and
-    is not asked about again; the walk records them as not read."""
+    it, and the BitLocker volumes, encrypted APFS volumes and LUKS containers in each
+    image, and return what is still locked, one entry per source, for the client to ask
+    about: ``needs`` is ``password``, ``private key``, ``bitlocker``, ``apfs`` or
+    ``luks`` (a volume, with its ``volume`` label and the reader's ``note``; for APFS
+    the ``hint`` it stores too), and ``wrong`` is true when something was given and did
+    not open it. An image the body lists in ``bitlocker_skip``, ``apfs_skip`` or
+    ``luks_skip`` has those volumes left locked and is not asked about again; the walk
+    records them as not read."""
     passwords = data.get("passwords") or {}
     private_keys = data.get("private_keys") or {}
     bitlocker = data.get("bitlocker") or {}
     skip = set(data.get("bitlocker_skip") or [])
     apfs = data.get("apfs") or {}
     apfs_skip = set(data.get("apfs_skip") or [])
+    luks = data.get("luks") or {}
+    luks_skip = set(data.get("luks_skip") or [])
     locked = []
     for s in sources:
         try:
@@ -267,6 +270,16 @@ def _unlock_sources(sources, data: dict) -> list[dict]:
                     locked.append({"name": s.name, "path": s.path, "needs": "apfs",
                                    "volume": left[0]["label"], "note": left[0]["note"],
                                    "hint": left[0]["hint"], "wrong": wrong})
+                    continue
+            if s.path not in luks_skip and any(v["askable"]
+                                               for v in archive.luks_volumes(s.path)):
+                tried = (luks.get(s.path) or {}).get("secret")
+                wrong = bool(tried) and not archive.unlock_luks(s.path, str(tried))
+                left = [v for v in archive.luks_volumes(s.path) if v["askable"]]
+                if left:
+                    locked.append({"name": s.name, "path": s.path, "needs": "luks",
+                                   "volume": left[0]["label"], "note": left[0]["note"],
+                                   "wrong": wrong})
         except (OSError, archive.ewfprobe.EwfError) as exc:
             abort(400, description=f"{s.name} could not be opened: {exc}")
     return locked
@@ -2179,8 +2192,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         """Open an encrypted disk image source with its password (``password``) or the
         private key of a certificate it is sealed to (``private_key``, the key file's
         path on this machine), the BitLocker volumes in it (``bitlocker``, a ``secret``
-        or a ``key_file``), or the encrypted APFS volumes in it (``apfs``, a ``secret``),
-        held in memory for this session only. ``ok`` is false, with ``wrong`` true, when
+        or a ``key_file``), the encrypted APFS volumes in it (``apfs``, a ``secret``), or
+        the LUKS containers in it (``luks``, a ``secret``), held in memory for this session only. ``ok`` is false, with ``wrong`` true, when
         it opens nothing."""
         case = C()
         body = request.get_json(force=True) or {}
@@ -2190,13 +2203,16 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         path = rec["path"]
         bitlocker = body.get("bitlocker") if isinstance(body.get("bitlocker"), dict) else None
         apfs = body.get("apfs") if isinstance(body.get("apfs"), dict) else None
+        luks = body.get("luks") if isinstance(body.get("luks"), dict) else None
         if bitlocker is not None and not rec["bitlocker"]:
             abort(400, description=f"{rec['name']} holds no BitLocker volume")
         if apfs is not None and not rec["apfs"]:
             abort(400, description=f"{rec['name']} holds no encrypted APFS volume "
                                    f"the ingest read")
-        if bitlocker is None and apfs is None and not (archive.needs_password(path)
-                                                       or archive.needs_private_key(path)):
+        if luks is not None and not rec["luks"]:
+            abort(400, description=f"{rec['name']} holds no LUKS container the ingest read")
+        if (bitlocker is None and apfs is None and luks is None
+                and not (archive.needs_password(path) or archive.needs_private_key(path))):
             abort(400, description=f"{rec['name']} is not an encrypted disk image")
         ok = False
         try:
@@ -2204,6 +2220,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 ok = _try_bitlocker(path, bitlocker)
             elif apfs is not None:
                 ok = archive.unlock_apfs(path, str(apfs.get("secret") or ""))
+            elif luks is not None:
+                ok = archive.unlock_luks(path, str(luks.get("secret") or ""))
             elif body.get("private_key"):
                 ok = archive.unlock_image(path, private_key=_key_file(body["private_key"],
                                                                       "private key"))

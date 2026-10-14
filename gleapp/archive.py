@@ -169,14 +169,16 @@ class ImagePasswordNeeded(ArchiveUnavailable):
 # What opens an encrypted image, by the image's path: its password, or the bytes of
 # the RSA private key of a certificate it is sealed to; for the BitLocker volumes
 # inside an image, the passwords or recovery passwords and the bytes of the startup
-# key (.BEK) files that open them; and for the encrypted APFS volumes inside it, the
-# passwords or personal recovery keys that open them. Held by this process only and
+# key (.BEK) files that open them; for the encrypted APFS volumes inside it, the
+# passwords or personal recovery keys that open them; and for the LUKS containers
+# inside it, the passphrases that open them. Held by this process only and
 # never written anywhere (not the case, the config, a log or a report), so a new
 # session asks for them again.
 _PASSWORDS: dict[str, str | bytes] = {}
 _PRIVATE_KEYS: dict[str, bytes] = {}
 _BITLOCKER: dict[str, tuple[list, list]] = {}      # (secrets, startup keys)
 _APFS: dict[str, list] = {}                        # passwords or recovery keys
+_LUKS: dict[str, list] = {}                        # passphrases
 _PASSWORD_LOCK = threading.Lock()
 # What the vendored reader says a BitLocker volume can be opened with, of the kinds
 # a person can give: anything else (a TPM, a clear key already used) is not asked for.
@@ -352,6 +354,58 @@ def unlock_apfs(path, secret) -> bool:
     if opened:
         with _PASSWORD_LOCK:
             _APFS.setdefault(_password_key(path), []).append(secret)
+        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+    return opened
+
+
+def _luks_held(path) -> list:
+    """The LUKS passphrases this session holds for ``path``."""
+    with _PASSWORD_LOCK:
+        return list(_LUKS.get(_password_key(path), []))
+
+
+def _luks_askable(lk) -> bool:
+    """True when a LUKS container still locked could open with a passphrase, so asking
+    for one could help: not one whose header, cipher or keyslots the reader refuses."""
+    return lk.mk is None and not lk.why
+
+
+def luks_volumes(path) -> list[dict]:
+    """The LUKS containers in the image at ``path``, tried with what this session holds
+    for them: each one's ``label`` (the region it is in), ``open``, ``askable`` (still
+    locked, and a passphrase could open it) and the reader's ``note`` on why it is
+    locked. Empty for an image with no LUKS container, and for an encrypted image not
+    open this session (``unlock_image`` comes first)."""
+    try:
+        img = _open_image_file(path, luks=False)
+    except (ArchiveUnavailable, *_IMAGE_ERRORS):
+        return []
+    try:
+        _fh, found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), _luks_held(path))
+        return [{"label": lk.label, "open": lk.mk is not None, "askable": _luks_askable(lk),
+                 "note": "" if lk.mk is not None else lk.locked_note()} for lk in found]
+    finally:
+        img.close()
+
+
+def unlock_luks(path, secret) -> bool:
+    """Try ``secret`` (a passphrase) on each LUKS container in the image at ``path``
+    that is still locked this session. When it opens at least one, keep it for this
+    session and return True; when it opens none, return False."""
+    if not secret:
+        return False
+    img = _open_image_file(path, luks=False)
+    try:
+        _fh, found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), _luks_held(path))
+        opened = False
+        for lk in found:
+            if lk.mk is None and not lk.why and lk.unlock([secret]):
+                opened = True
+    finally:
+        img.close()
+    if opened:
+        with _PASSWORD_LOCK:
+            _LUKS.setdefault(_password_key(path), []).append(secret)
         _drop_image(os.fspath(path))    # a handle opened before this reads it locked
     return opened
 
@@ -824,6 +878,8 @@ def source_record(case, name: str) -> dict | None:
         "bitlocker": case.db.get_meta(f"{key}:bitlocker") or "",
         # and the identifiers of the encrypted APFS volumes it read decrypted
         "apfs": case.db.get_meta(f"{key}:apfs") or "",
+        # and the byte offsets of the LUKS containers it read decrypted
+        "luks": case.db.get_meta(f"{key}:luks") or "",
         # the walked rows that are a cloud provider's online-only placeholders: the
         # volume names them and holds none of their content, so they have no copy
         # and no hash, and an examiner has to be told that is why
@@ -856,9 +912,11 @@ def source_status(case) -> list[dict]:
     ``missing``, or ``locked`` (an encrypted image whose password or private key has
     not been given this session, which ``unlock_image`` takes, an image holding
     BitLocker volumes that no key given this session opens, which ``unlock_bitlocker``
-    takes, or one holding encrypted APFS volumes the walk read decrypted and nothing
-    given this session opens, which ``unlock_apfs`` takes). ``locked_by`` says which:
-    ``password``, ``private key``, ``BitLocker`` or ``APFS``.
+    takes, one holding encrypted APFS volumes the walk read decrypted and nothing
+    given this session opens, which ``unlock_apfs`` takes, or one holding LUKS
+    containers the walk read decrypted and no passphrase given this session opens,
+    which ``unlock_luks`` takes). ``locked_by`` says which: ``password``, ``private
+    key``, ``BitLocker``, ``APFS`` or ``LUKS``.
 
     The gallery asks for this with every context. The counts come from the case's
     rows and are kept until one is written (``CaseDB.derived``): on a case of
@@ -882,6 +940,8 @@ def source_status(case) -> list[dict]:
                 locked_by = "BitLocker"
             if same and not locked_by and rec["apfs"] and not _apfs_held(rec["path"]):
                 locked_by = "APFS"
+            if same and not locked_by and rec["luks"] and not _luks_held(rec["path"]):
+                locked_by = "LUKS"
             locked = bool(locked_by)
             # A segmented acquisition is several files and the record names one, so a
             # later segment going missing leaves the first one untouched and the source
@@ -971,6 +1031,15 @@ def _volumes(image) -> list[tuple[int, int | None, str, str]]:
         # not a volume: taking it would hand walker_for a kind of None.
         if got and got[0]:
             out.append((base, size, got[0], name))
+    # The data of each LUKS container a passphrase given this session opened is read
+    # decrypted at its own place (_open_image_file), so it is a volume too, named as
+    # qnxprobe and the LEAPP tools name it. The container stays in the list, and is
+    # reported as not walked, with what it holds (_not_walked).
+    for data, dsize, name in _luks_data(image, regions, ss):
+        regions.append((data, dsize, name))
+        got = qnxprobe.identify_fs(image, data, dsize)
+        if got and got[0]:
+            out.append((data, dsize, got[0], name))
     # The linear logical volumes of an LVM2 physical volume among them, each one
     # run of extents and so a byte range of the image like a partition, are
     # volumes too, named as qnxprobe and the LEAPP tools name them. The physical
@@ -982,7 +1051,21 @@ def _volumes(image) -> list[tuple[int, int | None, str, str]]:
         got = qnxprobe.identify_fs(image, base, size)
         if got and got[0]:
             out.append((base, size, got[0], vname))
+    # and a LUKS container written inside a logical volume
+    for data, dsize, name in _luks_data(image, [(b, s, n) for _l, b, s, n in lvs], ss):
+        got = qnxprobe.identify_fs(image, data, dsize)
+        if got and got[0]:
+            out.append((data, dsize, got[0], name))
     return out
+
+
+def _luks_data(image, regions, ss) -> list[tuple[int, int, str]]:
+    """[(data offset, data size, name)] of the opened LUKS containers whose own region
+    is among ``regions`` and whose data is not."""
+    bases = {base for base, _size, _name in regions}
+    return [(base + lk.offset, lk.data_size, f"luks_lba{(base + lk.offset) // ss}")
+            for base, lk in sorted((getattr(image, "luks", None) or {}).items())
+            if base in bases and base + lk.offset not in bases]
 
 
 _IMAGE_ERRORS = (OSError, ewfprobe.EwfError, qnxprobe.SplitImageError)
@@ -1045,7 +1128,8 @@ class _RawImage:
         return False
 
 
-def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True):
+def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True,
+                     luks: bool = True):
     """A fresh handle on a disk image: ewfprobe for an acquisition (an E01, s01 or
     Ex01 set, an AFF, AFD or AFM, an AFF4, an Apple disk image, or a virtual machine
     disk), and ``_RawImage`` for a raw image or a numbered split set. An encrypted one
@@ -1053,7 +1137,9 @@ def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True):
     when that is nothing. The BitLocker volumes the session holds keys for are read
     decrypted, in place, unless ``bitlocker`` is False, and the encrypted APFS volumes
     it holds passwords for are read decrypted unless ``apfs`` is False; either way an
-    APFS volume left locked carries what would open it in its walker's note."""
+    APFS volume left locked carries what would open it in its walker's note. The LUKS
+    containers it holds passphrases for are read decrypted, at their data's own place,
+    unless ``luks`` is False."""
     path = os.fspath(path)
     kind = qnxprobe.acquisition_format(path)
     if kind in _ACQUISITIONS:
@@ -1080,6 +1166,11 @@ def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True):
                                                     secrets, keys)
     if apfs:
         img, _found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
+    # A LUKS container comes before LVM2, so a physical volume inside one is seen.
+    if luks:
+        held = _luks_held(path)
+        if held:
+            img, _found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), held)
     # An LVM2 logical volume split into runs, or striped, is read through a map
     # of its runs, placed past the image's end (qnxprobe.lvm_image); _volumes()
     # then lists it like any other, and every later read of it goes through here.
@@ -1829,10 +1920,13 @@ def _not_walked(img, base: int, size) -> str:
     bitlocker = qnxprobe.BitLocker.open(img, base, size)
     if bitlocker is not None:
         return bitlocker.locked_note()
+    opened = (getattr(img, "luks", None) or {}).get(base)
+    if opened is not None:
+        return (f"{opened.summary()}: what it holds is walked as "
+                f"luks_lba{(base + opened.offset) // qnxprobe.disk_sector_size(img)}")
     luks = qnxprobe.Luks.open(img, base, size)
     if luks is not None:
-        return (f"{luks.summary()}; GLEAPP does not take a LUKS passphrase yet, so what it "
-                "holds is not read")
+        return f"{luks.summary()}; {luks.locked_note()}"
     lvm = qnxprobe.identify_lvm(img, base, size)
     if lvm is not None:
         skipped = [ln[len("logical volume "):].replace(": not read (", " (", 1) for ln in lvm[1]
@@ -1919,6 +2013,9 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # and the encrypted APFS volumes it read decrypted, likewise; one left locked
         # is recorded below as a volume not read, with what would open it
         apfs: list[str] = []
+        # and the LUKS containers it read decrypted; one left locked is not walked,
+        # and is recorded below as a volume not read, with what would open it
+        luks = sorted(int(b) for b in (getattr(img, "luks", None) or {}))
 
         def planned():
             """Every file the walk registers, in the order the volumes report them:
@@ -2090,6 +2187,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         case.db.set_meta(f"{key}:bitlocker", json.dumps(bitlocker))
     if apfs:
         case.db.set_meta(f"{key}:apfs", json.dumps(apfs))
+    if luks:
+        case.db.set_meta(f"{key}:luks", json.dumps(luks))
     if short:
         case.db.set_meta(f"{key}:volumes_short", json.dumps(short))
     _finish(case, src, image_path, fmt=fmt, root="", stage=stage,

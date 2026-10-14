@@ -44,6 +44,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 AFF_PASSWORD = "ewfprobe-aff-password"
 APFS_PASSWORD = "qnxprobe-apfs-convert"
 APFS_HINT = "the qnxprobe conversion test"
+# the test passphrase cryptsetup wrote the LUKS fixtures with (qnxprobe's
+# tests/fixtures/luks-fixtures.json)
+LUKS_PASSPHRASE = "correct horse battery staple"
 _OPTS = {"screen": False, "keyframes": 0, "carve": True}
 
 
@@ -55,6 +58,7 @@ def _isolate(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(archive, "_PRIVATE_KEYS", {})
     monkeypatch.setattr(archive, "_BITLOCKER", {})
     monkeypatch.setattr(archive, "_APFS", {})
+    monkeypatch.setattr(archive, "_LUKS", {})
     from gleapp import hashstore, stash  # pylint: disable=import-outside-toplevel
     hashstore.close()
     stash.close()
@@ -413,6 +417,125 @@ def test_the_web_ingest_asks_for_an_apfs_password_or_leaves_the_volume_locked(tm
     for p in (tmp_path / "c2").rglob("*"):
         if p.is_file():
             assert APFS_PASSWORD.encode() not in p.read_bytes(), f"the password reached {p.name}"
+
+
+def _luks_sums() -> dict:
+    lines = (FIXTURES / "luks-fixture.sha256").read_text(encoding="utf-8").splitlines()
+    return {path: digest for digest, path in (ln.split("  ", 1) for ln in lines if ln)}
+
+
+def test_a_luks_container_is_named_as_locked_and_opens_with_its_passphrase(
+        tmp_path, monkeypatch, capsys):
+    """A LUKS2 container cryptsetup wrote with an Argon2id key slot (qnxprobe's
+    tests/fixtures): left locked without its passphrase, and with it, every file of
+    the ext4 inside read back with the hash sha256sum recorded from the mounted
+    volume."""
+    import hashlib  # pylint: disable=import-outside-toplevel
+    image = _copy(tmp_path, "luks2-argon2id.img.gz")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+
+    locked = str(tmp_path / "locked")
+    assert cli.main(["-c", locked, "ingest", str(_job(tmp_path, image)),
+                     "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "the LUKS container in whole image" in err and "stays locked" in err
+    assert "--password-file" in err
+    c = open_case(locked)
+    try:
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        refused = json.loads(row["volumes_not_read"])
+        assert len(refused) == 1 and "(luks): LUKS2, locked" in refused[0], refused
+        assert "give its passphrase" in refused[0]
+        assert row["walked"] == 0 and row["status"] == "ok" and not row["luks"]
+    finally:
+        c.close()
+
+    passphrase = tmp_path / "luks-passphrase.txt"
+    passphrase.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
+    opened = str(tmp_path / "opened")
+    assert cli.main(["-c", opened, "--password-file", str(passphrase), "ingest",
+                     str(_job(tmp_path, image)), "--no-process"]) == 0
+    assert "stays locked" not in capsys.readouterr().err
+    c = open_case(opened)
+    try:
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        assert json.loads(row["luks"]) == [0]
+        # the container itself is not walked: what it holds is, as its own volume
+        assert "opened with keyslot 0: what it holds is walked as luks_lba" in row[
+            "volumes_not_read"]
+        rec = archive.source_record(c, image.name)
+        files = {f["rel_path"].split("/", 1)[1]: f
+                 for f in c.db.iter_files("source = ?", (image.name,))
+                 if f["rel_path"].startswith("luks_lba")}
+        assert set(files) >= set(_luks_sums())
+        archive.close_zips()
+        monkeypatch.setattr(archive, "_LUKS", {})            # the app was restarted
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        assert (row["status"], row["locked_by"]) == ("locked", "LUKS")
+        assert [(v["label"], v["open"], v["askable"]) for v in archive.luks_volumes(image)] \
+            == [("whole image", False, True)]
+        assert archive.unlock_luks(image, "not it") is False
+        assert archive.unlock_luks(image, LUKS_PASSPHRASE) is True
+        assert {s["name"]: s for s in archive.source_status(c)}[image.name]["status"] == "ok"
+        for rel, digest in _luks_sums().items():
+            copy = archive.cached_copy(c.root, rec, files[rel])
+            assert hashlib.sha256(copy.read_bytes()).hexdigest() == digest, rel
+    finally:
+        c.close()
+
+
+def test_the_web_ingest_asks_for_a_luks_passphrase_or_leaves_the_container_locked(
+        tmp_path, monkeypatch):
+    image = _copy(tmp_path, "luks1-cbc.img.gz")
+    cl = _client()
+    cl.post("/api/case/create", json={"path": str(tmp_path / "c"), "name": "c",
+                                      "examiner": "t"})
+    body = {"sources": [{"path": str(image)}],
+            "options": {**_OPTS, "carve": False}}
+    r = cl.post("/api/case/ingest", json=body)
+    assert r.status_code == 409
+    need = r.get_json()["needs_password"]
+    assert [(n["needs"], n["volume"], n["wrong"]) for n in need] == [
+        ("luks", "whole image", False)]
+    assert "give its passphrase" in need[0]["note"]
+    r = cl.post("/api/case/ingest", json={**body, "luks": {need[0]["path"]: {"secret": "not it"}}})
+    assert r.status_code == 409 and r.get_json()["needs_password"][0]["wrong"] is True
+
+    # leaving it locked reads the rest of the image and says the container was not read
+    r = cl.post("/api/case/ingest", json={**body, "luks_skip": [need[0]["path"]]})
+    assert r.status_code == 200, r.get_json()
+    assert _wait(cl)["stage"] == "done"
+    row = cl.get("/api/sources").get_json()[0]
+    assert "(luks): LUKS1, locked" in row["volumes_not_read"]
+    cl.post("/api/case/close")
+
+    cl.post("/api/case/create", json={"path": str(tmp_path / "c2"), "name": "c2",
+                                      "examiner": "t"})
+    r = cl.post("/api/case/ingest", json={**body, "luks": {
+        need[0]["path"]: {"secret": LUKS_PASSPHRASE}}})
+    assert r.status_code == 200, r.get_json()
+    assert _wait(cl)["stage"] == "done"
+    row = cl.get("/api/sources").get_json()[0]
+    # the fixture holds no media, which is all the web ingest registers: the record
+    # says the container was opened and what it holds walked as a volume of its own
+    assert row["luks"] == "[0]"
+    assert "opened with keyslot 0: what it holds is walked as luks_lba" in row[
+        "volumes_not_read"] and "locked" not in row["volumes_not_read"]
+
+    archive.close_zips()
+    monkeypatch.setattr(archive, "_LUKS", {})               # the app was restarted
+    [row] = cl.get("/api/sources").get_json()
+    assert (row["status"], row["locked_by"]) == ("locked", "LUKS")
+    r = cl.post("/api/source/unlock", json={"name": image.name, "luks": {"secret": "not it"}})
+    assert r.get_json() == {"ok": False, "wrong": True}
+    r = cl.post("/api/source/unlock", json={"name": image.name,
+                                            "luks": {"secret": LUKS_PASSPHRASE}})
+    assert r.get_json() == {"ok": True, "wrong": False}
+    assert [s["status"] for s in cl.get("/api/sources").get_json()] == ["ok"]
+    cl.post("/api/case/close")
+    for p in (tmp_path / "c2").rglob("*"):
+        if p.is_file():
+            assert LUKS_PASSPHRASE.encode() not in p.read_bytes(), f"the passphrase reached {p.name}"
 
 
 # ---- the web API -----------------------------------------------------------

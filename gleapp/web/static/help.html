@@ -91,7 +91,8 @@ case.</p>
               its recovery password or its startup key (<code>.BEK</code> file), and an
               APFS volume macOS encrypted in software (an external drive, or a Mac without
               a T2 chip or Apple silicon) with its password or personal recovery key, the
-              prompt showing the passphrase hint the volume stores; one you leave locked
+              prompt showing the passphrase hint the volume stores, and a LUKS container
+              (Linux disk encryption) with its passphrase; one you leave locked
               is not walked and is named in the Source panel. When you
               click <strong>Create case &amp; ingest</strong>, GLEAPP asks for what is
               missing, in a password field or a key file field, and asks again if it
@@ -178,12 +179,13 @@ AD-encrypted set) takes its password from
 it), both written before the subcommand like <code>-c</code>. Either can be given more
 than once when a case holds several encrypted images; each password is tried on each
 image, on each BitLocker volume inside one as a password and as a recovery password, and
-on each encrypted APFS volume inside one as a password and as a personal recovery key.
+on each encrypted APFS volume inside one as a password and as a personal recovery key,
+and on each LUKS container inside one as a passphrase.
 An image sealed to a certificate takes the certificate's private key with
 <code>--private-key &lt;file&gt;</code>, and a BitLocker volume its startup key with
 <code>--bitlocker-key &lt;file&gt;</code>; both can be repeated. With none of these,
 GLEAPP asks at the terminal, and without a terminal it stops and says which option to
-use, except for a BitLocker or APFS volume: that one is left locked, named in a warning
+use, except for a BitLocker, APFS or LUKS volume: that one is left locked, named in a warning
 (with an APFS volume's passphrase hint) and not walked, and the rest of the image is read. What you give is held for that one command, so
 <code>process</code>, <code>report</code>, <code>source stage</code> and
 <code>source carve</code> need it again.
@@ -1449,8 +1451,8 @@ already give you.</p>
   <li><strong>Encrypted Apple disk image or sparse bundle, encrypted AFF, or an E01,
     SMART or raw set FTK Imager encrypted with AD encryption</strong>: point at it as
     above; GLEAPP asks for its password, or for one sealed to a certificate, its private
-    key (&sect;1). A BitLocker or encrypted APFS volume inside an image is asked about
-    the same way.</li>
+    key (&sect;1). A BitLocker volume, encrypted APFS volume or LUKS container inside an
+    image is asked about the same way.</li>
   <li><strong>Not accepted</strong>: logical evidence, EnCase's (<code>.L01</code>) and
     FTK Imager's (<code>.ad1</code>), which holds copies of files rather than a disk and
     is refused with that reason, including an AD-encrypted set that turns out to hold
@@ -1789,6 +1791,7 @@ This product includes software developed by SecureAuth Corporation
   <tr><td><strong>pyliblzfse</strong> + <strong>LZFSE</strong></td><td>Apple LZFSE-compressed assets: Ivan&nbsp;Kozík (bindings); LZFSE by Apple&nbsp;Inc. (BSD-3)</td></tr>
   <tr><td><strong>python-zstandard</strong> + <strong>Zstandard</strong></td><td>Zstd-compressed assets: Gregory&nbsp;Szorc (bindings); Zstd by Meta / Yann&nbsp;Collet (BSD-3)</td></tr>
   <tr><td><strong>py7zr</strong> (+ pyppmd, pybcj, inflate64, brotli, pycryptodomex)</td><td>reading <code>.7z</code> archives found inside a source: Hiroshi&nbsp;Miura &amp; contributors (LGPL-2.1 / MIT / BSD)</td></tr>
+  <tr><td><strong>argon2-cffi</strong> (+ argon2-cffi-bindings)</td><td>Argon2 key derivation, to open a LUKS2 container: Hynek&nbsp;Schlawack &amp; contributors (MIT)</td></tr>
   <tr><td><strong>pypdf</strong> (+ pycryptodome)</td><td>reading the images and embedded files inside a PDF, including an encrypted one: Mathieu&nbsp;Fenniak &amp; contributors; pycryptodome by Helder&nbsp;Eijs (BSD-3 / BSD-2 and public domain)</td></tr>
   <tr><td><strong>Flask</strong> &amp; the <strong>Pallets</strong> stack</td><td>the local review-gallery server: Werkzeug, Jinja, Click, MarkupSafe, ItsDangerous, Blinker: Armin&nbsp;Ronacher &amp; contributors (BSD-3)</td></tr>
   <tr><td><strong>tzdata</strong> / <strong>IANA Time Zone Database</strong></td><td>timezone conversion &amp; DST for the display-timezone setting: IANA (public domain); PyPI packaging by the CPython team</td></tr>
