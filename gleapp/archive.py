@@ -1080,7 +1080,10 @@ def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True):
                                                     secrets, keys)
     if apfs:
         img, _found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
-    return img
+    # An LVM2 logical volume split into runs, or striped, is read through a map
+    # of its runs, placed past the image's end (qnxprobe.lvm_image); _volumes()
+    # then lists it like any other, and every later read of it goes through here.
+    return qnxprobe.lvm_image(img, qnxprobe.image_size(img))
 
 
 def _segment_count(path: str, fmt: str) -> int:
@@ -1893,10 +1896,15 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # files still walk, and the walk reports what it can read, so the case
         # records that the volume is not all here rather than leaving a short
         # listing to read as a small disk.
+        # A logical volume read through a map is placed past the end on purpose,
+        # and what it lacks is what its own map puts past the end.
+        placed = _placed(img)
         short = [{"label": lb or f"lba{b // ss}", "size": s, "missing": m}
                  for lb, b, s, m in qnxprobe.short_regions(
                      media_size, [(lb or f"lba{b // ss}", b, s)
-                                  for b, s, _k, lb in vols if s])]
+                                  for b, s, _k, lb in vols if s and b not in placed])]
+        short += [{"label": lb, "size": s, "missing": placed[b].missing(media_size)}
+                  for b, s, _k, lb in vols if b in placed and placed[b].missing(media_size)]
         # Where the BitLocker volumes this walk read through are, so a later session
         # knows their keys are needed again before a row read from one can be read
         # back. An opened one reads as the filesystem inside it; one left locked is
@@ -2087,6 +2095,13 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
     return n
 
 
+def _placed(img) -> dict:
+    """{base: qnxprobe.LvmMap} for the logical volumes an image reads through a
+    map, placed past its end (qnxprobe.lvm_image); empty for any other image."""
+    virtual = getattr(img, "lvm_virtual", None) or {}
+    return {base: img.lvm_map_for(base) for base in virtual.values()}
+
+
 def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     """[(offset, length)] of the space no volume claims, or None if it cannot say.
 
@@ -2133,14 +2148,33 @@ def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     media_size = img.media_size
     out = []
     covered = 0                                      # the end of the claimed space so far
+    placed = _placed(img)
+    spare = None
     for base, size, fskind, _label in sorted(vols, key=lambda v: v[0]):
         try:
-            walker = qnxprobe.walker_for(fskind, img, base, size)
-            runs = walker.free_extents(min_bytes=min_bytes)
+            if fskind == "lvm2 pv":
+                # An LVM2 physical volume: its extents no logical volume holds.
+                # The logical volumes on it answer for themselves below.
+                if spare is None:
+                    spare = qnxprobe.lvm_free_extents(
+                        img, [(lb, b, s or 0) for b, s, k, lb in vols if k == "lvm2 pv"],
+                        qnxprobe.disk_sector_size(img))
+                runs = [(at, n) for at, n in spare.get(base, []) if n >= min_bytes]
+            else:
+                walker = qnxprobe.walker_for(fskind, img, base, size)
+                runs = walker.free_extents(min_bytes=min_bytes)
         except (AttributeError, NotImplementedError):
             return None                              # this volume cannot say
         except Exception:                            # pylint: disable=broad-except
             return None                              # nor can it be read at all
+        if base in placed:
+            # Read through a map: its free runs are offsets in the volume, past
+            # the image's end, so each becomes the runs of the image it lies on;
+            # it claims no span of the disk in one piece, and the extents it is
+            # on are claimed by the physical volume above.
+            out.extend(run for at, n in runs
+                       for run in placed[base].image_runs(at - base, n))
+            continue
         out.extend(runs)
         if base > covered:
             out.append((covered, base - covered))    # no volume claims this
