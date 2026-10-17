@@ -1770,9 +1770,12 @@ class _SetImage:
             rs.foreign.append(("", f"RAID members were not assembled "
                                    f"({type(exc).__name__}: {exc})"))
         self._rs = rs
+        # find_members=True: the reader's hint names its own --find-members option,
+        # which GLEAPP does not have; GLEAPP looks beside one image itself
+        # (find_members) unless --no-find-members, and says what it found
         with contextlib.suppress(Exception):
             qnxprobe.raid_report(rs, say=self.raid_lines.append,
-                                 images_given=len(self.set_paths))
+                                 images_given=len(self.set_paths), find_members=True)
         groups = {arr.label[len("LVM "):].split("/", 1)[0] for arr in rs.arrays
                   if isinstance(arr, qnxprobe.LvmSpanned)}
         # each logical volume read across the images is keyed by its group's id;
@@ -4039,6 +4042,18 @@ def disk_identity(path) -> tuple[int, int]:
             first = p
     st = os.stat(os.path.realpath(os.fspath(first)))
     return st.st_dev, st.st_ino
+
+
+def segment_of(path, first) -> str | None:
+    """What set ``path`` is a later file of, when it opens the disk ``first`` opens
+    (disk_identity) without being the same file: "the split set", "the EWF set", and
+    so on, in the vendored reader's words (qnxprobe.same_disk_note, 1.72 or later).
+    None when the two are the same file (a link, another spelling, the same path)."""
+    note = qnxprobe.same_disk_note(os.fspath(path), os.fspath(first))
+    head, sep, _rest = note.partition(" opened from ")
+    if not sep or not head.startswith("read as a segment of "):
+        return None
+    return head[len("read as a segment of "):]
 
 
 _COPY_SAMPLE = 1 << 20
