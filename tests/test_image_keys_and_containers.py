@@ -672,6 +672,8 @@ def test_a_luks_container_a_wrong_passphrase_was_tried_on_says_so(tmp_path, caps
     err = capsys.readouterr().err
     assert "stays locked" in err and "no passphrase given opens a keyslot" in err
     assert "give its passphrase)" not in err
+    # what to give is said only when nothing was given (qnxprobe 1.72)
+    assert "Give its passphrase with" not in err
 
 
 # ---- a wrong secret, remembered ----------------------------------------------
@@ -719,6 +721,7 @@ def test_a_bitlocker_volume_a_wrong_secret_was_tried_on_says_so(tmp_path, monkey
                      str(_job(tmp_path, image)), "--no-process"]) == 0
     err = capsys.readouterr().err
     assert "stays locked" in err and BITLOCKER_NONE_OPENS in err
+    assert "Give its password" not in err     # said only when nothing was given
     [refused] = _refused(case_dir, image.name)
     assert refused == ("lba0 (bitlocker): BitLocker-encrypted and not read: "
                        f"{BITLOCKER_NONE_OPENS}; {BITLOCKER_OPENS_WITH.split(': ', 1)[1]}")
@@ -758,6 +761,7 @@ def test_an_apfs_volume_a_wrong_password_was_tried_on_says_so(tmp_path, monkeypa
                      str(_job(tmp_path, image)), "--no-process"]) == 0
     err = capsys.readouterr().err
     assert "stays locked" in err and APFS_NONE_OPENS in err and "it opens with" not in err
+    assert "Give its password" not in err     # said only when nothing was given
     [refused] = _refused(case_dir, image.name)
     assert refused == ("disk image/CONVVOL (apfs, encrypted): "
                        f'{APFS_NONE_OPENS} (its passphrase hint, as stored: "{APFS_HINT}")')
