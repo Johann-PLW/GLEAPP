@@ -180,6 +180,10 @@ _PRIVATE_KEYS: dict[str, bytes] = {}
 _BITLOCKER: dict[str, tuple[list, list]] = {}      # (secrets, startup keys)
 _APFS: dict[str, list] = {}                        # passwords or recovery keys
 _LUKS: dict[str, list] = {}                        # passphrases
+# the keyslots a passphrase given this session was tried on and did not open, by
+# container, so a container still locked says that rather than asking as if none
+# had been given; the passphrases themselves are not kept
+_LUKS_TRIED: dict[str, dict[str, list]] = {}
 _PASSWORD_LOCK = threading.Lock()
 # What the vendored reader says a BitLocker volume can be opened with, of the kinds
 # a person can give: anything else (a TPM, a clear key already used) is not asked for.
@@ -416,11 +420,17 @@ def luks_volumes(path) -> list[dict]:
         img = _open_image_file(path, luks=False)
     except (ArchiveUnavailable, *_IMAGE_ERRORS):
         return []
+    with _PASSWORD_LOCK:
+        tried = dict(_LUKS_TRIED.get(_secret_key(path), {}))
     try:
         out = []
         for prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_luks(part, qnxprobe.image_size(part),
                                               _luks_held(path))
+            for lk in found:
+                if lk.mk is None and not lk.tried:
+                    # what unlock_luks tried on it, for the reader's own note
+                    lk.tried = list(tried.get(prefix + lk.label, []))
             out += [{"label": prefix + lk.label, "open": lk.mk is not None,
                      "askable": _luks_askable(lk),
                      "note": "" if lk.mk is not None else lk.locked_note()} for lk in found]
@@ -437,19 +447,25 @@ def unlock_luks(path, secret) -> bool:
     if not secret:
         return False
     img = _open_image_file(path, luks=False)
+    tried: dict[str, list] = {}
     try:
         opened = False
-        for _prefix, part in _volume_parts(img):
+        for prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_luks(part, qnxprobe.image_size(part),
                                               _luks_held(path))
             for lk in found:
                 if lk.mk is None and not lk.why and lk.unlock([secret]):
                     opened = True
+                elif lk.mk is None and lk.tried:
+                    tried[prefix + lk.label] = list(lk.tried)
     finally:
         img.close()
-    if opened:
-        with _PASSWORD_LOCK:
+    with _PASSWORD_LOCK:
+        if tried:
+            _LUKS_TRIED.setdefault(_secret_key(path), {}).update(tried)
+        if opened:
             _LUKS.setdefault(_secret_key(path), []).append(secret)
+    if opened:
         _drop_ref(path)                 # a handle opened before this reads it locked
     return opened
 
@@ -1005,7 +1021,7 @@ def source_status(case) -> list[dict]:
     for name, rec in sorted(source_records(case).items()):
         locked_by = ""
         members = None
-        if len(rec.get("members") or []) > 1:
+        if rec.get("members"):
             status, locked_by, members = _set_state(rec)
         else:
             try:
@@ -1408,7 +1424,9 @@ def container_refusal(path) -> str | None:
 # all (_SetImage). Each member is read as a single image would be, and each array
 # or volume group the vendored reader assembles across them (qnxprobe.raid_assemble)
 # is read as an image of its own, named as qnxprobe names it (md_<name>_<uuid>,
-# lvm_<group>_<volume>). An ordinary single image never comes here.
+# lvm_<group>_<volume>). One image whose own partitions hold an array is read the
+# same way, as a set of that one member (holds_own_array). An ordinary single image
+# never comes here.
 
 # Each part of a set starts on a GiB in the set's own address space, as qnxprobe's
 # own _ConcatImage lays several images out, and every byte offset a row records for
@@ -1436,15 +1454,18 @@ class MemberSet(tuple):
         return self
 
     def __str__(self) -> str:
+        if len(self) == 1:
+            return Path(self[0]).name                # one image holding its own array
         return (f"{Path(self[0]).name} and {len(self) - 1} other member "
                 f"image{'' if len(self) == 2 else 's'}")
 
 
 def image_ref(rec: dict):
     """What reads the image a source record describes: its path, or a ``MemberSet``
-    when the case recorded several member images for it."""
+    when the case recorded member images for it (several, or one image whose own
+    partitions hold an array, ``holds_own_array``)."""
     members = rec.get("members") or []
-    if len(members) > 1:
+    if members:
         ref = MemberSet((m["path"] for m in members), layout=rec.get("layout") or None)
         ref.unplaced = not rec.get("layout")
         return ref
@@ -1497,6 +1518,27 @@ class _ShiftedBitLocker:
 
     def __init__(self, found, shift: int) -> None:
         self.base, self.fvek = int(found.base) + shift, found.fvek
+
+
+def holds_own_array(path) -> bool:
+    """True when the disk image at ``path`` holds, in its own partitions, an array the
+    vendored reader assembles from two or more of them, as qnxprobe reads one image
+    (``raid_assemble`` over that image alone). Such an image is read as a set of one
+    member image, so the array is walked as a part of its own. False for an image that
+    holds no member of anything, one member of an array whose other members are on
+    other disks, or one that cannot be opened."""
+    try:
+        base = _open_base(os.fspath(path))
+    except Exception:                                # pylint: disable=broad-except
+        return False
+    try:
+        rs = qnxprobe.raid_assemble([(Path(path).name, base)])
+        return any(arr.image is not None and len(arr.members) > 1 for arr in rs.arrays)
+    except Exception:                                # pylint: disable=broad-except
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            base.close()
 
 
 def _array_key(arr, vg_ids: dict | None = None) -> str:
@@ -2515,6 +2557,8 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
     if fmt == FORMAT_ZIP:
         return _ingest_zip(case, src, path, count=count, progress=progress)
     if fmt in IMAGE_FORMATS:
+        if _read_as_own_set(case, src, path):
+            return _ingest_set(case, src, [os.fspath(path)], count=count, progress=progress)
         # An acquisition holds filesystems, so it is walked: the files in it have
         # names, paths and dates, and a walk keeps them. Carving reaches what a
         # walk cannot, the deleted material in unallocated space, and it is asked
@@ -2523,6 +2567,20 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
             return _ingest_ewf(case, src, path, fmt, count=count, progress=progress)
         return _ingest_image_walk(case, src, path, fmt, count=count, progress=progress)
     return _ingest_tar(case, src, path, fmt, count=count, progress=progress)
+
+
+def _read_as_own_set(case, src, path: Path) -> bool:
+    """True when the one image ``src`` names is read as a set of itself, because its
+    own partitions hold an array (``holds_own_array``). A source the case already
+    recorded is read as it was recorded, so its rows stay where they were registered:
+    as a set when it has members, as a single image when it has rows from one."""
+    key = _meta_key(src.name)
+    if _meta_list(case, f"{key}:members"):
+        return True
+    if case.db.get_meta(f"{key}:path") is not None and case.db.conn.execute(
+            "SELECT 1 FROM files WHERE source=? LIMIT 1", (src.name,)).fetchone():
+        return False
+    return holds_own_array(path)
 
 
 def _ingest_set(case, src, members: list[str], *, count: int, progress) -> int:
@@ -2748,8 +2806,9 @@ def _not_walked(img, base: int, size) -> str:
         return ("an LVM2 physical volume: each logical volume read from it is walked as a "
                 "volume of its own" + ("; not read: " + "; ".join(skipped) if skipped else ""))
     if qnxprobe.identify_fs(img, base, size)[0] == "linux md member":
-        return ("an md RAID member: its array is read only from its member images "
-                "together, added as one source")
+        return ("an md RAID member: its array is read when the member images it needs "
+                "are added together as one source, or when this image's own partitions "
+                "hold two or more of its members")
     return "the vendored reader names this filesystem and does not walk it"
 
 
@@ -3633,7 +3692,7 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     rec = _require(case, name)
     given = ([new_path] if isinstance(new_path, (str, os.PathLike))
              else [p for p in new_path if str(p).strip()])
-    if len(rec.get("members") or []) > 1:
+    if rec.get("members"):
         return _relink_set(case, name, rec, given)
     if len(given) != 1:
         raise ValueError(f"{name!r} was read from one image or archive; give one path")

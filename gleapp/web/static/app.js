@@ -4819,7 +4819,7 @@ function renderSourcePanel(list) {
       const members = s.members || [];
       if (members.length) {
         vols += `<div class="muted" style="font-size:11px;margin-top:2px">read from `
-          + `${members.length} member images: ` + members.map(m =>
+          + `${members.length} member image${members.length === 1 ? "" : "s"}: ` + members.map(m =>
             `<span title="${esc(m.path)}">${esc(m.path.split(/[\\/]/).filter(Boolean).pop())}`
             + `${m.found ? " (found beside the image picked)" : ""}`
             + `${m.status && m.status !== "ok" ? ` <b style="color:#c98a2b">${esc(m.status)}</b>` : ""}</span>`)
@@ -4962,7 +4962,7 @@ function showSourceStatus(list) {
       // member gone or changed stops it
       const bad = s.members.filter(m => m.status !== "ok");
       return `<div style="margin:2px 0"><b>${esc(s.name)}</b> is read from ${s.members.length}`
-        + ` member images, and ${bad.length} of them ${bad.length === 1 ? "is" : "are"} not as the`
+        + ` member image${s.members.length === 1 ? "" : "s"}, and ${bad.length} of them ${bad.length === 1 ? "is" : "are"} not as the`
         + ` case recorded: ` + bad.map(m => `<code>${esc(m.path)}</code> (${esc(m.status)})`).join(", ")
         + `. ${note} <button data-relink="${esc(s.name)}" data-set="1" style="margin-left:8px">Relink…</button></div>`;
     }

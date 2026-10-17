@@ -224,6 +224,20 @@ def image_set_source(paths, found=(), name: str | None = None,
                   discovery=discovery)
 
 
+# What a job file sets on a source beyond its name and where it is read from: a
+# source rebuilt around other paths (the member images found beside the image
+# given) keeps every one of them (``carry_options``).
+SPEC_OPTIONS = ("include_other", "follow_symlinks", "max_mb", "stage", "carve",
+                "unallocated_only", "documents")
+
+
+def carry_options(dst: Source, src: Source) -> Source:
+    """``dst`` with every option of ``src`` in ``SPEC_OPTIONS``; returns ``dst``."""
+    for opt in SPEC_OPTIONS:
+        setattr(dst, opt, getattr(src, opt))
+    return dst
+
+
 def _norm_source(entry: object, base: Path) -> Source | None:
     if isinstance(entry, str):
         p = (base / entry).resolve() if not Path(entry).is_absolute() else Path(entry)

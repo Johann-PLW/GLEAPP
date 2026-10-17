@@ -132,6 +132,15 @@ your user settings, not in any case.
         it under the same names, or each member's. From the command line, give
         several images to `gleapp ingest` for one source, or one image to have the
         others found and listed (`--no-find-members` reads it alone).
+      - One image whose own partitions hold two or more members of an md array (a
+        disk carved into partitions that were raided together) is read the same way,
+        as a set of that one image: the array is assembled from its partitions, as
+        qnxprobe does, walked as a volume of its own (`md_<name>_<uuid>`), and its
+        place recorded like a set's. The partitions it was assembled from are not
+        walked on their own. A passphrase given is tried on a LUKS container inside
+        that array too. A source a GLEAPP before this one already registered files
+        from keeps being read as it was. An image holding one member of an array
+        whose other members are on other disks is not read as an array on its own.
       - A disk of a DDF or Intel IMSM (RST) array, read alone, is walked only when
         its metadata records a mirror (RAID1) in its normal state; on any other its
         partitions and volumes are listed as RAID members with the level and are not
