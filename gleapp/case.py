@@ -192,8 +192,12 @@ def image_set_source(paths, found=(), name: str | None = None,
         ident = archive.disk_identity(p)
         if ident in seen:
             first = seen[ident]
+            segment = archive.segment_of(p, first)
             if Path(first).name == p.name and str(Path(first).resolve()) == str(p.resolve()):
                 notes.append(f"{p.name} was given twice and is read once")
+            elif segment:
+                notes.append(f"{p.name} is read as a segment of {segment} opened from "
+                             f"{Path(first).name}, not on its own")
             else:
                 notes.append(f"{p.name} is the same disk as {Path(first).name} and is "
                              "read once, as that")

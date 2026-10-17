@@ -197,9 +197,13 @@ def _unlock_bitlocker(path, given, starts, tty: bool) -> list[str]:
             return archive.unlock_bitlocker(path, startup_key=_read_key_file(key, "startup key"))
         if not _ask_three_times(attempt, "That does not open it."):
             skipped.add(label)
+    # which option takes what opens it is said only when nothing was given (as
+    # qnxprobe 1.72 does); otherwise the reader's reason stands alone
+    hint = ("" if given or starts else
+            ". Give its password or recovery password with --password-file or "
+            "--password-env, or its startup key with --bitlocker-key")
     return [f"{v['label']} of {name} stays locked and its files are not read "
-            f"({v['note']}). Give its password or recovery password with --password-file "
-            f"or --password-env, or its startup key with --bitlocker-key"
+            f"({v['note']}){hint}"
             for v in archive.bitlocker_volumes(path) if v["askable"]]
 
 
@@ -236,9 +240,11 @@ def _unlock_apfs(path, given, tty: bool) -> list[str]:
             return archive.unlock_apfs(path, secret)
         if not _ask_three_times(attempt, "That does not open it."):
             skipped.add(label)
+    hint = ("" if given else
+            ". Give its password or personal recovery key with --password-file or "
+            "--password-env")
     return [f"{v['label']} of {name} stays locked and its files are not read "
-            f"({v['note']}). Give its password or personal recovery key with "
-            f"--password-file or --password-env"
+            f"({v['note']}){hint}"
             for v in archive.apfs_volumes(path) if v["askable"]]
 
 
@@ -251,8 +257,15 @@ def _unlock_luks(path, given, tty: bool) -> list[str]:
     name = _image_name(path)
     if not _is_image(path):
         return []
-    if not any(v["askable"] for v in archive.luks_volumes(path)):
-        return []
+    found = archive.luks_volumes(path)
+    # A container the reader cannot try a passphrase on (no pycryptodome, a header
+    # or cipher it refuses) says why when one was given, since it was not tried there:
+    # since qnxprobe 1.72 that reason is known before any passphrase is tried.
+    untried = [f"the LUKS container in {v['label']} of {name} stays locked and its files "
+               f"are not read ({v['note']}), so the passphrase given was not tried on it"
+               for v in found if given and not v["open"] and not v["askable"]]
+    if not any(v["askable"] for v in found):
+        return untried
     for secret in given:
         archive.unlock_luks(path, secret)
     skipped: set[str] = set()
@@ -272,10 +285,11 @@ def _unlock_luks(path, given, tty: bool) -> list[str]:
             return archive.unlock_luks(path, secret)
         if not _ask_three_times(attempt, "That does not open it."):
             skipped.add(label)
-    return [f"the LUKS container in {v['label']} of {name} stays locked and its files are "
-            f"not read ({v['note']}). Give its passphrase with --password-file or "
-            f"--password-env"
-            for v in archive.luks_volumes(path) if v["askable"]]
+    hint = "" if given else ". Give its passphrase with --password-file or --password-env"
+    return untried + [
+        f"the LUKS container in {v['label']} of {name} stays locked and its files are "
+        f"not read ({v['note']}){hint}"
+        for v in archive.luks_volumes(path) if v["askable"]]
 
 
 def _unlock_case(case, args: argparse.Namespace) -> None:

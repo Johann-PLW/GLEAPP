@@ -235,7 +235,11 @@ startup key with `--bitlocker-key <file>`; both can be repeated. With none of
 these, GLEAPP asks at the terminal, and without a terminal it stops and says which
 option to use, except for a BitLocker, APFS or LUKS volume: that one is left locked, named
 in a warning (with an APFS volume's passphrase hint) and not walked, and the rest of the
-image is read. What you give is held
+image is read. The warning names the option that takes what opens the volume only when
+nothing was given; when something was given and did not open it, the reader's reason
+stands alone. A LUKS container no passphrase can be tried on (without the pycryptodome
+package, for example) is named in a warning with the reader's reason when a passphrase
+was given, since it was not tried there. What you give is held
 for that one command, so `process`, `report`, `source stage` and `source carve`
 need it again. A password is never taken on the command line itself, where other
 users of the machine and the shell history could read it.

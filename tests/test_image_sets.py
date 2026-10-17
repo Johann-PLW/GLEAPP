@@ -277,6 +277,24 @@ def test_the_command_line_prints_a_member_left_out_and_why(tmp_path, capsys):
     assert "  left out: copy-of-3.img: role 3 again, held by md-r5-ls-3.img" in out
 
 
+def test_the_raid_report_names_no_option_gleapp_does_not_have(tmp_path, capsys):
+    """Two members of a four-member RAID5: the reader's heading counts no array as
+    assembled (qnxprobe 1.72), and its hint naming its own --find-members option,
+    which GLEAPP does not have, is not printed or kept."""
+    files = _members(tmp_path / "ev", "md-r5-ls", (0, 1))
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "ingest", *map(str, files), "--no-process"]) == 0
+    out = capsys.readouterr().out
+    assert "RAID: 1 array(s) or spanned volume(s) found in the images given, " \
+        "0 of them assembled" in out
+    assert "not read from the images given: role(s) 2, 3 of 4 are in none of them" in out
+    assert "add --find-members" not in out
+    case = open_case(case_dir)
+    rec = archive.source_record(case, files[0].name)
+    assert not any("--find-members" in line for line in rec["raid"])
+    case.close()
+
+
 def test_the_command_line_prints_no_raid_report_for_an_ordinary_image(tmp_path, capsys):
     image = tmp_path / "ev" / "fat.img"
     image.parent.mkdir(parents=True)
@@ -596,8 +614,11 @@ def test_paths_that_open_the_same_disk_are_one_member_and_said_so(tmp_path):
     assert [Path(m).name for m in src.members] == ["m0.001", "m1e.E01", "md-r5-ls-2.img",
                                                    "md-r5-ls-3.img"]
     assert len(src.notes) == 6, src.notes
-    assert "m0.002 is the same disk as m0.001" in src.notes[0]
-    assert "m1e.E02 is the same disk as m1e.E01" in src.notes[1]
+    # a later file of a set is a segment of it, not the same disk (qnxprobe 1.72)
+    assert src.notes[0] == "m0.002 is read as a segment of the split set opened from m0.001, " \
+        "not on its own"
+    assert src.notes[1] == "m1e.E02 is read as a segment of the EWF set opened from m1e.E01, " \
+        "not on its own"
     assert "hard-m2.img is the same disk as md-r5-ls-2.img" in src.notes[2]
     case = _ingest(tmp_path / "case", src)
     rec = archive.source_record(case, "m0.001")
@@ -838,8 +859,12 @@ def test_a_passphrase_that_cannot_be_tried_is_recorded_with_the_readers_reason(
                                             "include_other": True}]}), encoding="utf-8")
     assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",
                      str(job), "--no-process"]) == 0
-    reason = "LUKS-encrypted and not read: AES needs the pycryptodome package"
-    assert reason in capsys.readouterr().err
+    # since qnxprobe 1.72 the reader knows this before any passphrase is tried
+    reason = ("LUKS-encrypted and not read: reading it needs the optional pycryptodome "
+              "package, which this Python does not have")
+    err = capsys.readouterr().err
+    assert reason in err
+    assert "so the passphrase given was not tried on it" in err
     case = open_case(tmp_path / "case")
     got = archive.source_record(case, "set")["volumes_not_read"]
     case.close()
