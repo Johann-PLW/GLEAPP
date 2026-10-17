@@ -2871,6 +2871,9 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # and the LUKS containers it read decrypted; one left locked is not walked,
         # and is recorded below as a volume not read, with what would open it
         luks = sorted(int(b) for b in (getattr(img, "luks", None) or {}))
+        # the volumes this pass read a listing from, which are the only ones whose
+        # recorded entry it may replace (_merged_volumes)
+        walked_bases: set[int] = set()
 
         def planned():
             """Every file the walk registers, in the order the volumes report them:
@@ -2895,6 +2898,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 except Exception as exc:             # pylint: disable=broad-except
                     refused.append(f"{vol} ({fskind}): {exc}")
                     continue
+                walked_bases.add(int(base))
                 said = _walker_says(walker, fskind)
                 if mirror_note:
                     # a mirror member of a DDF or IMSM array, walked on its own
@@ -3052,8 +3056,10 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
     case.db.set_meta(f"{key}:segments", str(segments))
     if stored:
         case.db.set_meta(f"{key}:media_hash", stored)
-    case.db.set_meta(f"{key}:volumes", json.dumps(
-        [{"base": b, "size": s, "kind": k, "label": lb} for b, s, k, lb in vols]))
+    case.db.set_meta(f"{key}:volumes", json.dumps(_merged_volumes(
+        case.db.get_meta(f"{key}:volumes"),
+        [{"base": b, "size": s, "kind": k, "label": lb} for b, s, k, lb in vols],
+        walked_bases)))
     if refused:
         case.db.set_meta(f"{key}:volumes_not_read", json.dumps(refused))
     if bitlocker:
@@ -3072,6 +3078,31 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
             tally=tally,
             timestamps="from the filesystem the file was walked from")
     return n
+
+
+def _merged_volumes(recorded, seen: list[dict], walked: set) -> list[dict]:
+    """The ``:volumes`` record after a walk: what was recorded, with each volume
+    this pass walked replaced by what it saw and each one new to the record added.
+
+    A pass never removes a volume, and never replaces one it could not walk. The
+    record is what rows are read back through (``_row_walker``), and a session
+    that was not given an encrypted source's key sees less of the same image: a
+    LUKS container's data is not a volume until it is opened, and a locked
+    BitLocker volume is named ``bitlocker`` at the base where the record holds
+    the filesystem inside it. Rewriting the record from such a pass left every
+    row of those volumes with no volume to be read from, keyed or not."""
+    try:
+        old = json.loads(recorded) if recorded else []
+    except ValueError:
+        old = []
+    # a dict keeps the order the record had, with new volumes after it, so a first
+    # ingest records the volumes in the order the walk found them, as it always did
+    out = {int(v["base"]): v for v in old if isinstance(v, dict) and "base" in v}
+    for v in seen:
+        base = int(v["base"])
+        if base in walked or base not in out:
+            out[base] = v
+    return list(out.values())
 
 
 def _placed(img) -> dict:
@@ -3509,19 +3540,70 @@ def _verify_image(case, name: str, rec: dict, img, limit: int = 20) -> list[str]
     if rec["media_hash"] and stored != rec["media_hash"]:
         problems.append(f"the image's hash is {stored or 'not recorded'} and the "
                         f"case registered {rec['media_hash']}")
+    # A logical volume read through a map of its runs is placed past the end of the
+    # image on purpose (_placed); what has to lie inside the image is its runs.
+    placed = {} if isinstance(img, _SetImage) else _placed(img)
     for r in case.db.iter_files("source = ?", (name,)):
         off, size = r["member_offset"], r["size"]
         # A walked row is read through its volume's walker and records a node, not
         # an offset; what it needs is that its volume still lies inside the image.
         base = _row_get(r, "volume_base")
         if _row_get(r, "member_node") is not None and base is not None:
-            if int(base) >= img.media_size:
+            if int(base) in placed:
+                if placed[int(base)].missing(img.media_size):
+                    problems.append(f"{r['orig_path']}: its volume's runs lie past the "
+                                    f"end of the image")
+            elif int(base) >= img.media_size:
                 problems.append(f"{r['orig_path']}: its volume lies past the end of "
                                 f"the image")
         elif off is None:
             problems.append(f"{r['orig_path']}: no recorded offset")
         elif off + size > img.media_size:
             problems.append(f"{r['orig_path']}: runs past the end of the image")
+        if len(problems) >= limit:
+            break
+    return problems
+
+
+def _weak_identity(rec: dict) -> bool:
+    """True when what identifies a source's image says less than a hash of the whole
+    disk: a raw image's head-and-tail sample, or an acquisition whose tool recorded
+    no hash, for the source or for any of its member images."""
+    hashes = ([m.get("media_hash") or "" for m in rec.get("members") or []]
+              if len(rec.get("members") or []) > 1 else [rec.get("media_hash") or ""])
+    return any(not h or h.startswith("head-tail-sha256:") for h in hashes)
+
+
+def _verify_row_hashes(case, name: str, rec: dict, limit: int = 20) -> list[str]:
+    """Read every row of ``name`` that processing hashed back out of the image
+    ``rec`` names, and say which no longer have the SHA-256 the case recorded.
+
+    This is what a relink and an unstage check when the image's own identity is
+    weak (``_weak_identity``). The head-and-tail sample tells two images of one size
+    apart only where they differ in their first or last 4 MiB, so a different disk
+    of the same size and the same ends was accepted, and a forced processing run
+    then wrote the other disk's hashes over the recorded ones. Every file the case
+    holds a hash for is read here, so an image that would change any of them is
+    refused. A row not yet hashed has no recorded value to keep, and is not read."""
+    problems: list[str] = []
+    tmp = Path(case.root) / TMP_DIR
+    tmp.mkdir(parents=True, exist_ok=True)
+    for r in case.db.iter_files("source = ? AND sha256 IS NOT NULL", (name,)):
+        dest = tmp / f"relink-{_slug(name)}-{r['id']}"
+        try:
+            _materialize(rec, r, dest)
+            digest = hashlib.sha256()
+            with open(dest, "rb") as fh:
+                for block in iter(lambda f=fh: f.read(1 << 20), b""):
+                    digest.update(block)
+            if digest.hexdigest() != r["sha256"]:
+                problems.append(f"{r['orig_path']}: its SHA-256 in this image is "
+                                f"{digest.hexdigest()} and the case recorded {r['sha256']}")
+        except ArchiveUnavailable as exc:
+            problems.append(f"{r['orig_path']}: cannot be read from this image ({exc})")
+        finally:
+            with contextlib.suppress(OSError):
+                dest.unlink()
         if len(problems) >= limit:
             break
     return problems
@@ -3541,7 +3623,9 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     size and modification time (tar), so a different extraction with the same name is
     refused. The same path is accepted too, which re-verifies a source reported as
     ``changed``. For a plain tar the recorded data offsets are refreshed from the new
-    file, since a repacked tar lays its members out differently.
+    file, since a repacked tar lays its members out differently. An image identified
+    only by its head-and-tail sample, or by no recorded hash, also has every hashed
+    row read back from it and compared (``_verify_row_hashes``).
 
     A source read from several member images takes the new place of each: the paths
     given, or one path whose folder holds the others under the names the case
@@ -3571,6 +3655,10 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
             raise ValueError(f"cannot open {new}: {exc}") from exc
         with img:
             problems = _verify_image(case, name, rec, img)
+        if not problems and _weak_identity(rec):
+            problems = _verify_row_hashes(case, name, {**rec, "path": str(new),
+                                                       "format": fmt})
+            _drop_image(str(new))
     elif fmt == FORMAT_ZIP:
         try:
             zf = zipfile.ZipFile(new)
@@ -3682,6 +3770,11 @@ def _relink_set(case, name: str, rec: dict, given: list) -> dict:
         raise ValueError(f"cannot open {ref}: {exc}") from exc
     with img:
         problems = _verify_image(case, name, rec, img)
+    if not problems and _weak_identity(rec):
+        problems = _verify_row_hashes(case, name, {
+            **rec, "path": chosen[0],
+            "members": [{**m, "path": p} for m, p in zip(members, chosen)]})
+        _drop_image(ref)
     if problems:
         raise ValueError(f"the images given do not hold what the case registered from "
                          f"{name!r}: {'; '.join(problems[:3])}")
@@ -4216,6 +4309,10 @@ def unstage_source(case, name: str) -> int:
     if rec["format"] in IMAGE_FORMATS:
         img, _ = _open_image(image_ref(rec))
         problems = _verify_image(case, name, rec, img)
+        if not problems and _weak_identity(rec):
+            # the copies may be the only bytes left of a file the image now holds
+            # otherwise, so a weakly identified image is read back first
+            problems = _verify_row_hashes(case, name, rec)
     elif rec["format"] == FORMAT_ZIP:
         zf = _open_zip(rec["path"])
         problems = _verify_members(case, name, zf)

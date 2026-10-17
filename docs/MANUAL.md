@@ -1714,10 +1714,15 @@ partition on a dual-boot disk is enough to do that.
 - An E01, Ex01 or AFF carries the acquiring tool's own hash of the disk when the
   tool recorded one, and a raw image carries none. So a raw source is identified, when it is relinked or its copies
   dropped, by its size and a hash of its first and last 4 MiB, which tells two
-  images of one size apart and no more.
+  images of one size apart and no more. Because that says nothing about the
+  middle of the disk, relinking it or dropping its copies also reads back every
+  file the case has already hashed, and is refused if any of them has changed
+  or cannot be read. That is one read of every hashed file, so it takes longer
+  the more the case holds.
 - An Apple disk image records checksums of its stored data but no hash of the
   disk, so, like an acquisition that recorded none, it is identified by its size
-  alone when it is relinked or its copies dropped.
+  when it is relinked or its copies dropped, and its hashed files are read back
+  the same way.
 - An image whose partition table describes a volume larger than the file holds
   (a split set with its later segments missing, or a truncated image) is walked
   as far as it goes, and the Source panel says which volume is not all there.

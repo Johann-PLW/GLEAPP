@@ -802,6 +802,41 @@ def test_the_logical_volumes_of_an_lvm2_disk_are_walked(tmp_path):
     case.close()
 
 
+@pytest.mark.parametrize("form", ["raw", "ewf"])
+def test_an_lvm2_disk_with_mapped_volumes_stages_and_unstages(tmp_path, form):
+    """A logical volume read through a map of its runs is placed past the end of the
+    image on purpose, and unstaging refused every row of one with "its volume lies
+    past the end of the image". It now checks that the volume's runs lie inside it,
+    and the copies are dropped and read back from the image."""
+    raw = gzip.decompress((Path(__file__).parent / "fixtures" / "lvm-fixture.img.gz")
+                          .read_bytes())
+    folder = tmp_path / "ev"
+    folder.mkdir()
+    if form == "raw":
+        image = folder / "acq.img"
+        image.write_bytes(raw)
+    else:
+        image = Path(write_ewf(folder, "acq", raw)[0])
+    case, _ = _ingest(tmp_path, image, name="lvm", include_other=True)
+    try:
+        name = image.name
+        rows = [r for r in case.db.iter_files("source = ?", (name,))]
+        assert any(int(r["volume_base"]) >= len(raw) for r in rows), "no mapped volume"
+        archive.stage_source(case, name)
+        before = {r["id"]: hashlib.sha256(Path(r["path"]).read_bytes()).hexdigest()
+                  for r in case.db.iter_files("source = ?", (name,))}
+        assert archive.unstage_source(case, name) == len(rows)
+        assert archive.source_record(case, name)["mode"] == archive.MODE_REFERENCE
+        rec = archive.source_record(case, name)
+        for r in case.db.iter_files("source = ?", (name,)):
+            dest = tmp_path / "back"
+            archive._materialize(rec, r, dest)       # pylint: disable=protected-access
+            assert hashlib.sha256(dest.read_bytes()).hexdigest() == before[r["id"]]
+    finally:
+        archive.close_zips()
+        case.close()
+
+
 def test_a_luks_container_is_recorded_as_not_read_with_why(tmp_path):
     """A LUKS1 container cryptsetup wrote (qnxprobe's tests/fixtures), wrapped in an
     E01 and ingested with no passphrase given: nothing inside is walked, and the
