@@ -6,6 +6,7 @@ on the registered Android corpora, where every index it could read named every p
 """
 
 import json
+import os
 import sqlite3
 import struct
 import zipfile
@@ -129,7 +130,7 @@ def _joined(case):
     return out
 
 
-def _ingest(tmp_path, *, as_zip: bool, include_other: bool = False):
+def _ingest(tmp_path, *, as_zip: bool, include_other: bool = False, case_name: str = "case"):
     files = _tree()
     if as_zip:
         src = tmp_path / "extraction.zip"
@@ -144,7 +145,7 @@ def _ingest(tmp_path, *, as_zip: bool, include_other: bool = False):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(data)
         source = Source(name="ext", path=str(src), include_other=include_other)
-    case = open_case(tmp_path / "case", create=True, examiner="t")
+    case = open_case(tmp_path / case_name, create=True, examiner="t")
     ingest_sources(case, [source])
     return case
 
@@ -189,6 +190,20 @@ def test_each_item_is_joined_in_order_and_described(tmp_path, as_zip):
         for r in got.values():
             parent = case.db.get_file(r["container_id"])
             assert parent is not None and is_exoplayer_cache_name(parent["rel_path"])
+    finally:
+        case.close()
+
+
+def test_a_case_folder_named_with_a_hash_still_reads_the_index_database(tmp_path):
+    # The database is copied under the case folder and opened by URI. Unquoted, a '#'
+    # in the folder name cut the URI and the item lost the key the database gave it.
+    # Windows forbids '?' in a name.
+    name = "case #1 %3F" if os.name == "nt" else "case #1?x"
+    case = _ingest(tmp_path, as_zip=False, case_name=name)
+    try:
+        db = json.loads(_joined(case)["com.example.other:0"]["cache_info"])
+        assert db["key"] == "https://media.example.org/clip.mp4"
+        assert db["key_from"].startswith(exocache.DB_NAME)
     finally:
         case.close()
 
