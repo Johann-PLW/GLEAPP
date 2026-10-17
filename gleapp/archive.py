@@ -188,6 +188,12 @@ _LUKS_TRIED: dict[str, dict[str, list]] = {}
 # keyslot could not be tried at all (pycryptodome missing, say), for the record a walk
 # writes of a container left locked, which names it by where it lies, not by label
 _LUKS_TRIED_UUID: dict[str, dict[str, dict]] = {}
+# the same for the BitLocker volumes and the encrypted APFS volumes a secret given this
+# session was tried on and did not open, by the identity the vendored reader gives the
+# volume (``_bitlocker_id``, ``_apfs_id``): {identity: {"tried": what the reader
+# tried, "why": its reason when it could not try}}. The secrets are not kept.
+_BITLOCKER_TRIED: dict[str, dict[str, dict]] = {}
+_APFS_TRIED: dict[str, dict[str, dict]] = {}
 _PASSWORD_LOCK = threading.Lock()
 # What the vendored reader says a BitLocker volume can be opened with, of the kinds
 # a person can give: anything else (a TPM, a clear key already used) is not asked for.
@@ -269,6 +275,57 @@ def _bitlocker_held(path) -> tuple[list, list]:
         return list(secrets), list(keys)
 
 
+def _bitlocker_id(bitlocker) -> str:
+    """A BitLocker volume's own identity: the volume GUID its FVE metadata block holds
+    (qnxprobe ``BitLocker.volume_id``, read from bytes 80 to 96 of that block), which
+    stays the same wherever the volume is read from. Empty when no metadata block
+    could be read."""
+    return str(getattr(bitlocker, "volume_id", "") or "")
+
+
+def _apfs_id(lock) -> str:
+    """An encrypted APFS volume's own identity: its container's UUID and its own
+    (qnxprobe ``ApfsLock.container_uuid`` and ``.uuid``, from ``nx_uuid`` and
+    ``apfs_vol_uuid``), the pair the reader keys its derived keys by."""
+    return f"{lock.container_uuid}/{lock.uuid}"
+
+
+def _tried(table: dict, ref) -> dict[str, dict]:
+    """What ``table`` (``_BITLOCKER_TRIED`` or ``_APFS_TRIED``) holds for ``ref``."""
+    with _PASSWORD_LOCK:
+        return dict(table.get(_secret_key(ref), {}))
+
+
+def _keep_tried(table: dict, ref, failed: dict, opened: set) -> None:
+    """Remember ``failed`` ({identity: what the reader tried and why}) for ``ref`` and
+    forget the volumes in ``opened``, which a secret given now opens."""
+    if not failed and not opened:
+        return
+    with _PASSWORD_LOCK:
+        held = table.setdefault(_secret_key(ref), {})
+        held.update(failed)
+        for ident in opened:
+            held.pop(ident, None)
+
+
+def _said_bitlocker(bitlocker, said: dict) -> None:
+    """Give a BitLocker volume still locked what the secrets given this session were
+    tried on it as (``said``, from ``_tried(_BITLOCKER_TRIED, ...)``), so the reader's
+    own note says none of them opens it, or why one could not be tried."""
+    held = said.get(_bitlocker_id(bitlocker)) if bitlocker.fvek is None else None
+    if held:
+        bitlocker.tried = bitlocker.tried or list(held["tried"])
+        bitlocker.why = bitlocker.why or held["why"]
+
+
+def _said_apfs(lock, said: dict) -> None:
+    """The same for an encrypted APFS volume still locked (``_APFS_TRIED``)."""
+    held = said.get(_apfs_id(lock)) if lock.vek is None else None
+    if held:
+        lock.tried = lock.tried or bool(held["tried"])
+        lock.why = lock.why or held["why"]
+
+
 def _askable(bitlocker) -> bool:
     """True when a BitLocker volume still locked could open with a password, a
     recovery password or a startup key, so asking for one could help."""
@@ -298,13 +355,18 @@ def bitlocker_volumes(path) -> list[dict]:
         return []
     try:
         secrets, keys = _bitlocker_held(path)
+        said = _tried(_BITLOCKER_TRIED, path)
         out = []
         for prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_bitlocker(part, qnxprobe.image_size(part),
                                                    secrets, keys)
-            out += [{"label": prefix + b.label, "open": b.fvek is not None,
-                     "askable": _askable(b),
-                     "note": "" if b.fvek is not None else b.locked_note()} for b in found]
+            for b in found:
+                askable = _askable(b)
+                # what a secret given this session was tried on it as, for the note
+                _said_bitlocker(b, said)
+                out.append({"label": prefix + b.label, "open": b.fvek is not None,
+                            "askable": askable,
+                            "note": "" if b.fvek is not None else b.locked_note()})
         return out
     finally:
         img.close()
@@ -322,14 +384,21 @@ def unlock_bitlocker(path, secret=None, startup_key: bytes | None = None) -> boo
         tried_secret = [secret] if secret else []
         tried_key = [bytes(startup_key)] if startup_key else []
         opened = False
+        failed: dict[str, dict] = {}
+        now_open: set[str] = set()
         for _prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_bitlocker(part, qnxprobe.image_size(part),
                                                    secrets, keys)
             for bitlocker in found:
+                ident = _bitlocker_id(bitlocker)
                 if bitlocker.fvek is None and bitlocker.unlock(tried_secret, tried_key):
                     opened = True
+                    now_open.add(ident)
+                elif bitlocker.fvek is None and ident and (bitlocker.tried or bitlocker.why):
+                    failed[ident] = {"tried": list(bitlocker.tried), "why": bitlocker.why}
     finally:
         img.close()
+    _keep_tried(_BITLOCKER_TRIED, path, failed, now_open)
     if opened:
         with _PASSWORD_LOCK:
             held = _BITLOCKER.setdefault(_secret_key(path), ([], []))
@@ -363,14 +432,19 @@ def apfs_volumes(path) -> list[dict]:
         img = _open_image_file(path, apfs=False)
     except (ArchiveUnavailable, *_IMAGE_ERRORS):
         return []
+    said = _tried(_APFS_TRIED, path)
     try:
         out = []
         for prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_apfs(part, qnxprobe.image_size(part),
                                               _apfs_held(path))
-            out += [{"label": f"{lk.name} in {prefix}{lk.label}", "open": lk.vek is not None,
-                     "askable": _apfs_askable(lk), "hint": lk.hint,
-                     "note": "" if lk.vek is not None else lk.locked_note()} for lk in found]
+            for lk in found:
+                askable = _apfs_askable(lk)
+                # what a secret given this session was tried on it as, for the note
+                _said_apfs(lk, said)
+                out.append({"label": f"{lk.name} in {prefix}{lk.label}",
+                            "open": lk.vek is not None, "askable": askable, "hint": lk.hint,
+                            "note": "" if lk.vek is not None else lk.locked_note()})
         return out
     finally:
         img.close()
@@ -386,14 +460,20 @@ def unlock_apfs(path, secret) -> bool:
     img = _open_image_file(path, apfs=False)
     try:
         opened = False
+        failed: dict[str, dict] = {}
+        now_open: set[str] = set()
         for _prefix, part in _volume_parts(img):
             _fh, found = qnxprobe.unlock_apfs(part, qnxprobe.image_size(part),
                                               _apfs_held(path))
             for lock in found:
                 if lock.vek is None and lock.unlock([secret]):
                     opened = True
+                    now_open.add(_apfs_id(lock))
+                elif lock.vek is None and (lock.tried or lock.why):
+                    failed[_apfs_id(lock)] = {"tried": bool(lock.tried), "why": lock.why}
     finally:
         img.close()
+    _keep_tried(_APFS_TRIED, path, failed, now_open)
     if opened:
         with _PASSWORD_LOCK:
             _APFS.setdefault(_secret_key(path), []).append(secret)
@@ -2797,13 +2877,15 @@ def _prime_catalog(walker) -> None:
         pass
 
 
-def _not_walked(img, base: int, size, luks_tried=None) -> str:
+def _not_walked(img, base: int, size, luks_tried=None, bitlocker_tried=None) -> str:
     """Why a volume the reader can name has no walker: the locked BitLocker volume's
     own reason and what would open it, a LUKS container's, an LVM2 physical
     volume's, or that the reader walks no such filesystem. In a set of member
     images the volume is looked at in the part it lies in. A LUKS container that a
     passphrase given this session did not open (``luks_tried``, from ``_luks_tried``)
-    says so, with the reader's reason when it gave one, as the console does."""
+    says so, with the reader's reason when it gave one, as the console does, and so
+    does a BitLocker volume a secret given this session did not open
+    (``bitlocker_tried``, from ``_tried(_BITLOCKER_TRIED, ...)``)."""
     if isinstance(img, _SetImage):
         img, base = img.locate(base)
     disk = _foreign_disk(img)
@@ -2814,6 +2896,7 @@ def _not_walked(img, base: int, size, luks_tried=None) -> str:
                                           "this volume")
     bitlocker = qnxprobe.BitLocker.open(img, base, size)
     if bitlocker is not None:
+        _said_bitlocker(bitlocker, bitlocker_tried or {})
         return bitlocker.locked_note()
     opened = (getattr(img, "luks", None) or {}).get(base)
     if opened is not None:
@@ -2858,12 +2941,13 @@ def _walker_says(walker, fskind: str) -> str:
     return "; ".join(parts)
 
 
-def _apfs_states(walker, vol: str, refused: list) -> list[str]:
+def _apfs_states(walker, vol: str, refused: list, apfs_tried=None) -> list[str]:
     """The identifiers of the encrypted APFS volumes in a container that the walk reads
     decrypted, and, into ``refused``, one line for each it cannot read: its blocks are
     ciphertext in the image and nothing given opens it, or it is of a kind the reader
     does not open, with the reader's reason and, when the volume stores one, its
-    passphrase hint."""
+    passphrase hint. One a secret given this session did not open (``apfs_tried``,
+    from ``_tried(_APFS_TRIED, ...)``) says so, as the console does."""
     opened = []
     for i, (_oid, _blk, name, _incompat) in enumerate(walker.volumes):
         state = walker.encryption(i)
@@ -2871,6 +2955,8 @@ def _apfs_states(walker, vol: str, refused: list) -> list[str]:
             opened.append(str(walker.volume_uuids[i]))
         elif state == "locked":
             lock = walker.lock(i)
+            if lock is not None:
+                _said_apfs(lock, apfs_tried or {})
             why = (lock.locked_note() if lock is not None
                    else "its blocks are ciphertext in this image")
             refused.append(f"{vol}/{name or f'volume {i}'} (apfs, encrypted): {why}")
@@ -2908,6 +2994,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
     volume_notes: list[str] = []
     set_members = None
     luks_tried = _luks_tried(image_path if ref is None else ref)
+    bitlocker_tried = _tried(_BITLOCKER_TRIED, image_path if ref is None else ref)
+    apfs_tried = _tried(_APFS_TRIED, image_path if ref is None else ref)
 
     img = _open_image_file(image_path if ref is None else ref)
     try:
@@ -2973,11 +3061,11 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 try:
                     walker = qnxprobe.walker_for(fskind, img, base, size)
                     if walker is None:
-                        why = _not_walked(img, base, size, luks_tried)
+                        why = _not_walked(img, base, size, luks_tried, bitlocker_tried)
                         refused.append(f"{vol} ({fskind}): {why}")
                         continue
                     if fskind == "apfs":
-                        apfs.extend(_apfs_states(walker, vol, refused))
+                        apfs.extend(_apfs_states(walker, vol, refused, apfs_tried))
                     _prime_catalog(walker)
                     # FAT and exFAT keep a wall-clock reading and no zone, so their
                     # mtime comes back as zero and the readings arrive here instead,
