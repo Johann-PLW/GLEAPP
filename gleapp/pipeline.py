@@ -208,7 +208,8 @@ def add_documents(case: Case, *, progress=None) -> dict:
 
     for name, rec in archive.source_records(case).items():
         src = Source(name=name, path=rec["path"], kind="archive",
-                     stage=rec.get("mode") == archive.MODE_STAGED, documents=True)
+                     stage=rec.get("mode") == archive.MODE_STAGED, documents=True,
+                     members=[m["path"] for m in rec.get("members") or []])
         src.only_documents = True       # read by archive._only_documents
         try:
             archive.ingest_archive(case, src)

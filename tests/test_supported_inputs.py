@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_FILESYSTEMS = [
     "ext2", "ext3", "ext4", "F2FS", "FAT32", "FAT16", "FAT12", "exFAT", "NTFS",
     "HFS+", "HFSX", "APFS", "QNX4", "QNX EFS", "QNX ETFS", "QNX IFS",
-    "SquashFS", "JFFS2", "UBI", "UBIFS", "YAFFS1", "YAFFS2",
+    "SquashFS", "JFFS2", "UBI", "UBIFS", "YAFFS1", "YAFFS2", "XFS", "Btrfs", "ReFS",
 ]
 
 
@@ -55,7 +55,8 @@ def test_every_named_filesystem_has_a_walker_in_the_vendored_reader():
              "APFS": "apfs", "QNX4": "qnx4", "QNX EFS": "efs",
              "QNX ETFS": "etfs", "QNX IFS": "QNX IFS boot image",
              "SquashFS": "squashfs", "JFFS2": "jffs2", "UBI": "ubi", "UBIFS": "ubifs",
-             "YAFFS1": "yaffs1", "YAFFS2": "yaffs2"}
+             "YAFFS1": "yaffs1", "YAFFS2": "yaffs2",
+             "XFS": "xfs", "Btrfs": "btrfs", "ReFS": "refs"}
     assert set(kinds) == set(EXPECTED_FILESYSTEMS)
     blank = io.BytesIO(bytes(1 << 20))
     for shown, kind in kinds.items():
@@ -70,9 +71,11 @@ def test_every_named_filesystem_has_a_walker_in_the_vendored_reader():
 
 def test_a_kind_with_no_walker_is_not_named_on_the_screen():
     """The control: walker_for really does answer None for something it cannot
-    read, so the assertion above can fail."""
-    assert qnxprobe.walker_for("btrfs", io.BytesIO(bytes(4096)), 0, 4096) is None
-    assert "btrfs" not in [f.lower() for f in archive.WALKED_FILESYSTEMS]
+    read, so the assertion above can fail. The kind is one identify_fs names
+    (qnxprobe 1.70 names an md RAID member read alone so) and no walker reads:
+    btrfs served here until qnxprobe 1.68 gave it a walker."""
+    assert qnxprobe.walker_for("linux md member", io.BytesIO(bytes(4096)), 0, 4096) is None
+    assert "linux md member" not in [f.lower() for f in archive.WALKED_FILESYSTEMS]
 
 
 def test_the_launcher_is_handed_the_same_list():

@@ -1591,9 +1591,14 @@ def _write_device_info(case: Case, dest: Path, *, tz_name: str | None) -> None:
     if statuses:
         grid = []
         for record in statuses:
+            parts = record.get("members") or []
             grid.append([
-                record["name"], Path(record["path"]).name, record["format"],
-                record["mode"], f'{record["size"]:,}', record["files"],
+                record["name"],
+                (f"{len(parts)} member images, listed under Member images" if parts
+                 else Path(record["path"]).name), record["format"],
+                record["mode"],
+                f'{sum(m.get("size") or 0 for m in parts) if parts else record["size"]:,}',
+                record["files"],
                 record["status"],
                 record.get("media_hash") or record.get("sha256") or "",
                 record.get("timestamps") or "",
@@ -1607,6 +1612,31 @@ def _write_device_info(case: Case, dest: Path, *, tz_name: str | None) -> None:
                     'acquiring tool wrote, where the format carries one. Timestamps is '
                     'what the ingest recorded about where this source\'s date columns '
                     'came from.</p>')
+        # A source read from several member images (a RAID set): every member, by
+        # file name, with the hash that identifies it, and whether the examiner
+        # picked it or it was found beside the image picked.
+        members = [[record["name"], Path(m["path"]).name,
+                    "found beside the image picked" if m.get("found") else "picked",
+                    m.get("format") or "", f'{m.get("size") or 0:,}', m.get("status") or "",
+                    m.get("media_hash") or ""]
+                   for record in statuses for m in record.get("members") or []]
+        if members:
+            body += ["<h2>Member images</h2>",
+                     _grid(["Source", "File", "How it was added", "Format", "Bytes",
+                            "Status", "Recorded hash"], members)]
+            body.append('<p class="muted">A source read from several member images, '
+                        'such as the disks of a RAID set. Its recorded hash in Sources '
+                        'is one value over every member\'s size and recorded hash, in '
+                        'the order read; it is not a hash of any disk. A member\'s '
+                        'recorded hash is the acquiring tool\'s for an E01, and for a '
+                        'raw image a hash of its size and its first and last 4 MiB.</p>')
+        # A search for the other member images of a RAID set, and what the examiner
+        # did with it, and paths given that named a disk already given
+        said = [[record["name"], line] for record in statuses
+                for line in (record.get("set_notes") or [])
+                + (record.get("discovery_lines") or [])]
+        if said:
+            body += ["<h2>Member image search</h2>", _grid(["Source", "Recorded"], said)]
     folder_sources = sorted({(r["source"] or "") for r in case.db.iter_files()}
                             - {s["name"] for s in statuses} - {""})
     if folder_sources:

@@ -73,11 +73,74 @@ your user settings, not in any case.
       - Filesystems are walked file by file, so each file keeps the name, path
         and dates the filesystem recorded. Supported: ext2/3/4, F2FS, FAT32,
         FAT16, FAT12, exFAT, NTFS, HFS+, HFSX, APFS, QNX4, QNX EFS, QNX ETFS, QNX IFS,
-        SquashFS, JFFS2, UBI, UBIFS, YAFFS1 and YAFFS2.
-        Unreadable volumes are named in the Source panel.
+        SquashFS, JFFS2, UBI, UBIFS, YAFFS1, YAFFS2, XFS (v4 and v5), Btrfs and
+        ReFS 3.x up to 3.14. Unreadable volumes are named in the Source panel.
+        XFS, Btrfs and ReFS come with qnxprobe 1.68. qnxprobe's own tests read
+        them against volumes the native tools wrote: XFS made by `mkfs.xfs` 6.18,
+        Btrfs by btrfs-progs 6.17.1 (no compression, zlib, zstd and LZO; zstd needs
+        Python 3.14 or later), and a ReFS 3.14 Dev Drive Windows 11 wrote, plus the
+        forefst sample volumes. GLEAPP's own ingest of those fixtures, measured
+        2026-10-16: the five XFS volumes (5,319, 4,920, 116, 525 and 525 files) and
+        seven Btrfs volumes of 572 files each, one converted from ext4 (3) and one
+        live volume (17) registered every file with the SHA-256 the fixture
+        records. The ReFS volume registered 2,547 files: 2,540 hash to the SHA-256
+        Windows recorded, and 7 were not compared: 4 Windows listed whose content
+        the fixture does not ship (big/frag_a.bin, big/frag_b.bin,
+        big/large_48MiB.bin, sparse/punched.bin), and 3 in System Volume
+        Information that Windows' own listing leaves out. An older ReFS (1.x, 2.x), or one
+        past 3.14, is named and not listed, and ReFS data in a container marked
+        compressed is refused. When such a volume is read with nothing listed, or
+        the reader has more to say (one device of a multi-device Btrfs, a log not
+        replayed, damage met), the Source panel says so in the reader's words.
       - Deleted-media recovery is separate (§16). Tick *Recover media
         (filesystem records and carving)* to run it during ingest, or run it
         later from the Source panel.
+      - **RAID member images** (one image per disk of a Linux md array, or of an
+        LVM2 volume group spread over several disks) are one source. Pick them
+        together in **Browse to file…**, or pick one: GLEAPP looks in its folder
+        for the other members by what each file records about itself (the md array
+        uuid, or the volume group and physical volume ids), never by name, and when
+        it finds any it lists them, and every other file it looked at with why it
+        was not used, and asks: **Use them** (the default), **Only the file I
+        picked**, or **Cancel**. Nothing is looked for, and nothing is asked, for an
+        image that holds every member of its arrays and volume groups (an ordinary
+        disk, or a one-disk LVM2 install). What was done is recorded in the case and
+        shown in the Source panel and the LAVA report: the members found and used,
+        your choice to read the image alone, or that none was found. Two paths that
+        open the same disk (the same file twice, a link to it, or two segments of one
+        split or E01 set) are read once, and the case says which. Logical evidence
+        (L01, AD1) or a file that is not a disk image among them is refused before
+        anything is read. A password, recovery password or passphrase is tried on
+        the BitLocker, APFS and LUKS volumes inside each member and inside each array
+        too. Each member
+        is read as it would be on its own, and each array or volume group assembled
+        from them is walked as a volume of its own, named as qnxprobe names it
+        (`md_<name>_<uuid>`, `lvm_<group>_<volume>`). A RAID1 array whose data
+        starts at the first byte of its members (metadata 0.90 or 1.0) is read from
+        its first member, as that member's own volume; the other members are listed
+        as copies of it and not walked again. Two files that may be byte copies of
+        one disk (the same size and the same first and last 1 MiB) are both read,
+        with a warning. Where each member and each array lies is recorded when the
+        set is ingested, and every later session reads each file from that place:
+        if a part cannot be produced in a session (an encrypted volume inside a
+        member left locked, an array no longer assembled), the files in it fail with
+        why, keep the hashes they were given, and no other file moves. A RAID4/5 array missing one
+        member, or a RAID6 array missing two, is rebuilt from parity when it was
+        stopped clean; an array that cannot be read is named in the Source panel
+        with why. The case records every member, and which were found rather than
+        picked; **Relink…** takes one member's new place when the others sit beside
+        it under the same names, or each member's. From the command line, give
+        several images to `gleapp ingest` for one source, or one image to have the
+        others found and listed (`--no-find-members` reads it alone).
+      - A disk of a DDF or Intel IMSM (RST) array, read alone, is walked only when
+        its metadata records a mirror (RAID1) in its normal state; on any other its
+        partitions and volumes are listed as RAID members with the level and are not
+        walked, because one disk of such an array does not hold the whole of its data.
+      - A case holding such a set should not be opened with a GLEAPP older than
+        the one that made it. Cases carry no version an older release checks, so an
+        older GLEAPP opens it, reads every file after the set's first part from the
+        wrong place, and a forced processing pass there writes errors over those
+        files' records.
     - **JSON**: a GLEAPP job spec or a **Project VIC 2.0 (US)** JSON, detected
       automatically. The VIC media folder is resolved next to the file.
       MediaID, category, original path, MIME and victim-offender flags are
@@ -1605,7 +1668,7 @@ recovering files no surviving record names.
 
 ### Which filesystems can do what
 
-The walk reads twenty-two kinds, but the other two passes need more of a
+The walk reads twenty-five kinds, but the other two passes need more of a
 filesystem than the walk does:
 
 | Filesystem | Walked | Deleted records | Free space, for scoping |
@@ -1616,6 +1679,8 @@ filesystem than the walk does:
 | ext2 / ext3 / ext4 | yes | no | **no** |
 | QNX4, EFS, ETFS, IFS | yes | no | **no** |
 | SquashFS, JFFS2, UBI, UBIFS, YAFFS1, YAFFS2 | yes | no | **no** |
+| XFS, Btrfs | yes | no | yes |
+| ReFS | yes | no | **no** |
 
 So on a Mac or Linux acquisition nothing comes back with its name, and on a
 disk holding any volume that cannot report its free space the scan falls back
