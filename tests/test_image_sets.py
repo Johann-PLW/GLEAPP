@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -342,6 +343,14 @@ def test_the_evidence_picker_allows_several_files(monkeypatch):
         windows = [FakeWin()]
 
     monkeypatch.setitem(sys.modules, "webview", FakeWebview)
+    if sys.platform == "win32":
+        # several files on Windows go through the STA dialog, not pywebview's
+        from gleapp import _win_open_dialog  # pylint: disable=import-outside-toplevel
+
+        def fake_open_files(file_types, multiple=True, **_given):
+            assert any("*.xml" in ft for ft in file_types)
+            return FakeWin().create_file_dialog("open", allow_multiple=multiple)
+        monkeypatch.setattr(_win_open_dialog, "open_files", fake_open_files)
     cl = appmod.create_app(None, native=True).test_client()
     body = cl.post("/api/pick", json={"kind": "ingestfile", "multiple": True}).get_json()
     assert seen["multiple"] is True
@@ -391,7 +400,10 @@ def test_the_confirmation_turns_each_answer_into_the_sources_it_names():
     js = (ROOT / "gleapp/web/static/app.js").read_text(encoding="utf-8")
     start = js.index("function membersSources(")
     body = js[start:js.index("\n}\n", start) + 3]
-    script = ("const ARCHIVE_RE = /\\.(zip|tar|tgz|tbz2?|txz|tar\\.(gz|bz2|xz))$/i;\n" + body
+    # the regexes it uses, read from app.js so the copy cannot drift from them
+    regexes = "".join(re.search(rf"^const {name} = .*$", js, re.M).group(0) + "\n"
+                      for name in ("SPEC_RE", "ARCHIVE_RE"))
+    script = (regexes + body
               + """
 const found = {searched: true, paths: ["/e/m2.img", "/e/m0.img", "/e/m1.img"],
                added: [{path: "/e/m0.img"}, {path: "/e/m1.img"}],

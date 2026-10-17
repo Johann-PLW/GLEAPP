@@ -4018,7 +4018,9 @@ $("#aeGo").onclick = async () => {
   // folders and archives both go through parse_source_spec server-side, which
   // detects an archive (or a disk image, E01 or raw) from its bytes and ingests it as one.
   const folders = AE.sources.filter(s => s.kind === "folder" || s.kind === "archive" || s.kind === "set")
-    .map(sourceBody);
+    .map(sourceBody)
+    // every spec file after the first goes as a source of its own (C4P and C4M together)
+    .concat(specs.slice(1).map(path => ({ path })));
   $("#aeGo").disabled = true;
   const ing = await postIngest({
     spec: specs[0] || null, sources: folders,
@@ -4142,7 +4144,7 @@ async function pick(kind, label) {
     archive: "Path to the extraction archive or disk image (zip, tar, tar.gz/bz2/xz, E01, Ex01, AFF, AFF4, DMG, VHD, VHDX, VMDK, QCOW2, raw .img/.dd or any segment of a split set):",
     basemap: "Path to a basemap file (.pmtiles or .mbtiles):",
     casefile: "Path to the case.gleapp file:",
-    ingestfile: "Path to the evidence file (extraction archive, E01, Ex01, AFF, AFF4, DMG, virtual machine disk or raw disk image, or .json job/VIC file):"
+    ingestfile: "Path to the evidence file (extraction archive, E01, Ex01, AFF, AFF4, DMG, virtual machine disk or raw disk image, or .json job/VIC file, or C4All index .xml):"
     }[kind]
     || "Path to .json job file:")) || null;
 }
@@ -4161,7 +4163,7 @@ async function pickMany(kind, label) {
       toast("File dialog unavailable. Type the path instead.");
     }
   }
-  const typed = await askText(label || "Path to the evidence file (extraction archive, E01, Ex01, AFF, AFF4, DMG, virtual machine disk or raw disk image, or .json job/VIC file):");
+  const typed = await askText(label || "Path to the evidence file (extraction archive, E01, Ex01, AFF, AFF4, DMG, virtual machine disk or raw disk image, or .json job/VIC file, or C4All index .xml):");
   return typed ? [typed] : null;
 }
 
@@ -4176,7 +4178,7 @@ function membersSources(paths, found, choice) {
   if (!clean.length || choice === "cancel") return [];
   if (clean.length > 1) return [{ kind: "set", path: clean[0], paths: clean, found: [] }];
   const p = clean[0];
-  const kind = /\.json$/i.test(p) ? "spec" : ARCHIVE_RE.test(p) ? "archive" : "folder";
+  const kind = SPEC_RE.test(p) ? "spec" : ARCHIVE_RE.test(p) ? "archive" : "folder";
   // what the search found and what the examiner did with it, which the case records
   const discovery = (c) => ({ choice: c, added: (found.added || []).map(a => a.path),
     unused: (found.unused || []).map(u => ({ path: u.path, why: u.why })),
@@ -4273,6 +4275,9 @@ function askMembers(picked, found) {
 async function evidenceEntries(paths) {
   let clean = (paths || []).map(p => String(p || "").trim().replace(/^["']|["']$/g, ""))
     .filter(Boolean);
+  // index files picked together (C4P and C4M) are a source each, not a disk set
+  if (clean.length > 1 && clean.every(p => SPEC_RE.test(p)))
+    return clean.flatMap(p => membersSources([p], null, "only"));
   if (clean.length > 1) {
     // picked together: one source, each disk once. Paths that open a disk already
     // picked are said and dropped; anything not a disk image is refused here.
@@ -4293,7 +4298,7 @@ async function evidenceEntries(paths) {
     clean = r.paths;
     if (clean.length > 1) return membersSources(clean, null, "only");
   }
-  if (clean.length !== 1 || /\.json$/i.test(clean[0]) || ARCHIVE_RE.test(clean[0]))
+  if (clean.length !== 1 || SPEC_RE.test(clean[0]) || ARCHIVE_RE.test(clean[0]))
     return membersSources(clean, null, "only");
   let found = null;
   try {
@@ -4571,6 +4576,8 @@ $("#openBrowse").onclick = async () => { const p = await pick("folder"); if (p) 
 $("#openBrowseFile").onclick = async () => { const p = await pick("casefile"); if (p) $("#openPath").value = p; };
 $("#openGo").onclick = () => $("#openPath").value && openCase($("#openPath").value.trim());
 $("#newBrowse").onclick = async () => { const p = await pick("folder"); if (p) $("#newPath").value = p; };
+// a job file, a Project VIC case or a C4All report index
+const SPEC_RE = /\.(json|xml)$/i;
 const ARCHIVE_RE = /\.(zip|tar|tgz|tbz2?|txz|tar\.(gz|bz2|xz))$/i;
 async function addSource(p, discover = true) {
   const list = Array.isArray(p) ? p : [p];
@@ -4612,7 +4619,9 @@ $("#createGo").onclick = async () => {
   // folders and archives both go through parse_source_spec server-side, which
   // detects an archive from its bytes and ingests it as one.
   const folders = Lr.sources.filter(s => s.kind === "folder" || s.kind === "archive" || s.kind === "set")
-    .map(sourceBody);
+    .map(sourceBody)
+    // every spec file after the first goes as a source of its own (C4P and C4M together)
+    .concat(specs.slice(1).map(path => ({ path })));
   $("#jobMsg").textContent = "Starting ingest…";
   const ing = await postIngest({
     spec: specs[0] || null, sources: folders,
