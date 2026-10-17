@@ -250,6 +250,41 @@ def test_the_command_line_reads_a_degraded_set_from_the_members_found(tmp_path, 
     case.close()
 
 
+def test_the_command_line_prints_the_missing_role_and_its_rebuild(tmp_path, capsys):
+    # role 2 is not given; the console says so, as qnxprobe and DLEAPP do
+    files = _members(tmp_path / "ev", "md-r5ls-090", (0, 1, 3))
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "ingest", *map(str, files), "--no-process"]) == 0
+    out = capsys.readouterr().out
+    assert "    role 2: missing" in out
+    assert "1 member(s) missing: their chunks are rebuilt from parity" in out
+    # after the Sources list, before the count, and the same lines the case keeps
+    assert out.index("Sources (1):") < out.index("role 2: missing") < out.index("Registered")
+    case = open_case(case_dir)
+    rec = archive.source_record(case, files[0].name)
+    assert all(line in out for line in rec["raid"] if line)
+    case.close()
+
+
+def test_the_command_line_prints_a_member_left_out_and_why(tmp_path, capsys):
+    files = _members(tmp_path / "ev", "md-r5-ls", range(4))
+    copy = tmp_path / "ev" / "copy-of-3.img"
+    shutil.copy(files[3], copy)                        # a second holder of role 3
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "ingest", *map(str, files), str(copy),
+                     "--no-process"]) == 0
+    out = capsys.readouterr().out
+    assert "  left out: copy-of-3.img: role 3 again, held by md-r5-ls-3.img" in out
+
+
+def test_the_command_line_prints_no_raid_report_for_an_ordinary_image(tmp_path, capsys):
+    image = tmp_path / "ev" / "fat.img"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(build_fat32([("A", "TXT", b"x", (2020, 1, 1, 0, 0, 0))]))
+    assert cli_main(["-c", str(tmp_path / "case"), "ingest", str(image), "--no-process"]) == 0
+    assert "RAID:" not in capsys.readouterr().out
+
+
 def test_no_find_members_reads_the_image_given_alone(tmp_path, capsys):
     files = _with_decoys(tmp_path / "ev")
     case_dir = tmp_path / "case"
@@ -768,6 +803,56 @@ def test_a_passphrase_opens_a_luks_container_inside_an_array(tmp_path):
     assert got == _luks_known()
     assert json.loads(archive.source_record(case, "set")["luks"])
     case.close()
+
+
+def test_a_wrong_passphrase_is_recorded_as_the_console_says_it(tmp_path, capsys):
+    # the case keeps the reason the console gives, not the one for no passphrase
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text("not it\n", encoding="utf-8")
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "set", "members": [str(f) for f in files],
+                                            "include_other": True}]}), encoding="utf-8")
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "--password-file", str(wrong), "ingest", str(job),
+                     "--no-process"]) == 0
+    assert "no passphrase given opens a keyslot" in capsys.readouterr().err
+    case = open_case(case_dir)
+    got = json.loads(archive.source_record(case, "set")["volumes_not_read"])
+    case.close()
+    assert len(got) == 1 and got[0].endswith(
+        "(luks): LUKS1, locked; LUKS-encrypted and not read: no passphrase given opens a keyslot")
+
+
+def test_a_passphrase_that_cannot_be_tried_is_recorded_with_the_readers_reason(
+        tmp_path, monkeypatch, capsys):
+    from gleapp.vendor import qnxprobe              # pylint: disable=import-outside-toplevel
+    monkeypatch.setattr(qnxprobe, "_BDE_AES", None)  # as without pycryptodome
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    pw = tmp_path / "pass.txt"
+    pw.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "set", "members": [str(f) for f in files],
+                                            "include_other": True}]}), encoding="utf-8")
+    assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",
+                     str(job), "--no-process"]) == 0
+    reason = "LUKS-encrypted and not read: AES needs the pycryptodome package"
+    assert reason in capsys.readouterr().err
+    case = open_case(tmp_path / "case")
+    got = archive.source_record(case, "set")["volumes_not_read"]
+    case.close()
+    assert reason in got
+
+
+def test_no_passphrase_is_recorded_as_none_given(tmp_path):
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    case = _ingest(tmp_path / "case", image_set_source(files))
+    got = json.loads(archive.source_record(case, files[0].name)["volumes_not_read"])
+    case.close()
+    assert len(got) == 1 and got[0].endswith("LUKS-encrypted and not read: give its passphrase")
 
 
 def test_a_passphrase_opens_a_luks_container_in_a_member_of_a_set(tmp_path):
@@ -1402,6 +1487,10 @@ def test_a_passphrase_opens_luks_inside_an_array_in_one_images_partitions(tmp_pa
     err = capsys.readouterr().err
     assert "md_qp_qp21_3090d8cb/whole image of one.img stays locked" in err
     assert "no passphrase given opens a keyslot" in err
+    locked = open_case(tmp_path / "locked")
+    assert "no passphrase given opens a keyslot" in archive.source_record(
+        locked, "one")["volumes_not_read"]
+    locked.close()
     pw = tmp_path / "pass.txt"
     pw.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
     assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",

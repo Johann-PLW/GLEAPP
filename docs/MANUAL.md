@@ -131,7 +131,10 @@ your user settings, not in any case.
         picked; **Relink…** takes one member's new place when the others sit beside
         it under the same names, or each member's. From the command line, give
         several images to `gleapp ingest` for one source, or one image to have the
-        others found and listed (`--no-find-members` reads it alone).
+        others found and listed (`--no-find-members` reads it alone). After the
+        Sources list it prints what was assembled, as qnxprobe and DLEAPP do: each
+        array and its roles, a role missing and rebuilt from parity, and a member
+        left out and why.
       - One image whose own partitions hold two or more members of an md array (a
         disk carved into partitions that were raided together) is read the same way,
         as a set of that one image: the array is assembled from its partitions, as
