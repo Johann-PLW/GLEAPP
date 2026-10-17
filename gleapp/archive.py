@@ -72,6 +72,7 @@ this codebase does not have.
 
 from __future__ import annotations
 
+import bisect
 import collections
 import contextlib
 import errno
@@ -110,7 +111,7 @@ MODE_STAGED = "staged"
 WALKED_FILESYSTEMS = ("ext2", "ext3", "ext4", "F2FS", "FAT32", "FAT16", "FAT12",
                       "exFAT", "NTFS", "HFS+", "HFSX", "APFS", "QNX4", "QNX EFS",
                       "QNX ETFS", "QNX IFS", "SquashFS", "JFFS2", "UBI", "UBIFS",
-                      "YAFFS1", "YAFFS2")
+                      "YAFFS1", "YAFFS2", "XFS", "Btrfs", "ReFS")
 
 FORMAT_ZIP = "zip"
 FORMAT_TAR = "tar"
@@ -241,10 +242,22 @@ def unlock_image(path, password=None, private_key: bytes | None = None) -> bool:
     return True
 
 
+def _secret_key(ref) -> str:
+    """The key what opens the volumes inside an image is held under: its path, or for
+    a set of member images, the set itself (``MemberSet``)."""
+    if isinstance(ref, MemberSet):
+        return "set:" + "\0".join(_password_key(p) for p in ref)
+    return _password_key(ref)
+
+
+def _drop_ref(ref) -> None:
+    _drop_image(ref if isinstance(ref, MemberSet) else os.fspath(ref))
+
+
 def _bitlocker_held(path) -> tuple[list, list]:
     """The BitLocker secrets and startup keys this session holds for ``path``."""
     with _PASSWORD_LOCK:
-        secrets, keys = _BITLOCKER.get(_password_key(path), ([], []))
+        secrets, keys = _BITLOCKER.get(_secret_key(path), ([], []))
         return list(secrets), list(keys)
 
 
@@ -255,22 +268,36 @@ def _askable(bitlocker) -> bool:
             and any(kind in _BITLOCKER_ASKABLE for kind, _id in bitlocker.protectors))
 
 
+def _volume_parts(img) -> list[tuple[str, object]]:
+    """``[(label prefix, image)]`` whose volumes an unlock looks at: the image itself,
+    or each part of a set of member images (each member and each array read from
+    them), its labels prefixed with the part's name."""
+    if isinstance(img, _SetImage):
+        return [(f"{part['prefix']}/", part["handle"]) for part in img.parts]
+    return [("", img)]
+
+
 def bitlocker_volumes(path) -> list[dict]:
     """The BitLocker volumes in the image at ``path``, tried with what this session
     holds for them: each one's ``label``, ``open``, ``askable`` (still locked, and a
     password, recovery password or startup key could open it) and the reader's
     ``note`` on why it is locked. Empty for an image with no BitLocker volume, and for
-    an encrypted image not open this session (``unlock_image`` comes first)."""
+    an encrypted image not open this session (``unlock_image`` comes first). For a
+    set of member images, those in each member and in each array read from them."""
     try:
         img = _open_image_file(path, bitlocker=False)
     except (ArchiveUnavailable, *_IMAGE_ERRORS):
         return []
     try:
         secrets, keys = _bitlocker_held(path)
-        _fh, found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
-                                               secrets, keys)
-        return [{"label": b.label, "open": b.fvek is not None, "askable": _askable(b),
-                 "note": "" if b.fvek is not None else b.locked_note()} for b in found]
+        out = []
+        for prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_bitlocker(part, qnxprobe.image_size(part),
+                                                   secrets, keys)
+            out += [{"label": prefix + b.label, "open": b.fvek is not None,
+                     "askable": _askable(b),
+                     "note": "" if b.fvek is not None else b.locked_note()} for b in found]
+        return out
     finally:
         img.close()
 
@@ -279,33 +306,35 @@ def unlock_bitlocker(path, secret=None, startup_key: bytes | None = None) -> boo
     """Try ``secret`` (a password or recovery password) or ``startup_key`` (the bytes
     of a .BEK file) on each BitLocker volume in the image at ``path`` that is still
     locked this session. When it opens at least one, keep it for this session and
-    return True; when it opens none, return False."""
+    return True; when it opens none, return False. For a set of member images, every
+    member and every array read from them is tried."""
     img = _open_image_file(path, bitlocker=False)
     try:
         secrets, keys = _bitlocker_held(path)
-        _fh, found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
-                                               secrets, keys)
         tried_secret = [secret] if secret else []
         tried_key = [bytes(startup_key)] if startup_key else []
         opened = False
-        for bitlocker in found:
-            if bitlocker.fvek is None and bitlocker.unlock(tried_secret, tried_key):
-                opened = True
+        for _prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_bitlocker(part, qnxprobe.image_size(part),
+                                                   secrets, keys)
+            for bitlocker in found:
+                if bitlocker.fvek is None and bitlocker.unlock(tried_secret, tried_key):
+                    opened = True
     finally:
         img.close()
     if opened:
         with _PASSWORD_LOCK:
-            held = _BITLOCKER.setdefault(_password_key(path), ([], []))
+            held = _BITLOCKER.setdefault(_secret_key(path), ([], []))
             held[0].extend(tried_secret)
             held[1].extend(tried_key)
-        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+        _drop_ref(path)                 # a handle opened before this reads it locked
     return opened
 
 
 def _apfs_held(path) -> list:
     """The APFS passwords and personal recovery keys this session holds for ``path``."""
     with _PASSWORD_LOCK:
-        return list(_APFS.get(_password_key(path), []))
+        return list(_APFS.get(_secret_key(path), []))
 
 
 def _apfs_askable(lock) -> bool:
@@ -321,16 +350,20 @@ def apfs_volumes(path) -> list[dict]:
     personal recovery key could open it), ``hint`` (the passphrase hint it stores, as
     stored) and the reader's ``note`` on why it is locked. Empty for an image with no
     such volume, and for an encrypted image not open this session (``unlock_image``
-    comes first)."""
+    comes first). For a set of member images, those in each member and array."""
     try:
         img = _open_image_file(path, apfs=False)
     except (ArchiveUnavailable, *_IMAGE_ERRORS):
         return []
     try:
-        _fh, found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
-        return [{"label": f"{lk.name} in {lk.label}", "open": lk.vek is not None,
-                 "askable": _apfs_askable(lk), "hint": lk.hint,
-                 "note": "" if lk.vek is not None else lk.locked_note()} for lk in found]
+        out = []
+        for prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_apfs(part, qnxprobe.image_size(part),
+                                              _apfs_held(path))
+            out += [{"label": f"{lk.name} in {prefix}{lk.label}", "open": lk.vek is not None,
+                     "askable": _apfs_askable(lk), "hint": lk.hint,
+                     "note": "" if lk.vek is not None else lk.locked_note()} for lk in found]
+        return out
     finally:
         img.close()
 
@@ -339,29 +372,31 @@ def unlock_apfs(path, secret) -> bool:
     """Try ``secret`` (a password or personal recovery key) on each encrypted APFS
     volume in the image at ``path`` that is still locked this session. When it opens
     at least one, keep it for this session and return True; when it opens none,
-    return False."""
+    return False. For a set of member images, every member and array is tried."""
     if not secret:
         return False
     img = _open_image_file(path, apfs=False)
     try:
-        _fh, found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
         opened = False
-        for lock in found:
-            if lock.vek is None and lock.unlock([secret]):
-                opened = True
+        for _prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_apfs(part, qnxprobe.image_size(part),
+                                              _apfs_held(path))
+            for lock in found:
+                if lock.vek is None and lock.unlock([secret]):
+                    opened = True
     finally:
         img.close()
     if opened:
         with _PASSWORD_LOCK:
-            _APFS.setdefault(_password_key(path), []).append(secret)
-        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+            _APFS.setdefault(_secret_key(path), []).append(secret)
+        _drop_ref(path)                 # a handle opened before this reads it locked
     return opened
 
 
 def _luks_held(path) -> list:
     """The LUKS passphrases this session holds for ``path``."""
     with _PASSWORD_LOCK:
-        return list(_LUKS.get(_password_key(path), []))
+        return list(_LUKS.get(_secret_key(path), []))
 
 
 def _luks_askable(lk) -> bool:
@@ -375,15 +410,21 @@ def luks_volumes(path) -> list[dict]:
     for them: each one's ``label`` (the region it is in), ``open``, ``askable`` (still
     locked, and a passphrase could open it) and the reader's ``note`` on why it is
     locked. Empty for an image with no LUKS container, and for an encrypted image not
-    open this session (``unlock_image`` comes first)."""
+    open this session (``unlock_image`` comes first). For a set of member images,
+    those in each member and in each array read from them."""
     try:
         img = _open_image_file(path, luks=False)
     except (ArchiveUnavailable, *_IMAGE_ERRORS):
         return []
     try:
-        _fh, found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), _luks_held(path))
-        return [{"label": lk.label, "open": lk.mk is not None, "askable": _luks_askable(lk),
-                 "note": "" if lk.mk is not None else lk.locked_note()} for lk in found]
+        out = []
+        for prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_luks(part, qnxprobe.image_size(part),
+                                              _luks_held(path))
+            out += [{"label": prefix + lk.label, "open": lk.mk is not None,
+                     "askable": _luks_askable(lk),
+                     "note": "" if lk.mk is not None else lk.locked_note()} for lk in found]
+        return out
     finally:
         img.close()
 
@@ -391,22 +432,25 @@ def luks_volumes(path) -> list[dict]:
 def unlock_luks(path, secret) -> bool:
     """Try ``secret`` (a passphrase) on each LUKS container in the image at ``path``
     that is still locked this session. When it opens at least one, keep it for this
-    session and return True; when it opens none, return False."""
+    session and return True; when it opens none, return False. For a set of member
+    images, every member and every array read from them is tried."""
     if not secret:
         return False
     img = _open_image_file(path, luks=False)
     try:
-        _fh, found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), _luks_held(path))
         opened = False
-        for lk in found:
-            if lk.mk is None and not lk.why and lk.unlock([secret]):
-                opened = True
+        for _prefix, part in _volume_parts(img):
+            _fh, found = qnxprobe.unlock_luks(part, qnxprobe.image_size(part),
+                                              _luks_held(path))
+            for lk in found:
+                if lk.mk is None and not lk.why and lk.unlock([secret]):
+                    opened = True
     finally:
         img.close()
     if opened:
         with _PASSWORD_LOCK:
-            _LUKS.setdefault(_password_key(path), []).append(secret)
-        _drop_image(os.fspath(path))    # a handle opened before this reads it locked
+            _LUKS.setdefault(_secret_key(path), []).append(secret)
+        _drop_ref(path)                 # a handle opened before this reads it locked
     return opened
 
 
@@ -843,7 +887,7 @@ def source_record(case, name: str) -> dict | None:
         except ValueError:
             return default
 
-    return {
+    out = {
         "name": name,
         "path": path,
         "size": num("size", int, 0),
@@ -888,6 +932,40 @@ def source_record(case, name: str) -> dict | None:
         # because the volume held them as hard links to one file
         "linked": num("linked", int, 0),
     }
+    # A source read from several member images (a RAID set) also has every member,
+    # in the order read, each saying whether it was found beside the image given,
+    # and what the vendored reader assembled from them, in its own words. A single
+    # image, and every case made before sets existed, has neither key, so its record
+    # is what it always was.
+    members = _meta_list(case, f"{key}:members")
+    if members:
+        out["members"] = members
+        out["raid"] = _meta_list(case, f"{key}:raid")
+        out["layout"] = _meta_list(case, f"{key}:layout")
+    # paths given that named a disk already given, and a search for member images
+    notes = _meta_list(case, f"{key}:set_notes")
+    if notes:
+        out["set_notes"] = notes
+    # what the reader said about a volume it read (xfs, btrfs, refs)
+    said = _meta_list(case, f"{key}:volume_notes")
+    if said:
+        out["volume_notes"] = said
+    try:
+        found = json.loads(case.db.get_meta(f"{key}:discovery") or "null")
+    except ValueError:
+        found = None
+    if isinstance(found, dict):
+        out["discovery"] = found
+        out["discovery_lines"] = discovery_lines(found)
+    return out
+
+
+def _meta_list(case, key: str) -> list:
+    try:
+        got = json.loads(case.db.get_meta(key) or "[]")
+    except ValueError:
+        return []
+    return got if isinstance(got, list) else []
 
 
 def source_records(case) -> dict[str, dict]:
@@ -926,32 +1004,36 @@ def source_status(case) -> list[dict]:
     out = []
     for name, rec in sorted(source_records(case).items()):
         locked_by = ""
-        try:
-            size, mtime = _source_stat(rec["path"])
-        except OSError:
-            status = "missing"
+        members = None
+        if len(rec.get("members") or []) > 1:
+            status, locked_by, members = _set_state(rec)
         else:
-            same = size == rec["size"] and abs(mtime - rec["mtime"]) < 2
-            if same and not is_unlocked(rec["path"]):
-                locked_by = ("password" if needs_password(rec["path"]) else
-                             "private key" if needs_private_key(rec["path"]) else "")
-            if same and not locked_by and rec["bitlocker"] and not any(
-                    _bitlocker_held(rec["path"])):
-                locked_by = "BitLocker"
-            if same and not locked_by and rec["apfs"] and not _apfs_held(rec["path"]):
-                locked_by = "APFS"
-            if same and not locked_by and rec["luks"] and not _luks_held(rec["path"]):
-                locked_by = "LUKS"
-            locked = bool(locked_by)
-            # A segmented acquisition is several files and the record names one, so a
-            # later segment going missing leaves the first one untouched and the source
-            # reading fine until something asks for bytes that live in the missing part.
-            if same and not locked and rec["format"] in IMAGE_FORMATS and rec["segments"]:
-                try:
-                    same = _segment_count(rec["path"], rec["format"]) >= rec["segments"]
-                except (ArchiveUnavailable, *_IMAGE_ERRORS):
-                    same = False                     # the set can no longer be joined
-            status = "locked" if locked else "ok" if same else "changed"
+            try:
+                size, mtime = _source_stat(rec["path"])
+            except OSError:
+                status = "missing"
+            else:
+                same = size == rec["size"] and abs(mtime - rec["mtime"]) < 2
+                if same and not is_unlocked(rec["path"]):
+                    locked_by = ("password" if needs_password(rec["path"]) else
+                                 "private key" if needs_private_key(rec["path"]) else "")
+                if same and not locked_by and rec["bitlocker"] and not any(
+                        _bitlocker_held(rec["path"])):
+                    locked_by = "BitLocker"
+                if same and not locked_by and rec["apfs"] and not _apfs_held(rec["path"]):
+                    locked_by = "APFS"
+                if same and not locked_by and rec["luks"] and not _luks_held(rec["path"]):
+                    locked_by = "LUKS"
+                locked = bool(locked_by)
+                # A segmented acquisition is several files and the record names one, so a
+                # later segment going missing leaves the first one untouched and the source
+                # reading fine until something asks for bytes that live in the missing part.
+                if same and not locked and rec["format"] in IMAGE_FORMATS and rec["segments"]:
+                    try:
+                        same = _segment_count(rec["path"], rec["format"]) >= rec["segments"]
+                    except (ArchiveUnavailable, *_IMAGE_ERRORS):
+                        same = False                     # the set can no longer be joined
+                status = "locked" if locked else "ok" if same else "changed"
         # Split the count by how each row was actually recovered, rather than
         # inferring it from the format: an acquisition whose filesystems could
         # be read is walked, and recovering its deleted records and carving its
@@ -964,7 +1046,49 @@ def source_status(case) -> list[dict]:
                     "walked": by_origin.get("walk", 0),
                     "carved": by_origin.get("carve", 0),
                     "recovered": by_origin.get("deleted", 0)})
+        if members is not None:
+            out[-1]["members"] = members
     return out
+
+
+def _set_state(rec: dict) -> tuple[str, str, list[dict]]:
+    """``(status, locked_by, members)`` for a source read from several member
+    images, each member checked as a single image is (its size and modification
+    time, its segments, and whether this session can open it), and the set as a
+    whole: ``missing`` when any member is, else ``changed`` when any member is, else
+    ``locked``. Each member in ``members`` carries its own ``status``."""
+    members = []
+    for m in rec["members"]:
+        state, by = "ok", ""
+        try:
+            size, mtime = _source_stat(m["path"])
+        except OSError:
+            state = "missing"
+        else:
+            same = size == m.get("size") and abs(mtime - (m.get("mtime") or 0)) < 2
+            if same and m.get("segments") and m.get("format") in IMAGE_FORMATS:
+                try:
+                    same = _segment_count(m["path"], m["format"]) >= m["segments"]
+                except (ArchiveUnavailable, *_IMAGE_ERRORS):
+                    same = False
+            if same and not is_unlocked(m["path"]):
+                by = ("password" if needs_password(m["path"]) else
+                      "private key" if needs_private_key(m["path"]) else "")
+            state = "locked" if by else "ok" if same else "changed"
+        members.append({**m, "status": state, "locked_by": by})
+    states = [m["status"] for m in members]
+    for state in ("missing", "changed", "locked"):
+        if state in states:
+            by = next(m["locked_by"] for m in members if m["status"] == state)
+            return state, by, members
+    held = image_ref(rec)
+    if rec["bitlocker"] and not any(_bitlocker_held(held)):
+        return "locked", "BitLocker", members
+    if rec["apfs"] and not _apfs_held(held):
+        return "locked", "APFS", members
+    if rec["luks"] and not _luks_held(held):
+        return "locked", "LUKS", members
+    return "ok", "", members
 
 
 # ---- archive handles -----------------------------------------------------
@@ -1009,7 +1133,13 @@ def _volumes(image) -> list[tuple[int, int | None, str, str]]:
     was found at. An MBR counts the same logical blocks (UEFI 2.10, Table 5.2),
     so its LBAs are multiplied by qnxprobe.disk_sector_size(), the unit qnxprobe
     reads partition LBAs in.
+
+    A set of member images (``_SetImage``) answers from what it decided when it
+    was opened: each member's volumes and each array's, named by the part they
+    are in.
     """
+    if isinstance(image, _SetImage):
+        return list(image.set_volumes)
     out: list[tuple[int, int | None, str, str]] = []
     parts = qnxprobe.parse_gpt(image)
     if parts:
@@ -1056,7 +1186,25 @@ def _volumes(image) -> list[tuple[int, int | None, str, str]]:
         got = qnxprobe.identify_fs(image, data, dsize)
         if got and got[0]:
             out.append((data, dsize, got[0], name))
+    # A disk whose own end carries DDF or Intel IMSM metadata is one member of an
+    # array that is not assembled. As qnxprobe 1.71 reads it (volumes()), only a
+    # mirror in its normal state holds the whole of its data on this disk, so the
+    # volumes found on any other (partitions, logical volumes, what an opened LUKS
+    # or BitLocker volume holds) are raid members, named and not walked
+    # (_not_walked says why), never walked into another disk's stripes.
+    disk = _foreign_disk(image)
+    if disk is not None and not disk["mirror"]:
+        out = [(b, s, k if k == "raid member" else "raid member", lb) for b, s, k, lb in out]
     return out
+
+
+def _foreign_disk(image):
+    """qnxprobe.raid_foreign_disk for an image, or None when it ends in no DDF or
+    IMSM metadata (or cannot be read there)."""
+    try:
+        return qnxprobe.raid_foreign_disk(image, qnxprobe.image_size(image))
+    except Exception:                                # pylint: disable=broad-except
+        return None
 
 
 def _luks_data(image, regions, ss) -> list[tuple[int, int, str]]:
@@ -1139,8 +1287,23 @@ def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True,
     it holds passwords for are read decrypted unless ``apfs`` is False; either way an
     APFS volume left locked carries what would open it in its walker's note. The LUKS
     containers it holds passphrases for are read decrypted, at their data's own place,
-    unless ``luks`` is False."""
+    unless ``luks`` is False.
+
+    ``path`` can also be a ``MemberSet``, the member images of one source read
+    together, which opens as a ``_SetImage``."""
+    if isinstance(path, MemberSet):
+        if getattr(path, "unplaced", False):
+            # never placed the way it was at ingest by guessing again
+            raise ArchiveUnavailable(f"{_UNPLACED}: {path}")
+        return _SetImage(path, bitlocker=bitlocker, apfs=apfs, luks=luks,
+                         layout=getattr(path, "layout", None))
     path = os.fspath(path)
+    return _layer(_open_base(path), path, bitlocker=bitlocker, apfs=apfs, luks=luks)
+
+
+def _open_base(path: str):
+    """The image at ``path`` as its reader opens it, before any volume inside it is
+    unlocked or mapped: ewfprobe for an acquisition, ``_RawImage`` otherwise."""
     kind = qnxprobe.acquisition_format(path)
     if kind in _ACQUISITIONS:
         with _PASSWORD_LOCK:
@@ -1159,16 +1322,29 @@ def _open_image_file(path, *, bitlocker: bool = True, apfs: bool = True,
                                                       encrypted=True))
     else:
         img = _RawImage(path)
+    return img
+
+
+def _layer(img, path, *, bitlocker: bool = True, apfs: bool = True,
+           luks: bool = True, also=None):
+    """``img`` with the volumes inside it this session can open read decrypted, and
+    its mapped LVM2 logical volumes placed past its end, with what is held for
+    ``path``: what ``_open_image_file`` does once a single image is open. A member of
+    a set is also opened with what is held for the set (``also``)."""
     if bitlocker:
         secrets, keys = _bitlocker_held(path)
+        if also is not None:
+            more = _bitlocker_held(also)
+            secrets, keys = secrets + more[0], keys + more[1]
         if secrets or keys:
             img, _found = qnxprobe.unlock_bitlocker(img, qnxprobe.image_size(img),
                                                     secrets, keys)
     if apfs:
-        img, _found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path))
+        img, _found = qnxprobe.unlock_apfs(img, qnxprobe.image_size(img), _apfs_held(path)
+                                           + (_apfs_held(also) if also is not None else []))
     # A LUKS container comes before LVM2, so a physical volume inside one is seen.
     if luks:
-        held = _luks_held(path)
+        held = _luks_held(path) + (_luks_held(also) if also is not None else [])
         if held:
             img, _found = qnxprobe.unlock_luks(img, qnxprobe.image_size(img), held)
     # An LVM2 logical volume split into runs, or striped, is read through a map
@@ -1226,30 +1402,531 @@ def container_refusal(path) -> str | None:
     return None
 
 
+# ---- several member images read as one source ----------------------------
+# A RAID set arrives as one image per disk. The images are one source: the case
+# records every member, and the bytes are read through one handle that holds them
+# all (_SetImage). Each member is read as a single image would be, and each array
+# or volume group the vendored reader assembles across them (qnxprobe.raid_assemble)
+# is read as an image of its own, named as qnxprobe names it (md_<name>_<uuid>,
+# lvm_<group>_<volume>). An ordinary single image never comes here.
+
+# Each part of a set starts on a GiB in the set's own address space, as qnxprobe's
+# own _ConcatImage lays several images out, and every byte offset a row records for
+# a set is in that space.
+_SET_ALIGN = 1 << 30
+# A region of a member image that an assembled array or volume group reads: not a
+# volume of its own, and its space is the array's, whose own volumes answer for it.
+_CLAIMED = "claimed by an array"
+
+
+class MemberSet(tuple):
+    """The member images of one source, read together, in the order the case
+    records them. It stands where a single image's path stands: the key of the
+    image cache and what ``_open_image_file`` opens. Its text names the first
+    member and how many others there are, never a folder."""
+
+    def __new__(cls, paths, layout=None):
+        self = super().__new__(cls, tuple(os.fspath(p) for p in paths))
+        # where the case placed each part when it was ingested (_SetImage.layout_record);
+        # None for an ingest, which decides it
+        self.layout = layout
+        # a set the case recorded without a layout (an early build of this feature):
+        # its rows cannot be placed, and are not read
+        self.unplaced = False
+        return self
+
+    def __str__(self) -> str:
+        return (f"{Path(self[0]).name} and {len(self) - 1} other member "
+                f"image{'' if len(self) == 2 else 's'}")
+
+
+def image_ref(rec: dict):
+    """What reads the image a source record describes: its path, or a ``MemberSet``
+    when the case recorded several member images for it."""
+    members = rec.get("members") or []
+    if len(members) > 1:
+        ref = MemberSet((m["path"] for m in members), layout=rec.get("layout") or None)
+        ref.unplaced = not rec.get("layout")
+        return ref
+    return rec["path"]
+
+
+_UNPLACED = ("this set of member images was ingested by an early build that did not "
+             "record where each of its parts lies, so its files cannot be read back "
+             "safely: ingest the member images again as a new source")
+
+
+def _cache_key(ref):
+    """The image cache's key for ``ref``: a path, or a set with the layout it is
+    placed by, so a set opened by its recorded layout is never served from a handle
+    laid out another way."""
+    if isinstance(ref, MemberSet):
+        return ("set", tuple(ref), json.dumps(ref.layout, sort_keys=True))
+    return ref
+
+
+def _ref_exists(ref) -> bool:
+    """True when every file the image is read from is where the case recorded it."""
+    if isinstance(ref, MemberSet):
+        return all(Path(p).exists() for p in ref)
+    return Path(ref).exists()
+
+
+def _align(n: int) -> int:
+    return (n + _SET_ALIGN - 1) // _SET_ALIGN * _SET_ALIGN
+
+
+class _ShiftedMap:
+    """A mapped LVM2 logical volume of one part, as the set places it: its runs are
+    offsets in the set's address space, and what it lacks is judged against the part
+    it lies on."""
+
+    def __init__(self, lmap, shift: int, part_size: int) -> None:
+        self._map, self._shift, self._part_size = lmap, shift, part_size
+        self.size = lmap.size
+
+    def image_runs(self, off, n):
+        return [(at + self._shift, ln) for at, ln in self._map.image_runs(off, n)]
+
+    def missing(self, _size) -> int:
+        return self._map.missing(self._part_size)
+
+
+class _ShiftedBitLocker:
+    """An opened or locked BitLocker volume of one part, at its offset in the set."""
+
+    def __init__(self, found, shift: int) -> None:
+        self.base, self.fvek = int(found.base) + shift, found.fvek
+
+
+def _array_key(arr, vg_ids: dict | None = None) -> str:
+    """What names an assembled array or volume group whatever else is assembled: an
+    md array's uuid, or a logical volume by its volume group's id and its name."""
+    if getattr(arr, "uuid", None):
+        return f"md:{arr.uuid}"
+    group, _sep, lv = arr.label[len("LVM "):].partition("/")
+    # qnxprobe 1.71 labels a group "<name>@<first six of its id>" when two groups
+    # among the images share the name
+    name, _at, short = group.partition("@")
+    ids = sorted(i for i in (vg_ids or {}).get(name) or []
+                 if not short or qnxprobe._lvm_id(i).startswith(short))  # pylint: disable=protected-access
+    return f"lvm:{ids[0] if len(ids) == 1 else group}/{lv}"
+
+
+def _vg_ids_by_name(bases) -> dict[str, set]:
+    """{volume group name: {its ids}} over every LVM2 physical volume on the member
+    images, the whole image and each partition, read as raid_assemble reads them."""
+    out: dict[str, set] = {}
+    for fh in bases:
+        try:
+            size = qnxprobe.image_size(fh)
+            places = qnxprobe._raid_places(fh, size)  # pylint: disable=protected-access
+        except Exception:                            # pylint: disable=broad-except
+            continue
+        for _label, base, psize in places:
+            try:
+                pv = qnxprobe._lvm_pv(fh, base, min(psize, size - base))  # pylint: disable=protected-access
+            except Exception:                        # pylint: disable=broad-except
+                continue
+            if pv is not None and pv.vg and pv.vg[1].get("id"):
+                out.setdefault(pv.vg[0], set()).add(pv.vg[1]["id"])
+    return out
+
+
+def _spanned_pv(fh, base: int, size, groups: set) -> bool:
+    """True when the region at ``base`` is an LVM2 physical volume of one of the
+    volume groups the set reads across its images."""
+    if not groups:
+        return False
+    try:
+        pv = qnxprobe._lvm_pv(fh, base, size)        # pylint: disable=protected-access
+    except Exception:                                # pylint: disable=broad-except
+        return False
+    return bool(pv is not None and pv.vg and pv.vg[0] in groups)
+
+
+class _SetImage:
+    """The member images of one source read as one image, with the surface a single
+    image offers (``media_size``, ``paths``, ``stored_hashes``, seek, read, close).
+
+    Its parts are each member image, read exactly as it would be on its own, then
+    each array or volume group spread over them that the vendored reader assembles
+    and can read (``qnxprobe.raid_assemble``), each an image of its own. A RAID1
+    array whose data starts at a member's first byte is not a part: the first member
+    is walked as it stands, as qnxprobe's own command line reads it, and the other
+    members of that array are copies of it and are not walked again (``copy_notes``).
+    The parts lie in one address space, each on a GiB, and an LVM2 logical volume
+    read through a map has a place of its own. A read never crosses from one part
+    into the next.
+
+    Where each part lies is decided at ingest and recorded (``layout_record``), each
+    part under a key that names it whatever else the session sees: ``member:<n>``,
+    ``md:<array uuid>``, ``lvm:<group>/<volume>``, and ``<part>|lv:<group id>/<name>``
+    for a mapped logical volume. Opened with that ``layout``, every part is put back
+    at its recorded place. One the session cannot produce (a volume inside a LUKS,
+    BitLocker or APFS container left locked, an array the reader no longer
+    assembles, a part whose size changed) is absent, and a read of a row in it is
+    refused with why (``unavailable``); one the session produces that was not
+    recorded gets a new place after every recorded one. So a row is never read
+    through a layout other than the one it was registered with.
+
+    What the parts hold is decided once, here: ``set_volumes`` the volumes to walk,
+    named ``<member file>/<volume>`` or ``<array>/<volume>``; ``set_refused`` what
+    is not read and why (an array missing members it cannot do without, metadata the
+    reader does not read); ``set_short`` the volumes a part does not hold in full;
+    ``raid_lines`` the vendored reader's own report of what it assembled.
+    """
+
+    def __init__(self, paths, *, bitlocker: bool = True, apfs: bool = True,
+                 luks: bool = True, layout=None) -> None:
+        self.set_paths = [os.fspath(p) for p in paths]
+        self._bases: list = []
+        self._segs: list[tuple[int, int, object, int]] = []   # (start, length, handle, local)
+        self._starts: list[int] = []
+        self.lvm_virtual: dict = {}
+        self._maps: dict[int, _ShiftedMap] = {}
+        self.set_volumes: list[tuple[int, int | None, str, str]] = []
+        self.set_refused: list[str] = []
+        self.set_short: list[dict] = []
+        self.set_spans: list[tuple[int, int]] = []
+        self.raid_lines: list[str] = []
+        self.copy_notes: list[str] = []
+        self._parts: list[dict] = []
+        self._pos = 0
+        self._hashes: dict | None = None
+        self._recorded = {p["key"]: p for p in (layout or [])}
+        self._vg_ids: dict[str, set] = {}
+        self._fixed = layout is not None
+        self._next = _align(max((p["start"] + p["size"] for p in self._recorded.values()),
+                                default=0))
+        self._placed: list[dict] = []                # {"key","name","start","size"}
+        self.absent: dict[str, tuple[int, int, str]] = {}
+        try:
+            self._open(bitlocker, apfs, luks)
+        except BaseException:
+            self.close()
+            raise
+
+    # -- building -----------------------------------------------------------
+    def _open(self, bitlocker: bool, apfs: bool, luks: bool) -> None:
+        labels: list[str] = []
+        for p in self.set_paths:
+            self._bases.append(_open_base(p))
+            # two members of one name, in two folders, are told apart by their
+            # place in the set, so neither's volumes take the other's names
+            label, n = Path(p).name, 1
+            while label in labels:
+                n += 1
+                label = f"{Path(p).name} ({n})"
+            labels.append(label)
+        self.paths = [os.fspath(f) for b in self._bases for f in b.paths]
+        try:
+            rs = qnxprobe.raid_assemble(list(zip(labels, self._bases)))
+        except Exception as exc:                     # pylint: disable=broad-except
+            rs = qnxprobe.RaidSet()
+            rs.foreign.append(("", f"RAID members were not assembled "
+                                   f"({type(exc).__name__}: {exc})"))
+        self._rs = rs
+        with contextlib.suppress(Exception):
+            qnxprobe.raid_report(rs, say=self.raid_lines.append,
+                                 images_given=len(self.set_paths))
+        groups = {arr.label[len("LVM "):].split("/", 1)[0] for arr in rs.arrays
+                  if isinstance(arr, qnxprobe.LvmSpanned)}
+        # each logical volume read across the images is keyed by its group's id;
+        # qnxprobe (1.71) matches such a group by its id, not its name
+        self._vg_ids = _vg_ids_by_name(self._bases) if groups else {}
+        # A RAID1 array whose data starts at its first member's first byte is read
+        # from that member; its other members hold the same data and are copies.
+        copies: dict[int, dict[int, str]] = {}
+        for arr in rs.arrays:
+            if arr.image is None or not getattr(arr, "same_as", None):
+                continue
+            for m in arr.members:
+                if m["where"] == arr.same_as:
+                    continue
+                for i, b in enumerate(self._bases):
+                    if m.get("fh") is b:
+                        copies.setdefault(i, {})[int(m["base"])] = arr.same_as
+        # what opens a volume inside a member is what is held for that member's
+        # image or for the set; inside an array read from them, for the set
+        key = MemberSet(self.set_paths)
+        cursor = 0
+        for i, (path, label, base) in enumerate(zip(self.set_paths, labels, self._bases)):
+            cursor = self._place(_layer(base, path, bitlocker=bitlocker, apfs=apfs, luks=luks,
+                                        also=key),
+                                 label, f"member:{i}", cursor, groups, member=True,
+                                 copies=copies.get(i, {}))
+        for arr in rs.arrays:
+            if arr.image is None:
+                self.set_refused.append(f"{arr.safe_name} ({arr.label}): not read: "
+                                        f"{arr.refused or 'its members are not all here'}")
+                continue
+            if getattr(arr, "same_as", None):
+                continue                             # its first member shows the same bytes
+            cursor = self._place(_layer(arr.image, key, bitlocker=bitlocker, apfs=apfs,
+                                        luks=luks), arr.safe_name,
+                                 _array_key(arr, self._vg_ids), cursor,
+                                 groups, member=False)
+        for label, line in rs.foreign:
+            self.set_refused.append(f"{label}: {line}" if label else line)
+        placed = {p["key"] for p in self._placed}
+        refused = {_array_key(a, self._vg_ids): a.refused for a in rs.arrays if a.image is None}
+        for rkey, rec in self._recorded.items():
+            if rkey in placed or rkey in self.absent:
+                continue
+            if "|lv:" in rkey:
+                why = (f"the logical volume {rec.get('name') or rkey} is not found in its "
+                       "part this session: a LUKS, BitLocker or APFS volume it is inside may "
+                       "be locked, or the reader no longer maps it")
+            elif rkey in refused:
+                why = f"not read this session: {refused[rkey] or 'its members are not all here'}"
+            else:
+                why = "not assembled from the member images this session"
+            self.absent[rkey] = (rec["start"], rec["size"], why)
+        ends = [s + n for s, n, _h, _l in self._segs]
+        ends += [rec["start"] + rec["size"] for rec in self._recorded.values()]
+        self.media_size = self.size = max(ends + [cursor, 0])
+        self._segs.sort(key=lambda seg: seg[0])
+        self._starts = [s for s, _n, _h, _l in self._segs]
+
+    def _slot(self, key: str, name: str, size: int, natural: int) -> int | None:
+        """Where the part ``key`` of ``size`` bytes lies: at ``natural`` for an ingest,
+        else at its recorded place, or after every recorded part when it was not
+        recorded. None when it was recorded with another size: it is then absent."""
+        if not self._fixed:
+            start = natural
+        elif key in self._recorded:
+            rec = self._recorded[key]
+            if int(rec["size"]) != int(size):
+                self.absent[key] = (rec["start"], rec["size"],
+                                    f"{name} is {size:,} bytes this session and was "
+                                    f"{int(rec['size']):,} when the case recorded it")
+                return None
+            start = int(rec["start"])
+        else:
+            start = self._next
+            self._next = _align(start + size)
+        self._placed.append({"key": key, "name": name, "start": start, "size": size})
+        return start
+
+    def _place(self, handle, prefix: str, pkey: str, cursor: int, groups: set, *,
+               member: bool, copies: dict | None = None) -> int:
+        """Lay one part out, list its volumes, and return where the next part would
+        start at an ingest."""
+        size = qnxprobe.image_size(handle)
+        start = self._slot(pkey, prefix, size, _align(cursor))
+        if start is None:
+            return cursor
+        self._segs.append((start, size, handle, 0))
+        self.set_spans.append((start, size))
+        end = _align(cursor) + size
+        local_to_set = {}
+        virtual = getattr(handle, "lvm_virtual", None) or {}
+        for vkey, vbase in sorted(virtual.items(), key=lambda kv: kv[1]):
+            lmap = handle.lvm_map_for(vbase)
+            lv_key = f"{pkey}|lv:{'/'.join(map(str, vkey)) if isinstance(vkey, tuple) else vkey}"
+            at = self._slot(lv_key, f"{prefix}/{vkey[-1] if isinstance(vkey, tuple) else vkey}",
+                            lmap.size, _align(end))
+            if at is None:
+                continue
+            self._segs.append((at, lmap.size, handle, vbase))
+            self.lvm_virtual[(prefix, vkey)] = at
+            self._maps[at] = _ShiftedMap(lmap, start, size)
+            local_to_set[vbase] = at
+            end = max(end, _align(end) + lmap.size) if not self._fixed else end
+        ss = qnxprobe.disk_sector_size(handle)
+        vols, claimed = [], []
+        for base, vsize, kind, label in _volumes(handle):
+            if base in (getattr(handle, "lvm_virtual", None) or {}).values() \
+                    and base not in local_to_set:
+                continue                             # its place was taken from it
+            name = f"{prefix}/{label or f'lba{base // ss}'}"
+            if member and (kind == "linux md member"
+                           or (kind == "lvm2 pv" and _spanned_pv(handle, base, vsize, groups))):
+                # read as part of an array or volume group; an md member's space
+                # is the array's, while a physical volume still answers for the
+                # extents no logical volume holds
+                claimed.append((base, vsize, _CLAIMED if kind != "lvm2 pv" else kind, label))
+                continue
+            if copies and base in copies:
+                # a RAID1 member whose data is its first member's: listed, not walked
+                self.copy_notes.append(f"{name} is a copy of {copies[base]}, a member of the "
+                                       "same RAID1 array, whose files are listed; it is not "
+                                       "walked again")
+                claimed.append((base, vsize, _CLAIMED, label))
+                continue
+            vols.append((base, vsize, kind, label))
+            at = local_to_set.get(base, start + base)
+            self.set_volumes.append((at, vsize, kind, name))
+        placed = _placed(handle)
+        real = [(label or f"lba{b // ss}", b, s) for b, s, _k, label in vols
+                if s and b not in placed]
+        for lb, _b, s, missing in qnxprobe.short_regions(size, real):
+            self.set_short.append({"label": f"{prefix}/{lb}", "size": s, "missing": missing})
+        for b, s, _k, label in vols:
+            if b in placed and placed[b].missing(size):
+                self.set_short.append({"label": f"{prefix}/{label or f'lba{b // ss}'}",
+                                       "size": s, "missing": placed[b].missing(size)})
+        self._parts.append({"start": start, "size": size, "handle": handle,
+                            "vols": vols + claimed, "prefix": prefix})
+        return end
+
+    def layout_record(self) -> list[dict]:
+        """Where every part lies, as the case records it: what was recorded before,
+        and any part placed for the first time."""
+        out = {k: dict(v) for k, v in self._recorded.items()}
+        for p in self._placed:
+            out.setdefault(p["key"], dict(p))
+        return sorted(out.values(), key=lambda p: p["start"])
+
+    def unavailable(self, offset: int, kind: str | None = None) -> str | None:
+        """Why a row at ``offset`` (a volume's base, or a carved hit) cannot be read
+        this session, else None: the recorded part it lies in is absent, or no
+        ``kind`` volume lies at that place now."""
+        for rkey, (start, size, why) in self.absent.items():
+            if start <= offset < start + size:
+                return f"part {self._recorded.get(rkey, {}).get('name') or rkey} not available: {why}"
+        if kind is not None and not any(b == offset and k == kind
+                                        for b, _s, k, _l in self.set_volumes):
+            return (f"no {kind} volume lies at offset {offset:,} of this set this session: an "
+                    "encrypted volume it was inside may be locked")
+        return None
+
+    # -- what the walk and the carve ask ------------------------------------
+    def locate(self, offset: int):
+        """``(handle, offset in it)`` for a byte of the set."""
+        i = bisect.bisect_right(self._starts, offset) - 1
+        if i < 0:
+            return None, offset
+        start, _n, handle, local = self._segs[i]
+        return handle, local + offset - start
+
+    def lvm_map_for(self, base: int):
+        return self._maps[base]
+
+    @property
+    def parts(self) -> list[dict]:
+        """Each part: ``prefix`` (its name), ``handle``, ``start`` and ``size``."""
+        return list(self._parts)
+
+    def unclaimed(self, min_bytes: int = 64 * 1024):
+        """``_unclaimed_space`` of every part, in the set's address space, or None
+        when any volume of any part cannot say."""
+        out = []
+        for part in self._parts:
+            runs = _unclaimed_space(part["handle"], part["vols"], min_bytes=min_bytes)
+            if runs is None:
+                return None
+            out.extend((part["start"] + at, n) for at, n in runs)
+        return out
+
+    @property
+    def luks(self) -> dict:
+        return {start + base: lk for start, _n, handle, local in self._segs if local == 0
+                for base, lk in (getattr(handle, "luks", None) or {}).items()}
+
+    @property
+    def apfs_keys(self) -> dict:
+        keys: dict = {}
+        for part in self._parts:
+            keys.update(getattr(part["handle"], "apfs_keys", None) or {})
+        return keys
+
+    @property
+    def apfs_found(self) -> list:
+        return [lk for part in self._parts
+                for lk in (getattr(part["handle"], "apfs_found", None) or ())]
+
+    @property
+    def bitlocker_found(self) -> list:
+        return [_ShiftedBitLocker(b, part["start"]) for part in self._parts
+                for b in (getattr(part["handle"], "bitlocker_found", None) or ())]
+
+    def members(self) -> list[dict]:
+        """What identifies each member image: its media size and its own hash, as
+        a single image of it would be recorded."""
+        return [{"media_size": b.media_size, "media_hash": _stored_hash(b),
+                 "segments": len(b.paths)} for b in self._bases]
+
+    @property
+    def stored_hashes(self) -> dict:
+        """One value over every member's size and recorded hash, in order: it says
+        the set is the same images in the same order, as a member's own hash says
+        it is the same image. It is not a hash of any disk."""
+        if self._hashes is None:
+            ident = json.dumps([[m["media_size"], m["media_hash"]] for m in self.members()])
+            self._hashes = {"member-set-sha256": hashlib.sha256(ident.encode()).hexdigest()}
+        return self._hashes
+
+    # -- the image surface ----------------------------------------------------
+    def seek(self, offset: int, whence: int = 0) -> int:
+        self._pos = (offset if whence == 0 else self._pos + offset if whence == 1
+                     else self.media_size + offset)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def read(self, n: int = -1) -> bytes:
+        i = bisect.bisect_right(self._starts, self._pos) - 1
+        if i < 0:
+            return b""
+        start, length, handle, local = self._segs[i]
+        left = start + length - self._pos
+        if left <= 0:
+            return b""                               # between parts, or past the last
+        want = left if n is None or n < 0 else min(n, left)
+        handle.seek(local + self._pos - start)
+        data = handle.read(want)
+        self._pos += len(data)
+        return data
+
+    def close(self) -> None:
+        for b in self._bases:
+            with contextlib.suppress(Exception):
+                b.close()
+        self._bases = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
 def _open_image(path: str):
     """The cached image handle for ``path`` and the lock that serialises reads of it."""
+    ck = _cache_key(path)
     with _IMAGE_LOCK:
-        img = _IMAGES.get(path)
+        img = _IMAGES.get(ck)
         if img is None:
             try:
                 img = _open_image_file(path)
             except _IMAGE_ERRORS as exc:
                 raise ArchiveUnavailable(
                     f"cannot open the source image ({exc}): {path}") from exc
-            _IMAGES[path] = img
-            _IMAGE_READ[path] = threading.Lock()
-        return img, _IMAGE_READ[path]
+            _IMAGES[ck] = img
+            _IMAGE_READ[ck] = threading.Lock()
+        return img, _IMAGE_READ[ck]
 
 
-def _drop_image(path: str) -> None:
-    with _IMAGE_LOCK:
-        img = _IMAGES.pop(path, None)
-        _IMAGE_READ.pop(path, None)
-        for key in [k for k in _WALKERS if k[0] == path]:
-            _WALKERS.pop(key, None)
-    if img is not None:
-        with contextlib.suppress(Exception):
-            img.close()
+def _drop_image(path) -> None:
+    """Forget the cached handle, and walkers, of ``path``; for a set, of every
+    layout it was opened by."""
+    if isinstance(path, MemberSet):
+        keys = [k for k in list(_IMAGES) if isinstance(k, tuple) and k[:2] == ("set", tuple(path))]
+    else:
+        keys = [path]
+    for ck in keys:
+        with _IMAGE_LOCK:
+            img = _IMAGES.pop(ck, None)
+            _IMAGE_READ.pop(ck, None)
+            for key in [k for k in _WALKERS if k[0] == ck]:
+                _WALKERS.pop(key, None)
+        if img is not None:
+            with contextlib.suppress(Exception):
+                img.close()
 
 
 def _open_zip(path: str) -> zipfile.ZipFile:
@@ -1390,7 +2067,13 @@ def _open_walker(path: str, base: int, fskind: str, size):
     those is one offset, which is why a walked row records a node and not one.
     """
     img, lock = _open_image(path)
-    key = (path, int(base))
+    if isinstance(img, _SetImage):
+        # a set opened by its recorded layout: a volume whose part is not here this
+        # session, or that is not at its place now, is refused, never read elsewhere
+        why = img.unavailable(int(base), fskind)
+        if why:
+            raise ArchiveUnavailable(f"{why}: {path}")
+    key = (_cache_key(path), int(base))
     with _IMAGE_LOCK:
         w = _WALKERS.get(key)
         if w is None:
@@ -1437,17 +2120,61 @@ def _walk_head(w, node: int, size: int, want: int = 16) -> bytes:
     return got[:want]
 
 
+# The node types a walker hands out that are more than numbers and plain tuples: a
+# ReFS file is the directory naming it and its name as stored, in bytes (RefsEntry),
+# and a stream is its file and its name. They are rebuilt as themselves, because
+# their walkers tell a file from a directory by the type.
+_NODE_TYPES = {cls.__name__: cls for cls in (qnxprobe.RefsEntry, qnxprobe.RefsStreamRef,
+                                            qnxprobe.NtfsStreamRef)}
+
+
+def _node_plain(value):
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if isinstance(value, tuple) and type(value).__name__ in _NODE_TYPES:
+        return {"type": type(value).__name__, "fields": [_node_plain(v) for v in value]}
+    if isinstance(value, (list, tuple)):
+        return [_node_plain(v) for v in value]
+    if isinstance(value, dict):
+        raise TypeError(f"a walker node holding a mapping is not stored: {value!r}")
+    return value
+
+
+def node_json(node) -> str:
+    """How a walked row's node is stored: the JSON a number or a plain tuple always
+    had, and for bytes and the walkers' own node types, a form ``node_from_json``
+    turns back into the same value of the same type. Anything else that JSON cannot
+    hold raises rather than being stored as something else."""
+    return json.dumps(_node_plain(node))
+
+
+def _node_value(value, top: bool):
+    if isinstance(value, dict):
+        if set(value) == {"bytes"}:
+            return bytes.fromhex(value["bytes"])
+        if set(value) == {"type", "fields"} and value["type"] in _NODE_TYPES:
+            return _NODE_TYPES[value["type"]](*[_node_value(v, False) for v in value["fields"]])
+        raise ValueError(f"not a stored walker node: {value!r}")
+    if isinstance(value, list):
+        items = [_node_value(v, False) for v in value]
+        # JSON has no tuple, and a walker that keys on one unpacks it either way;
+        # this keeps the value the shape the walker handed out, as it always did
+        return tuple(items) if top else items
+    return value
+
+
+def node_from_json(text: str):
+    """The node ``node_json`` stored, as the walker handed it out."""
+    return _node_value(json.loads(text), True)
+
+
 def _row_walker(rec: dict, row):
     """``(walker, node)`` for a walked row: the walker of the volume it was read from
     and the node that names it there."""
-    path = rec["path"]
+    path = image_ref(rec)
     node, base = _row_get(row, "member_node"), _row_get(row, "volume_base")
     if isinstance(node, str):
-        node = json.loads(node)
-        # JSON has no tuple, and a walker that keys on one unpacks it either way;
-        # this keeps the value the shape the walker handed out.
-        if isinstance(node, list):
-            node = tuple(node)
+        node = node_from_json(node)
     vols = {v["base"]: v for v in json.loads(rec.get("volumes") or "[]")}
     vol = vols.get(int(base)) if base is not None else None
     if node is None or vol is None:
@@ -1459,7 +2186,7 @@ def _row_walker(rec: dict, row):
 
 def _extract_walked_member(rec: dict, row, dest: Path) -> None:
     """Write one walked file by asking its volume's walker for the bytes."""
-    path = rec["path"]
+    path = image_ref(rec)
     size = int(row["size"] or 0)
     w, node = _row_walker(rec, row)
     try:
@@ -1469,7 +2196,7 @@ def _extract_walked_member(rec: dict, row, dest: Path) -> None:
             dest.unlink()
         if _out_of_room(exc):
             raise                                    # the case's volume, not the image
-        if not Path(path).exists():
+        if not _ref_exists(path):
             _drop_image(path)
             raise ArchiveUnavailable(
                 f"the source image is no longer at its recorded location: {path}") from exc
@@ -1485,16 +2212,20 @@ def _extract_ewf_member(rec: dict, row, dest: Path) -> None:
     """Write one carved item by seeking to its offset in the reconstructed image
     and copying its length out. The offset is into the acquired disk, not into the
     .E01 file, so the vendored reader decompresses the chunks it spans."""
-    path = rec["path"]
+    path = image_ref(rec)
     offset, size = row["member_offset"], int(row["size"])
     if offset is None:
         raise ArchiveUnavailable(f"the carved item at {path} has no recorded offset")
     img, lock = _open_image(path)
+    if isinstance(img, _SetImage):
+        why = img.unavailable(int(offset))
+        if why:
+            raise ArchiveUnavailable(f"{why}: {path}")
     view = _ImageRange(img, lock, int(offset), size)
     try:
         _write_stream(view, dest)
     except _IMAGE_ERRORS as exc:
-        if not Path(path).exists():
+        if not _ref_exists(path):
             _drop_image(path)
             raise ArchiveUnavailable(
                 f"the source image is no longer at its recorded location: {path}") from exc
@@ -1737,6 +2468,13 @@ def _finish(case, src, path: Path, *, fmt: str, root: str, stage: bool, reason: 
     case.db.set_meta(f"{key}:views_differ", str(tally.views_differ))
     case.db.set_meta(f"{key}:placeholders", str(tally.placeholders))
     case.db.set_meta(f"{key}:linked", str(tally.linked))
+    # the paths given that named a disk already given, and what the examiner did
+    # with a search for the other member images, when there was one
+    said = list(getattr(src, "notes", None) or []) + list(getattr(src, "copies", None) or [])
+    if said:
+        case.db.set_meta(f"{key}:set_notes", json.dumps(said))
+    if getattr(src, "discovery", None):
+        case.db.set_meta(f"{key}:discovery", json.dumps(src.discovery))
     case.db.commit()
     how = "copied under the case" if stage else "read from the archive on demand"
     if reason:
@@ -1764,6 +2502,9 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
     running file count, continuing from ``count`` so the caller's progress numbers
     stay whole.
     """
+    members = [os.fspath(p) for p in (getattr(src, "members", None) or [])]
+    if len(members) > 1:
+        return _ingest_set(case, src, members, count=count, progress=progress)
     path = Path(src.path)
     fmt = archive_format(path)
     if fmt is None:
@@ -1782,6 +2523,70 @@ def ingest_archive(case, src, *, count: int = 0, progress=None) -> int:
             return _ingest_ewf(case, src, path, fmt, count=count, progress=progress)
         return _ingest_image_walk(case, src, path, fmt, count=count, progress=progress)
     return _ingest_tar(case, src, path, fmt, count=count, progress=progress)
+
+
+def _ingest_set(case, src, members: list[str], *, count: int, progress) -> int:
+    """Register what the member images of one source hold, read together: each
+    member as a single image of it is read, and each array or volume group the
+    vendored reader assembles across them. Every member must be a disk image."""
+    fmts = []
+    for p in members:
+        fmt = archive_format(p)
+        if fmt not in IMAGE_FORMATS:
+            raise ValueError(container_refusal(p)
+                             or f"{Path(p).name} is not a disk image, and only disk images "
+                                "are read together as the member images of one source")
+        fmts.append(fmt)
+    # a later pass over a set ingested before (documents, a carve) places its parts
+    # where the first ingest did
+    key = _meta_key(src.name)
+    ref = MemberSet(members, layout=_meta_list(case, f"{key}:layout") or None)
+    if _meta_list(case, f"{key}:members") and not ref.layout:
+        raise ValueError(f"{src.name}: {_UNPLACED}")
+    first = Path(members[0])
+    if getattr(src, "carve", False):
+        return _ingest_ewf(case, src, first, fmts[0], count=count, progress=progress,
+                           ref=ref)
+    return _ingest_image_walk(case, src, first, fmts[0], count=count, progress=progress,
+                              ref=ref)
+
+
+def _record_set(case, src, ref: MemberSet, idents: list[dict], raid_lines: list[str],
+                layout=(), copies=()) -> None:
+    """Write what the case keeps about a set's members beside ``archive:<name>:path``,
+    which stays the first member so a case reads as it did before sets existed:
+    ``:members``, each member's path, whether it was found beside the image given
+    rather than given, its format, size, modification time, segments, media size and
+    own hash; and ``:raid``, the vendored reader's report of what it assembled from
+    them, which names member files and never a folder."""
+    key = _meta_key(src.name)
+    try:
+        before = {m["path"]: m for m in json.loads(case.db.get_meta(f"{key}:members") or "[]")}
+    except (ValueError, TypeError, KeyError):
+        before = {}
+    found = {os.fspath(p) for p in (getattr(src, "found", None) or ())}
+    out = []
+    for p, ident in zip(ref, idents):
+        size, mtime = _source_stat(p)
+        out.append({"path": p, "found": p in found or bool(before.get(p, {}).get("found")),
+                    "format": archive_format(p) or "", "size": size, "mtime": mtime,
+                    **ident})
+    case.db.set_meta(f"{key}:members", json.dumps(out))
+    case.db.set_meta(f"{key}:raid", json.dumps(list(raid_lines)))
+    # where each part lies, so every later session reads a row where it was
+    # registered (_SetImage); and the RAID1 members read as their first member's copy
+    if layout:
+        case.db.set_meta(f"{key}:layout", json.dumps(list(layout)))
+    if copies and not isinstance(src, _CarveSource):
+        src.notes = list(getattr(src, "notes", None) or []) + [
+            c for c in copies if c not in (getattr(src, "notes", None) or [])]
+    if not (_only_documents(src) or isinstance(src, _CarveSource)):
+        case.db.audit_log(case.examiner, "ingest-image-set", json.dumps({
+            "source": src.name,
+            # file names only: the folder is the examiner's own disk
+            "members": [{"file": Path(m["path"]).name, "found": m["found"],
+                         "media_hash": m["media_hash"]} for m in out],
+            "raid": list(raid_lines)}))
 
 
 def _ingest_zip(case, src, zip_path: Path, *, count: int, progress) -> int:
@@ -1916,7 +2721,16 @@ def _prime_catalog(walker) -> None:
 def _not_walked(img, base: int, size) -> str:
     """Why a volume the reader can name has no walker: the locked BitLocker volume's
     own reason and what would open it, a LUKS container's, an LVM2 physical
-    volume's, or that the reader walks no such filesystem."""
+    volume's, or that the reader walks no such filesystem. In a set of member
+    images the volume is looked at in the part it lies in."""
+    if isinstance(img, _SetImage):
+        img, base = img.locate(base)
+    disk = _foreign_disk(img)
+    if disk is not None and not disk["mirror"]:
+        found = qnxprobe._identify_fs(img, base, size)[0]  # pylint: disable=protected-access
+        return qnxprobe.raid_foreign_note(disk["foreign"], disk["levels"], disk["why"],
+                                          None if found == "raid member" else found,
+                                          "this volume")
     bitlocker = qnxprobe.BitLocker.open(img, base, size)
     if bitlocker is not None:
         return bitlocker.locked_note()
@@ -1933,7 +2747,28 @@ def _not_walked(img, base: int, size) -> str:
                    if ln.startswith("logical volume ") and ": not read (" in ln]
         return ("an LVM2 physical volume: each logical volume read from it is walked as a "
                 "volume of its own" + ("; not read: " + "; ".join(skipped) if skipped else ""))
+    if qnxprobe.identify_fs(img, base, size)[0] == "linux md member":
+        return ("an md RAID member: its array is read only from its member images "
+                "together, added as one source")
     return "the vendored reader names this filesystem and does not walk it"
+
+
+# The filesystems whose walkers say, as they read, what the walk cannot show (a log
+# not replayed, a device missing, damage met). Kept to the readers qnxprobe 1.68
+# added, so the record of every kind GLEAPP walked before is unchanged.
+_SAYING_KINDS = ("xfs", "btrfs", "refs")
+
+
+def _walker_says(walker, fskind: str) -> str:
+    """The reader's own note and damage on a volume of a kind in ``_SAYING_KINDS``."""
+    if fskind not in _SAYING_KINDS:
+        return ""
+    note = getattr(walker, "note", None) or ""
+    count, lines = qnxprobe.damage_lines(walker)
+    parts = [str(note)] if note else []
+    if count:
+        parts.append(f"{count:,} damaged record{'' if count == 1 else 's'}: " + "; ".join(lines))
+    return "; ".join(parts)
 
 
 def _apfs_states(walker, vol: str, refused: list) -> list[str]:
@@ -1956,7 +2791,7 @@ def _apfs_states(walker, vol: str, refused: list) -> list[str]:
 
 
 def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
-                       progress) -> int:
+                       progress, ref=None) -> int:
     """Register the media in the filesystems an acquisition holds, by walking them.
 
     An acquisition of a computer holds filesystems, so its files have names,
@@ -1972,6 +2807,9 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
 
     A volume the reader cannot open is recorded and the rest still register: one
     unreadable filesystem must not cost the others.
+
+    ``ref``, a ``MemberSet``, reads several member images as this one source;
+    ``image_path`` is then the first of them.
     """
     slug = _slug(image_path.stem)
     staged_dir = case.staged_dir
@@ -1980,13 +2818,26 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
     tally = _Tally()
     n = count
     refused: list[str] = []
+    volume_notes: list[str] = []
+    set_members = None
 
-    img = _open_image_file(image_path)
+    img = _open_image_file(image_path if ref is None else ref)
     try:
         media_size = img.media_size
         segments = len(img.paths)
         stored = _stored_hash(img)
         vols = _volumes(img)
+        mirror_note = ""
+        if isinstance(img, _SetImage):
+            # arrays that could not be read, and metadata the reader does not
+            # read, are parts of the disks that were not examined
+            refused.extend(img.set_refused)
+            set_members = img.members()
+        else:
+            disk = _foreign_disk(img)
+            if disk is not None and disk["mirror"]:
+                mirror_note = qnxprobe.raid_foreign_note(disk["foreign"], disk["levels"],
+                                                         disk["why"], None, "this volume")
         # An unnamed volume is named by where it starts, counted in the disk's
         # own logical sectors, which is how qnxprobe names it too.
         ss = qnxprobe.disk_sector_size(img)
@@ -1998,12 +2849,16 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         # A logical volume read through a map is placed past the end on purpose,
         # and what it lacks is what its own map puts past the end.
         placed = _placed(img)
-        short = [{"label": lb or f"lba{b // ss}", "size": s, "missing": m}
-                 for lb, b, s, m in qnxprobe.short_regions(
-                     media_size, [(lb or f"lba{b // ss}", b, s)
-                                  for b, s, _k, lb in vols if s and b not in placed])]
-        short += [{"label": lb, "size": s, "missing": placed[b].missing(media_size)}
-                  for b, s, _k, lb in vols if b in placed and placed[b].missing(media_size)]
+        if isinstance(img, _SetImage):
+            short = list(img.set_short)              # judged part by part
+        else:
+            short = [{"label": lb or f"lba{b // ss}", "size": s, "missing": m}
+                     for lb, b, s, m in qnxprobe.short_regions(
+                         media_size, [(lb or f"lba{b // ss}", b, s)
+                                      for b, s, _k, lb in vols if s and b not in placed])]
+            short += [{"label": lb, "size": s, "missing": placed[b].missing(media_size)}
+                      for b, s, _k, lb in vols
+                      if b in placed and placed[b].missing(media_size)]
         # Where the BitLocker volumes this walk read through are, so a later session
         # knows their keys are needed again before a row read from one can be read
         # back. An opened one reads as the filesystem inside it; one left locked is
@@ -2040,6 +2895,17 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 except Exception as exc:             # pylint: disable=broad-except
                     refused.append(f"{vol} ({fskind}): {exc}")
                     continue
+                said = _walker_says(walker, fskind)
+                if mirror_note:
+                    # a mirror member of a DDF or IMSM array, walked on its own
+                    said = f"{said}; {mirror_note}" if said else mirror_note
+                if said and not entries:
+                    # a volume read with nothing listed, and the reader says why:
+                    # one device of a multi-device Btrfs, a ReFS whose newest
+                    # changes are in its log
+                    refused.append(f"{vol} ({fskind}): nothing listed: {said}")
+                elif said:
+                    volume_notes.append(f"{vol} ({fskind}): {said}")
                 for path, node, fsize, mtime in entries:
                     # collect() reports a symlink or special file with no size. It
                     # carries no bytes of its own, as a tar link member does not.
@@ -2110,7 +2976,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
             once: dict = {}
             for base, _w, _name, node, fsize, _m, _k, _e, _said, alloc in plan:
                 if not (alloc and alloc.get("placeholder")):
-                    once.setdefault((int(base), json.dumps(node)),
+                    once.setdefault((int(base), node_json(node)),
                                     _copy_bytes(fsize, alloc, holes_kept))
             _require_room(staged_dir, sum(once.values()), image_path.name)
         written: dict = {}                           # (volume, node) -> the copy made of it
@@ -2128,7 +2994,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 error = placeholder_error(fsize, alloc.get("stored"))
                 tally.placeholders += 1
             elif stage:
-                same = (int(base), json.dumps(node))
+                same = (int(base), node_json(node))
                 try:
                     if same in written and _link(written[same], dest):
                         tally.linked += 1
@@ -2163,7 +3029,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
             _register(case, src, dest, name, name, kind, ext, fsize,
                       mtime or None, created or None, None, None,
                       recorded_times=json.dumps(said) if said else None,
-                      origin="walk", member_node=json.dumps(node),
+                      origin="walk", member_node=node_json(node),
                       volume_base=int(base), atime=accessed or None, error=error)
             tally.registered += 1
             n += 1
@@ -2172,9 +3038,16 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 if progress:
                     progress(n)
     finally:
-        _drop_image(str(image_path))
+        if ref is None:
+            _drop_image(str(image_path))
+        else:
+            _drop_image(ref)
+            img.close()
     case.db.commit()
     key = _meta_key(src.name)
+    if ref is not None:
+        _record_set(case, src, ref, set_members, getattr(img, "raid_lines", []),
+                    img.layout_record(), img.copy_notes)
     case.db.set_meta(f"{key}:media_size", str(media_size))
     case.db.set_meta(f"{key}:segments", str(segments))
     if stored:
@@ -2191,6 +3064,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
         case.db.set_meta(f"{key}:luks", json.dumps(luks))
     if short:
         case.db.set_meta(f"{key}:volumes_short", json.dumps(short))
+    if volume_notes:
+        case.db.set_meta(f"{key}:volume_notes", json.dumps(volume_notes))
     _finish(case, src, image_path, fmt=fmt, root="", stage=stage,
             reason="the filesystems in the acquisition were walked, so every file "
                    "keeps the name, path and date the filesystem recorded for it",
@@ -2249,14 +3124,18 @@ def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     so none of the six acquisitions measured falls back: they scope to between
     60% and 92% of themselves, each in under a second.
     """
-    media_size = img.media_size
+    media_size = getattr(img, "media_size", None) or qnxprobe.image_size(img)
     out = []
     covered = 0                                      # the end of the claimed space so far
     placed = _placed(img)
     spare = None
     for base, size, fskind, _label in sorted(vols, key=lambda v: v[0]):
         try:
-            if fskind == "lvm2 pv":
+            if fskind == _CLAIMED:
+                # an md member in a set: its space is its array's, whose own
+                # volumes report what is free in it
+                runs = []
+            elif fskind == "lvm2 pv":
                 # An LVM2 physical volume: its extents no logical volume holds.
                 # The logical volumes on it answer for themselves below.
                 if spare is None:
@@ -2307,7 +3186,7 @@ CARVE_KINDS = frozenset(mediacarve.DEFAULT_KINDS
 
 
 def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
-                skip_offsets: set[int] | None = None) -> int:
+                skip_offsets: set[int] | None = None, ref=None) -> int:
     """Register the media carved out of a disk image, E01 or raw.
 
     An image holds a disk, not a list of members, so there is nothing to
@@ -2337,14 +3216,22 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
             state["tick"] = now
             progress(state["n"])
 
-    img = _open_image_file(image_path)
+    img = _open_image_file(image_path if ref is None else ref)
+    set_members = None
     try:
         media_size = img.media_size
         segments = len(img.paths)
         stored = _stored_hash(img)
         seen = skip_offsets or set()
-        spans = _unclaimed_space(img, _volumes(img)) if getattr(
-            src, "unallocated_only", False) else None
+        if isinstance(img, _SetImage):
+            set_members = img.members()
+            # A set is carved part by part: each member as it stands and each
+            # array read from them, never across from one part into the next, and
+            # never the gaps the set leaves between its parts.
+            spans = img.unclaimed() if getattr(src, "unallocated_only", False) else None
+        else:
+            spans = _unclaimed_space(img, _volumes(img)) if getattr(
+                src, "unallocated_only", False) else None
         if spans is not None:
             scanned = sum(n for _o, n in spans)
             case.db.set_meta(f"{_meta_key(src.name)}:carve_scope",
@@ -2360,12 +3247,16 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
         # hits are each copied to the end of the image, and the copies outgrow
         # the disk they came from. A cut hit is the start of a file and not the
         # whole of it, as a hit cut by fragmentation is.
+        if spans is None and isinstance(img, _SetImage):
+            scan = img.set_spans
+        else:
+            scan = spans
         hits = (mediacarve.carve(img, kinds=CARVE_KINDS, progress=scan_progress)
-                if spans is None
+                if scan is None
                 else itertools.chain.from_iterable(
                     mediacarve.carve(img, kinds=CARVE_KINDS, start=at, end=at + n,
                                      clip=True, progress=scan_progress)
-                    for at, n in spans))
+                    for at, n in scan))
         for hit in hits:
             if max_bytes and hit.length > max_bytes:
                 tally.skipped_size += 1
@@ -2400,6 +3291,9 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
     n = state["n"]
 
     key = _meta_key(src.name)
+    if ref is not None:
+        _record_set(case, src, ref, set_members, getattr(img, "raid_lines", []),
+                    img.layout_record(), img.copy_notes)
     case.db.set_meta(f"{key}:media_size", str(media_size))
     case.db.set_meta(f"{key}:segments", str(segments))
     # The acquisition's own recorded hash covers the whole disk, so an image
@@ -2605,7 +3499,10 @@ def _verify_image(case, name: str, rec: dict, img, limit: int = 20) -> list[str]
     no more than that.
     """
     problems: list[str] = []
-    if rec["media_size"] and img.media_size != rec["media_size"]:
+    # A set's size is where its last part ends, which a part placed for the first
+    # time moves; what identifies it is its members' hashes, checked below.
+    if rec["media_size"] and img.media_size != rec["media_size"] \
+            and not isinstance(img, _SetImage):
         problems.append(f"the image holds {img.media_size} bytes and the case "
                         f"registered {rec['media_size']}")
     stored = _stored_hash(img)
@@ -2644,8 +3541,19 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     size and modification time (tar), so a different extraction with the same name is
     refused. The same path is accepted too, which re-verifies a source reported as
     ``changed``. For a plain tar the recorded data offsets are refreshed from the new
-    file, since a repacked tar lays its members out differently."""
+    file, since a repacked tar lays its members out differently.
+
+    A source read from several member images takes the new place of each: the paths
+    given, or one path whose folder holds the others under the names the case
+    recorded (``_relink_set``)."""
     rec = _require(case, name)
+    given = ([new_path] if isinstance(new_path, (str, os.PathLike))
+             else [p for p in new_path if str(p).strip()])
+    if len(rec.get("members") or []) > 1:
+        return _relink_set(case, name, rec, given)
+    if len(given) != 1:
+        raise ValueError(f"{name!r} was read from one image or archive; give one path")
+    new_path = given[0]
     new = Path(new_path).resolve()
     fmt = archive_format(new)
     if fmt is None:
@@ -2696,6 +3604,234 @@ def relink_source(case, name: str, new_path: str | Path) -> dict:
     return next(s for s in source_status(case) if s["name"] == name)
 
 
+def _member_ident(path: Path):
+    """``(media size, own hash, format)`` of one image, as a member is recorded."""
+    fmt = archive_format(path)
+    if fmt not in IMAGE_FORMATS:
+        return None
+    img = _open_base(os.fspath(path))
+    try:
+        return img.media_size, _stored_hash(img), fmt
+    finally:
+        img.close()
+
+
+def _relink_set(case, name: str, rec: dict, given: list) -> dict:
+    """Point a source read from several member images at where its members are now.
+
+    Each recorded member is matched to an image by what the image is, never by its
+    name alone: its media size and its own hash (the acquiring tool's for an E01,
+    the head-and-tail sample for a raw image), and a format of the same family. A
+    member recorded with no hash of its own (an E01 whose tool wrote none) is matched
+    by size and file name together. The images looked at are the paths given, and
+    when one path is given, the files beside it named as the case recorded each
+    member. Every member must be matched and every path given must be one of them,
+    or nothing changes; then the set is opened from its new places and checked as a
+    single image is (``_verify_image``), which also proves the members are in the
+    order the case read them."""
+    members = rec["members"]
+    picked = [Path(g).resolve() for g in given]
+    if not picked:
+        raise ValueError(f"give the new place of {name!r}'s member images")
+    looked = list(picked)
+    if len(picked) == 1:
+        folder = picked[0].parent
+        looked += [(folder / Path(m["path"]).name).resolve() for m in members
+                   if (folder / Path(m["path"]).name).is_file()]
+    seen: set = set()
+    looked = [c for c in looked if not (str(c) in seen or seen.add(str(c)))]
+    problems: list[str] = []
+    idents: dict = {}
+    for c in looked:
+        try:
+            ident = _member_ident(c)
+        except (ArchiveUnavailable, *_IMAGE_ERRORS) as exc:
+            problems.append(f"{c.name}: cannot be opened ({exc})")
+            continue
+        if ident is None:
+            if c in picked:
+                problems.append(f"{c.name}: not a disk image")
+            continue
+        idents[c] = ident
+    chosen: list[str] = []
+    used: set = set()
+    for m in members:
+        hit = next((c for c, (size, digest, fmt) in idents.items()
+                    if c not in used and size == m.get("media_size")
+                    and _family(fmt) == _family(m.get("format") or fmt)
+                    and (digest == m["media_hash"] if m.get("media_hash")
+                         else c.name == Path(m["path"]).name)), None)
+        if hit is None:
+            problems.append(f"{Path(m['path']).name}: no image given or beside it is this "
+                            f"member ({m.get('media_size', 0):,} bytes, "
+                            f"{m.get('media_hash') or 'no recorded hash'})")
+            continue
+        used.add(hit)
+        chosen.append(os.fspath(hit))
+    problems += [f"{c.name}: not one of {name!r}'s member images" for c in picked
+                 if c in idents and c not in used]
+    if problems:
+        raise ValueError(f"the images given do not hold what the case registered from "
+                         f"{name!r}: {'; '.join(problems[:3])}")
+    ref = MemberSet(chosen, layout=rec.get("layout") or None)
+    ref.unplaced = not rec.get("layout")
+    _drop_image(ref)
+    try:
+        img = _open_image_file(ref)
+    except (ArchiveUnavailable, *_IMAGE_ERRORS) as exc:
+        raise ValueError(f"cannot open {ref}: {exc}") from exc
+    with img:
+        problems = _verify_image(case, name, rec, img)
+    if problems:
+        raise ValueError(f"the images given do not hold what the case registered from "
+                         f"{name!r}: {'; '.join(problems[:3])}")
+    _drop_image(image_ref(rec))
+    moved = []
+    for m, p in zip(members, chosen):
+        size, mtime = _source_stat(p)
+        moved.append({**m, "path": p, "size": size, "mtime": mtime})
+    key = _meta_key(name)
+    case.db.set_meta(f"{key}:path", chosen[0])
+    case.db.set_meta(f"{key}:size", str(moved[0]["size"]))
+    case.db.set_meta(f"{key}:mtime", str(moved[0]["mtime"]))
+    case.db.set_meta(f"{key}:members", json.dumps(moved))
+    case.db.commit()
+    case.db.audit_log(case.examiner, "relink-source", f"{name}: " + "; ".join(
+        f"{m['path']} -> {p}" for m, p in zip(members, chosen)))
+    return next(s for s in source_status(case) if s["name"] == name)
+
+
+def find_members(path, *, search: bool = True) -> dict:
+    """The other member images of a RAID set, looked for beside ``path`` by what each
+    file records about itself (``qnxprobe.raid_siblings``), for an examiner to accept
+    or not before anything is ingested. Nothing is looked for when ``path`` is not a
+    disk image or holds no md member or LVM2 physical volume.
+
+    ``added`` are the files the search would read with ``path``, ``unused`` every
+    other file of the folder it looked at with its status and why, ``missing`` the
+    members no file holds, ``warnings`` what has to be seen first (a newer copy of the
+    member given), ``lines`` the reader's whole report, and ``paths`` the image given
+    then each file added, which is what the source is read from when they are used.
+    The images this session holds a password or private key for are opened with
+    them.
+
+    The folder is searched only when the image given lacks members of an array or
+    volume group it holds (``incomplete``), or never when ``search`` is False.
+    Before that, no other file is opened."""
+    path = os.path.abspath(os.fspath(path))
+    empty = {"start": path, "searched": False, "incomplete": False, "added": [],
+             "unused": [], "missing": [], "warnings": [], "lines": [], "error": None,
+             "paths": [path]}
+    if archive_format(path) not in IMAGE_FORMATS:
+        return empty
+    with _PASSWORD_LOCK:
+        passwords = list(dict.fromkeys(_PASSWORDS.values()))
+        keys = list(_PRIVATE_KEYS.values())
+    # First what the image given lacks, opening no other file: an md array or a
+    # volume group it holds in full (a one-disk LVM2 install, a RAID1 whose members
+    # are both partitions of it) is not a reason to open every file beside it.
+    pre = qnxprobe.raid_siblings(path, passwords=passwords, private_keys=keys,
+                                 max_candidates=0)
+    missing = [m.get("why") or json.dumps(m) for m in pre.missing]
+    if pre.error or not pre.identities or not missing or not search:
+        return {**empty, "incomplete": bool(pre.identities and missing),
+                "missing": missing if pre.identities else [], "error": pre.error}
+    found = qnxprobe.raid_siblings(path, passwords=passwords, private_keys=keys)
+    added = [{"path": c["path"], "why": c["why"],
+              "files": list(c.get("files") or [c["path"]])} for c in found.added]
+    return {"start": found.start, "searched": True, "incomplete": True,
+            "added": added,
+            "unused": [{"path": c["path"], "status": c["status"], "code": c["code"],
+                        "why": c["why"]} for c in found.rejected],
+            "missing": [m.get("why") or json.dumps(m) for m in found.missing],
+            "warnings": list(found.warnings), "lines": found.lines(),
+            "error": found.error, "paths": [path] + [a["path"] for a in added]}
+
+
+def disk_identity(path) -> tuple[int, int]:
+    """What says two paths open the same disk: the device and inode of the first file
+    the image is read from, after links are resolved. A split raw set and an EWF set
+    are read from their first segment whichever segment is named, so two segments of
+    one set are one disk, as are a hard link, a symbolic link and two spellings of
+    one path."""
+    p = os.path.realpath(os.fspath(path))
+    first = p
+    if not os.path.isdir(p):
+        try:
+            kind = qnxprobe.acquisition_format(p)
+            if kind in ("EWF", "EWF2"):
+                first = (ewfprobe.ewf_segments(p) or [p])[0]
+            elif kind == "UDIF":
+                first = (ewfprobe.udif_segments(p) or [p])[0]
+            elif kind not in _ACQUISITIONS:
+                first = (qnxprobe.split_segments(p) or [p])[0]
+        except (qnxprobe.SplitImageError, ewfprobe.EwfError, OSError):
+            first = p
+    st = os.stat(os.path.realpath(os.fspath(first)))
+    return st.st_dev, st.st_ino
+
+
+_COPY_SAMPLE = 1 << 20
+
+
+def disk_fingerprint(path) -> tuple[int, str]:
+    """``(media size, sha256 of its first and last 1 MiB)`` of the disk an image
+    holds: cheap, and equal for a byte copy of a disk under another name, which
+    ``disk_identity`` cannot see. Equal fingerprints say "may be a copy"; they do not
+    prove one."""
+    img = _open_base(os.fspath(path))
+    try:
+        size = img.media_size
+        h = hashlib.sha256(struct.pack("<Q", size))
+        img.seek(0)
+        h.update(img.read(min(_COPY_SAMPLE, size)))
+        if size > _COPY_SAMPLE:
+            img.seek(max(_COPY_SAMPLE, size - _COPY_SAMPLE))
+            h.update(img.read(_COPY_SAMPLE))
+        return size, h.hexdigest()
+    finally:
+        img.close()
+
+
+_CHOICES = {
+    "used": "the other member images were looked for beside the image given, and those "
+            "found were read with it",
+    "only": "the other member images were looked for beside the image given, and the "
+            "examiner chose to read only the image given",
+    "nothing-added": "the other member images were looked for beside the image given, "
+                     "and none was found",
+    "not-searched": "the other member images were not looked for (the examiner asked for "
+                    "the image given alone)",
+}
+
+
+def discovery_record(choice: str, added=(), unused=(), missing=()) -> dict:
+    """What the case keeps about a search for the other member images of a RAID set
+    and what the examiner did with it: file names only, never a folder."""
+    if choice not in _CHOICES:
+        raise ValueError(f"not a member search outcome: {choice!r}")
+    return {"choice": choice,
+            "found": [Path(os.fspath(p)).name for p in added],
+            "unused": [{"file": Path(os.fspath(u["path"])).name, "why": str(u.get("why", ""))}
+                       for u in unused if isinstance(u, dict) and u.get("path")],
+            "missing": [str(m) for m in missing]}
+
+
+def discovery_lines(rec: dict | None) -> list[str]:
+    """The record of a member search in sentences, for the Source panel, the command
+    line and the report."""
+    if not rec or rec.get("choice") not in _CHOICES:
+        return []
+    out = [_CHOICES[rec["choice"]][0].upper() + _CHOICES[rec["choice"]][1:] + "."]
+    if rec.get("found"):
+        out.append("Found: " + ", ".join(rec["found"]) + ".")
+    for m in rec.get("missing") or []:
+        out.append(f"Not in any file: {m}.")
+    for u in rec.get("unused") or []:
+        out.append(f"Not used: {u['file']}: {u['why']}")
+    return out
+
+
 def stage_source(case, name: str, *, progress=None) -> int:
     """Copy every registered member of a reference-mode source under the case, making
     it self-contained. Returns the number of files written.
@@ -2725,7 +3861,7 @@ def stage_source(case, name: str, *, progress=None) -> int:
                     r["size"] or 0, alloc.get("stored")), md5=None, sha1=None, sha256=None)
                 placeholders += 1
                 continue
-            same = (int(r["volume_base"]), json.dumps(node))
+            same = (int(r["volume_base"]), node_json(node))
         todo.append((r, same, _copy_bytes(r["size"] or 0, alloc, holes_kept)))
     need: dict = {}
     for i, (_r, same, takes) in enumerate(todo):
@@ -2744,7 +3880,7 @@ def stage_source(case, name: str, *, progress=None) -> int:
             except ArchiveUnavailable:
                 # The image itself going away stops the pass. One file in it the
                 # reader declines (a compression it does not decode, say) does not.
-                if not (walked and Path(rec["path"]).exists()):
+                if not (walked and _ref_exists(image_ref(rec))):
                     raise
                 unread += 1
                 copied = False
@@ -2837,7 +3973,7 @@ def recover_deleted(case, name: str, *, progress=None) -> tuple[int, set]:
     recovered_offsets: set = set()
     n = len(case.db.iter_files("source = ?", (name,)))
 
-    img = _open_image_file(rec["path"])
+    img = _open_image_file(image_ref(rec))
     try:
         ss = qnxprobe.disk_sector_size(img)
         for base, size, fskind, label in _volumes(img):
@@ -3038,8 +4174,10 @@ def carve_source(case, name: str, *, unallocated_only: bool = False,
         # does not add a nameless twin of a deleted file we recovered by name
         already |= {int(o) for o in extra_skip}
     before_rows = len(case.db.iter_files("source = ?", (name,)))
+    ref = image_ref(rec)
     n = _ingest_ewf(case, src_obj, Path(rec["path"]), rec["format"], count=before_rows,
-                    progress=progress, skip_offsets=already)
+                    progress=progress, skip_offsets=already,
+                    ref=ref if isinstance(ref, MemberSet) else None)
     added = n - before_rows
     case.db.audit_log(case.examiner, "carve-source",
                       f"{name}: {added} rows recovered by signature")
@@ -3076,7 +4214,7 @@ def unstage_source(case, name: str) -> int:
         raise ValueError(f"{Path(rec['path']).name} is a compressed tar and cannot be read "
                          "on demand; keeping the copies")
     if rec["format"] in IMAGE_FORMATS:
-        img, _ = _open_image(rec["path"])
+        img, _ = _open_image(image_ref(rec))
         problems = _verify_image(case, name, rec, img)
     elif rec["format"] == FORMAT_ZIP:
         zf = _open_zip(rec["path"])

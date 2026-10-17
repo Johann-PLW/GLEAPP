@@ -29,6 +29,10 @@ Accepted JSON shapes (all keys case-insensitive)::
 
 A path that is a zip is an archive source. Its media is read from the zip on demand
 unless ``stage`` is true, which copies it under the case instead (see ``archive``).
+
+The member images of a RAID set are one source: ``"members": [...]`` in a job file
+lists them, with ``path`` (or the first member) read first. ``image_set_source``
+builds one from paths given any other way.
 """
 
 from __future__ import annotations
@@ -62,6 +66,19 @@ class Source:
                                   # which is the only part a walk cannot reach
     documents: bool = False       # keep PDF / HTML / MHTML / web archive files as
                                   # containers so the media inside them is extracted
+    members: list[str] = field(default_factory=list)
+                                  # image: every member image of a RAID set read as
+                                  # this one source, ``path`` first; empty for one image
+    found: list[str] = field(default_factory=list)
+                                  # the members found beside the image given rather
+                                  # than given (archive.find_members)
+    notes: list[str] = field(default_factory=list)
+                                  # paths given that named a disk already given
+    copies: list[str] = field(default_factory=list)
+                                  # disks given that may be byte copies of each other
+                                  # (the same size, first and last bytes); both read
+    discovery: dict | None = None # a search for the other member images and what the
+                                  # examiner did with it (archive.discovery_record)
 
     @property
     def max_bytes(self) -> int | None:
@@ -149,6 +166,64 @@ def _refuse_unreadable_container(p: Path) -> None:
             raise ValueError(why)
 
 
+def image_set_source(paths, found=(), name: str | None = None,
+                     discovery: dict | None = None) -> Source:
+    """One source read from several member images (a RAID set), in the order given.
+
+    Each must be a disk image GLEAPP reads: logical evidence (L01, Lx01, AD1) and
+    any file that is not a disk image are refused before anything is read. Paths
+    that open the same disk (one path twice, a hard or symbolic link to it, another
+    spelling of it, or another segment of the same split or EWF set) are read once,
+    and ``notes`` says which. Two different files that may be byte copies of one
+    disk (the same size and the same first and last 1 MiB) are both read, and
+    ``copies`` says so. With one disk left this is an ordinary image source."""
+    from . import archive
+    out: list[str] = []
+    seen: dict = {}
+    notes: list[str] = []
+    for raw in paths:
+        p = Path(raw).absolute()
+        if not p.exists():
+            raise ValueError(f"path does not exist: {raw}")
+        _refuse_unreadable_container(p)
+        if archive.archive_format(p) not in archive.IMAGE_FORMATS:
+            raise ValueError(f"{p.name} is not a disk image, and only disk images are "
+                             "read together as the member images of one source")
+        ident = archive.disk_identity(p)
+        if ident in seen:
+            first = seen[ident]
+            if Path(first).name == p.name and str(Path(first).resolve()) == str(p.resolve()):
+                notes.append(f"{p.name} was given twice and is read once")
+            else:
+                notes.append(f"{p.name} is the same disk as {Path(first).name} and is "
+                             "read once, as that")
+            continue
+        seen[ident] = str(p.resolve())
+        out.append(str(p.resolve()))
+    if not out:
+        raise ValueError("no member images given")
+    # A byte copy of a disk under another name is another file, so it is not
+    # collapsed: it may be a copy, and the examiner is told so and both are read.
+    copies: list[str] = []
+    prints: dict = {}
+    for p in out:
+        fp = archive.disk_fingerprint(p)
+        if fp in prints:
+            copies.append(f"{Path(p).name} may be a copy of {Path(prints[fp]).name}: the same "
+                          f"size ({fp[0]:,} bytes) and the same first and last 1 MiB; both "
+                          "are read")
+        else:
+            prints[fp] = p
+    first = Path(out[0])
+    taken = {str(Path(f).resolve()) for f in found}
+    if len(out) == 1:
+        return Source(name=name or first.name, path=out[0], kind="archive", notes=notes,
+                      discovery=discovery)
+    return Source(name=name or first.name, path=out[0], kind="archive", members=out,
+                  found=[p for p in out if p in taken], notes=notes, copies=copies,
+                  discovery=discovery)
+
+
 def _norm_source(entry: object, base: Path) -> Source | None:
     if isinstance(entry, str):
         p = (base / entry).resolve() if not Path(entry).is_absolute() else Path(entry)
@@ -157,6 +232,20 @@ def _norm_source(entry: object, base: Path) -> Source | None:
     if isinstance(entry, dict):
         low = {k.lower(): v for k, v in entry.items()}
         raw = low.get("path") or low.get("folder") or low.get("dir")
+        listed = low.get("members")
+        if isinstance(listed, list) and listed:
+            # the member images of one RAID set; ``path``, when given, is read first
+            names = ([raw] if raw else []) + [m for m in listed if m != raw]
+            src = image_set_source([(base / m).resolve() if not Path(m).is_absolute()
+                                    else Path(m) for m in names],
+                                   name=str(low["name"]) if low.get("name") else None)
+            src.include_other = bool(low.get("include_other", False))
+            src.max_mb = low.get("max_mb")
+            src.stage = bool(low.get("stage", False))
+            src.carve = bool(low.get("carve", False))
+            src.unallocated_only = bool(low.get("unallocated_only", False))
+            src.documents = bool(low.get("documents", False))
+            return src
         if not raw:
             return None
         p = Path(raw)
