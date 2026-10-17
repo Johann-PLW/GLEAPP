@@ -184,6 +184,10 @@ _LUKS: dict[str, list] = {}                        # passphrases
 # container, so a container still locked says that rather than asking as if none
 # had been given; the passphrases themselves are not kept
 _LUKS_TRIED: dict[str, dict[str, list]] = {}
+# the same, by the container's own header UUID, with the reader's reason when a
+# keyslot could not be tried at all (pycryptodome missing, say), for the record a walk
+# writes of a container left locked, which names it by where it lies, not by label
+_LUKS_TRIED_UUID: dict[str, dict[str, dict]] = {}
 _PASSWORD_LOCK = threading.Lock()
 # What the vendored reader says a BitLocker volume can be opened with, of the kinds
 # a person can give: anything else (a TPM, a clear key already used) is not asked for.
@@ -403,6 +407,13 @@ def _luks_held(path) -> list:
         return list(_LUKS.get(_secret_key(path), []))
 
 
+def _luks_tried(ref) -> dict[str, dict]:
+    """{header UUID: {"tried": keyslots, "why": the reader's reason}} for the LUKS
+    containers in ``ref`` that a passphrase given this session did not open."""
+    with _PASSWORD_LOCK:
+        return dict(_LUKS_TRIED_UUID.get(_secret_key(ref), {}))
+
+
 def _luks_askable(lk) -> bool:
     """True when a LUKS container still locked could open with a passphrase, so asking
     for one could help: not one whose header, cipher or keyslots the reader refuses."""
@@ -422,6 +433,7 @@ def luks_volumes(path) -> list[dict]:
         return []
     with _PASSWORD_LOCK:
         tried = dict(_LUKS_TRIED.get(_secret_key(path), {}))
+    said = _luks_tried(path)
     try:
         out = []
         for prefix, part in _volume_parts(img):
@@ -431,9 +443,13 @@ def luks_volumes(path) -> list[dict]:
                 if lk.mk is None and not lk.tried:
                     # what unlock_luks tried on it, for the reader's own note
                     lk.tried = list(tried.get(prefix + lk.label, []))
-            out += [{"label": prefix + lk.label, "open": lk.mk is not None,
-                     "askable": _luks_askable(lk),
-                     "note": "" if lk.mk is not None else lk.locked_note()} for lk in found]
+                askable = _luks_askable(lk)
+                if lk.mk is None and not lk.why and lk.uuid in said:
+                    # and why a passphrase given could not be tried, when it said so
+                    lk.why = said[lk.uuid]["why"]
+                out.append({"label": prefix + lk.label, "open": lk.mk is not None,
+                            "askable": askable,
+                            "note": "" if lk.mk is not None else lk.locked_note()})
         return out
     finally:
         img.close()
@@ -448,6 +464,7 @@ def unlock_luks(path, secret) -> bool:
         return False
     img = _open_image_file(path, luks=False)
     tried: dict[str, list] = {}
+    by_uuid: dict[str, dict] = {}
     try:
         opened = False
         for prefix, part in _volume_parts(img):
@@ -458,11 +475,15 @@ def unlock_luks(path, secret) -> bool:
                     opened = True
                 elif lk.mk is None and lk.tried:
                     tried[prefix + lk.label] = list(lk.tried)
+                if lk.mk is None and lk.uuid and (lk.tried or lk.why):
+                    by_uuid[lk.uuid] = {"tried": list(lk.tried), "why": lk.why}
     finally:
         img.close()
     with _PASSWORD_LOCK:
         if tried:
             _LUKS_TRIED.setdefault(_secret_key(path), {}).update(tried)
+        if by_uuid:
+            _LUKS_TRIED_UUID.setdefault(_secret_key(path), {}).update(by_uuid)
         if opened:
             _LUKS.setdefault(_secret_key(path), []).append(secret)
     if opened:
@@ -2776,11 +2797,13 @@ def _prime_catalog(walker) -> None:
         pass
 
 
-def _not_walked(img, base: int, size) -> str:
+def _not_walked(img, base: int, size, luks_tried=None) -> str:
     """Why a volume the reader can name has no walker: the locked BitLocker volume's
     own reason and what would open it, a LUKS container's, an LVM2 physical
     volume's, or that the reader walks no such filesystem. In a set of member
-    images the volume is looked at in the part it lies in."""
+    images the volume is looked at in the part it lies in. A LUKS container that a
+    passphrase given this session did not open (``luks_tried``, from ``_luks_tried``)
+    says so, with the reader's reason when it gave one, as the console does."""
     if isinstance(img, _SetImage):
         img, base = img.locate(base)
     disk = _foreign_disk(img)
@@ -2796,8 +2819,13 @@ def _not_walked(img, base: int, size) -> str:
     if opened is not None:
         return (f"{opened.summary()}: what it holds is walked as "
                 f"luks_lba{(base + opened.offset) // qnxprobe.disk_sector_size(img)}")
-    luks = qnxprobe.Luks.open(img, base, size)
+    luks = (next((lk for lk in getattr(img, "luks_found", None) or () if lk.base == base),
+                 None) or qnxprobe.Luks.open(img, base, size))
     if luks is not None:
+        held = (luks_tried or {}).get(luks.uuid) if luks.mk is None and luks.uuid else None
+        if held:
+            luks.tried = luks.tried or list(held["tried"])
+            luks.why = luks.why or held["why"]
         return f"{luks.summary()}; {luks.locked_note()}"
     lvm = qnxprobe.identify_lvm(img, base, size)
     if lvm is not None:
@@ -2879,6 +2907,7 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
     refused: list[str] = []
     volume_notes: list[str] = []
     set_members = None
+    luks_tried = _luks_tried(image_path if ref is None else ref)
 
     img = _open_image_file(image_path if ref is None else ref)
     try:
@@ -2944,7 +2973,8 @@ def _ingest_image_walk(case, src, image_path: Path, fmt: str, *, count: int,
                 try:
                     walker = qnxprobe.walker_for(fskind, img, base, size)
                     if walker is None:
-                        refused.append(f"{vol} ({fskind}): {_not_walked(img, base, size)}")
+                        why = _not_walked(img, base, size, luks_tried)
+                        refused.append(f"{vol} ({fskind}): {why}")
                         continue
                     if fskind == "apfs":
                         apfs.extend(_apfs_states(walker, vol, refused))

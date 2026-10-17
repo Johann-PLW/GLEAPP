@@ -805,6 +805,56 @@ def test_a_passphrase_opens_a_luks_container_inside_an_array(tmp_path):
     case.close()
 
 
+def test_a_wrong_passphrase_is_recorded_as_the_console_says_it(tmp_path, capsys):
+    # the case keeps the reason the console gives, not the one for no passphrase
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text("not it\n", encoding="utf-8")
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "set", "members": [str(f) for f in files],
+                                            "include_other": True}]}), encoding="utf-8")
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "--password-file", str(wrong), "ingest", str(job),
+                     "--no-process"]) == 0
+    assert "no passphrase given opens a keyslot" in capsys.readouterr().err
+    case = open_case(case_dir)
+    got = json.loads(archive.source_record(case, "set")["volumes_not_read"])
+    case.close()
+    assert len(got) == 1 and got[0].endswith(
+        "(luks): LUKS1, locked; LUKS-encrypted and not read: no passphrase given opens a keyslot")
+
+
+def test_a_passphrase_that_cannot_be_tried_is_recorded_with_the_readers_reason(
+        tmp_path, monkeypatch, capsys):
+    from gleapp.vendor import qnxprobe              # pylint: disable=import-outside-toplevel
+    monkeypatch.setattr(qnxprobe, "_BDE_AES", None)  # as without pycryptodome
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    pw = tmp_path / "pass.txt"
+    pw.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "set", "members": [str(f) for f in files],
+                                            "include_other": True}]}), encoding="utf-8")
+    assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",
+                     str(job), "--no-process"]) == 0
+    reason = "LUKS-encrypted and not read: AES needs the pycryptodome package"
+    assert reason in capsys.readouterr().err
+    case = open_case(tmp_path / "case")
+    got = archive.source_record(case, "set")["volumes_not_read"]
+    case.close()
+    assert reason in got
+
+
+def test_no_passphrase_is_recorded_as_none_given(tmp_path):
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    case = _ingest(tmp_path / "case", image_set_source(files))
+    got = json.loads(archive.source_record(case, files[0].name)["volumes_not_read"])
+    case.close()
+    assert len(got) == 1 and got[0].endswith("LUKS-encrypted and not read: give its passphrase")
+
+
 def test_a_passphrase_opens_a_luks_container_in_a_member_of_a_set(tmp_path):
     folder = tmp_path / "ev"
     folder.mkdir()
@@ -1437,6 +1487,10 @@ def test_a_passphrase_opens_luks_inside_an_array_in_one_images_partitions(tmp_pa
     err = capsys.readouterr().err
     assert "md_qp_qp21_3090d8cb/whole image of one.img stays locked" in err
     assert "no passphrase given opens a keyslot" in err
+    locked = open_case(tmp_path / "locked")
+    assert "no passphrase given opens a keyslot" in archive.source_record(
+        locked, "one")["volumes_not_read"]
+    locked.close()
     pw = tmp_path / "pass.txt"
     pw.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
     assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",
