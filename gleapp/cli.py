@@ -419,11 +419,26 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         else:
             _p(f"  - {s.name}: {s.path}{how}")
     n = ingest_sources(case, sources)
+    for s in sources:
+        for line in _raid_lines(case, s):
+            _p(line)
     _p(f"Registered {n} files.")
     if not args.no_process:
         _run_process(case, args)
     case.close()
     return 0
+
+
+def _raid_lines(case, src) -> list[str]:
+    """The vendored reader's report of what it assembled from a set's member images
+    (each array and its roles, a role missing and rebuilt from parity, a member left
+    out and why), as the case keeps it and as qnxprobe and DLEAPP print it. Empty for
+    a source that is not a set, which keeps no such report."""
+    if src.kind != "archive":
+        return []
+    from . import archive
+    rec = archive.source_record(case, src.name) or {}
+    return [str(line) for line in rec.get("raid") or []] if rec.get("members") else []
 
 
 def _run_process(case, args) -> None:

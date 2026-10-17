@@ -250,6 +250,41 @@ def test_the_command_line_reads_a_degraded_set_from_the_members_found(tmp_path, 
     case.close()
 
 
+def test_the_command_line_prints_the_missing_role_and_its_rebuild(tmp_path, capsys):
+    # role 2 is not given; the console says so, as qnxprobe and DLEAPP do
+    files = _members(tmp_path / "ev", "md-r5ls-090", (0, 1, 3))
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "ingest", *map(str, files), "--no-process"]) == 0
+    out = capsys.readouterr().out
+    assert "    role 2: missing" in out
+    assert "1 member(s) missing: their chunks are rebuilt from parity" in out
+    # after the Sources list, before the count, and the same lines the case keeps
+    assert out.index("Sources (1):") < out.index("role 2: missing") < out.index("Registered")
+    case = open_case(case_dir)
+    rec = archive.source_record(case, files[0].name)
+    assert all(line in out for line in rec["raid"] if line)
+    case.close()
+
+
+def test_the_command_line_prints_a_member_left_out_and_why(tmp_path, capsys):
+    files = _members(tmp_path / "ev", "md-r5-ls", range(4))
+    copy = tmp_path / "ev" / "copy-of-3.img"
+    shutil.copy(files[3], copy)                        # a second holder of role 3
+    case_dir = tmp_path / "case"
+    assert cli_main(["-c", str(case_dir), "ingest", *map(str, files), str(copy),
+                     "--no-process"]) == 0
+    out = capsys.readouterr().out
+    assert "  left out: copy-of-3.img: role 3 again, held by md-r5-ls-3.img" in out
+
+
+def test_the_command_line_prints_no_raid_report_for_an_ordinary_image(tmp_path, capsys):
+    image = tmp_path / "ev" / "fat.img"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(build_fat32([("A", "TXT", b"x", (2020, 1, 1, 0, 0, 0))]))
+    assert cli_main(["-c", str(tmp_path / "case"), "ingest", str(image), "--no-process"]) == 0
+    assert "RAID:" not in capsys.readouterr().out
+
+
 def test_no_find_members_reads_the_image_given_alone(tmp_path, capsys):
     files = _with_decoys(tmp_path / "ev")
     case_dir = tmp_path / "case"
