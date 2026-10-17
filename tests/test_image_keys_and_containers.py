@@ -59,6 +59,7 @@ def _isolate(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(archive, "_BITLOCKER", {})
     monkeypatch.setattr(archive, "_APFS", {})
     monkeypatch.setattr(archive, "_LUKS", {})
+    monkeypatch.setattr(archive, "_LUKS_TRIED", {})
     from gleapp import hashstore, stash  # pylint: disable=import-outside-toplevel
     hashstore.close()
     stash.close()
@@ -644,3 +645,27 @@ def test_a_source_holding_bitlocker_volumes_is_unlocked_through_the_api(tmp_path
                                             "bitlocker": {"key_file": str(bek)}})
     assert r.get_json() == {"ok": True, "wrong": False}
     assert [s["status"] for s in cl.get("/api/sources").get_json()] == ["ok"]
+
+
+def test_a_luks_container_a_wrong_passphrase_was_tried_on_says_so(tmp_path, capsys):
+    """After a passphrase that opens no keyslot, the container still locked says that,
+    in the reader's words, rather than asking as if none had been given."""
+    image = _copy(tmp_path, "luks1-cbc.img.gz")
+    [vol] = archive.luks_volumes(image)
+    assert vol["note"] == "LUKS-encrypted and not read: give its passphrase"
+    assert archive.unlock_luks(image, "not it") is False
+    [vol] = archive.luks_volumes(image)
+    assert (vol["open"], vol["askable"]) == (False, True)
+    assert vol["note"] == "LUKS-encrypted and not read: no passphrase given opens a keyslot"
+    assert archive.unlock_luks(image, LUKS_PASSPHRASE) is True
+    assert archive.luks_volumes(image)[0]["open"] is True
+
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text("not it\n", encoding="utf-8")
+    (tmp_path / "again").mkdir()
+    image2 = _copy(tmp_path / "again", "luks1-cbc.img.gz")
+    assert cli.main(["-c", str(tmp_path / "c"), "--password-file", str(wrong), "ingest",
+                     str(_job(tmp_path, image2)), "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "stays locked" in err and "no passphrase given opens a keyslot" in err
+    assert "give its passphrase)" not in err

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, hashdb, lava, report
-from .case import image_set_source, open_case, parse_source_spec
+from .case import carry_options, image_set_source, open_case, parse_source_spec
 from .pipeline import ingest_sources, process
 from .similar import find_similar
 
@@ -88,6 +88,10 @@ def _source_images(sources) -> tuple[list, list]:
         if len(s.members) > 1:
             own += s.members
             inside.append(archive.MemberSet(s.members))
+        elif s.kind == "archive" and _is_image(s.path) and archive.holds_own_array(s.path):
+            # one image whose own partitions hold an array is read as a set of itself
+            own.append(s.path)
+            inside.append(archive.MemberSet([s.path]))
         else:
             own.append(s.path)
             inside.append(s.path)
@@ -281,13 +285,13 @@ def _unlock_case(case, args: argparse.Namespace) -> None:
     from . import archive
 
     recs = list(archive.source_records(case).values())
-    singles = [r for r in recs if len(r.get("members") or []) <= 1]
+    singles = [r for r in recs if not r.get("members")]
     images, volumes = _unlock([r["path"] for r in singles], args,
                               bitlocker={r["path"] for r in singles if r["bitlocker"]},
                               apfs={r["path"] for r in singles if r["apfs"]},
                               luks={r["path"] for r in singles if r["luks"]})
     for r in recs:
-        if len(r.get("members") or []) > 1:
+        if r.get("members"):
             ref = archive.image_ref(r)
             more, _none = _unlock(list(ref), args, bitlocker=set(), apfs=set(), luks=set())
             images += more
@@ -368,6 +372,7 @@ def _ingest_sources(args: argparse.Namespace):
                            discovery=archive.discovery_record(
                                "used", [a["path"] for a in found["added"]],
                                found["unused"], found["missing"]))
+    carry_options(src, sources[0])
     for note in src.notes:
         _p(f"Note: {note}.")
     for copy in src.copies:
@@ -624,7 +629,8 @@ def cmd_source(args: argparse.Namespace) -> int:
             for s in rows:
                 members = s.get("members") or []
                 _p(f"  {s['name']}: {s['files']:,} files, {s['format']}, {s['mode']}, "
-                   f"{s['status']}  " + (f"{len(members)} member images" if members
+                   f"{s['status']}  " + (f"{len(members)} member image"
+                                         f"{'' if len(members) == 1 else 's'}" if members
                                          else s["path"]))
                 for m in members:
                     _p(f"      {m['status']}  {m['path']}"
@@ -636,8 +642,9 @@ def cmd_source(args: argparse.Namespace) -> int:
             s = archive.relink_source(case, args.name,
                                       args.path[0] if len(args.path) == 1 else args.path)
             if s.get("members"):
-                _p(f"{s['name']} now reads its {len(s['members'])} member images from "
-                   f"({s['status']}):")
+                n = len(s["members"])
+                _p(f"{s['name']} now reads its {n} member image{'' if n == 1 else 's'} "
+                   f"from ({s['status']}):")
                 for m in s["members"]:
                     _p(f"  {m['path']}")
             else:

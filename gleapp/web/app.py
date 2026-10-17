@@ -327,7 +327,11 @@ def _unlock_sources(sources, data: dict) -> list[dict]:
                         continue
             if archive.archive_format(s.path) not in archive.IMAGE_FORMATS:
                 continue
-            entry = volume_lock(s.name, s.path, s.path)
+            # one image whose own partitions hold an array is read as a set of
+            # itself, so the volumes inside that array are asked about too
+            ref = (archive.MemberSet([s.path]) if archive.holds_own_array(s.path)
+                   else s.path)
+            entry = volume_lock(s.name, ref, s.path)
             if entry:
                 locked.append(entry)
         except (OSError, archive.ewfprobe.EwfError) as exc:
@@ -2307,14 +2311,14 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         bitlocker = body.get("bitlocker") if isinstance(body.get("bitlocker"), dict) else None
         apfs = body.get("apfs") if isinstance(body.get("apfs"), dict) else None
         luks = body.get("luks") if isinstance(body.get("luks"), dict) else None
-        if len(rec.get("members") or []) > 1 and bitlocker is None and apfs is None \
+        if rec.get("members") and bitlocker is None and apfs is None \
                 and luks is None:
             # a set of member images: the first member still locked, each in turn
             path = next((m["path"] for m in rec["members"]
                          if not archive.is_unlocked(m["path"])
                          and (archive.needs_password(m["path"])
                               or archive.needs_private_key(m["path"]))), path)
-        elif len(rec.get("members") or []) > 1:
+        elif rec.get("members"):
             # a volume inside a member or an array read from them
             path = archive.image_ref(rec)
         if bitlocker is not None and not rec["bitlocker"]:

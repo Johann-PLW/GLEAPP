@@ -1222,3 +1222,221 @@ def test_a_ddf_raid5_member_read_alone_is_not_walked(tmp_path):
     assert case.db.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
     assert "DDF" in rec["volumes_not_read"] and "RAID5" in rec["volumes_not_read"]
     case.close()
+
+
+# ---- a job file's options survive the search for member images ----------------------
+def test_every_job_file_option_survives_the_members_found(tmp_path, monkeypatch):
+    """The source rebuilt around the members found keeps what the job file set on the
+    image it named, not only its name."""
+    from gleapp import cli                             # pylint: disable=import-outside-toplevel
+    from gleapp.case import SPEC_OPTIONS               # pylint: disable=import-outside-toplevel
+    files = _members(tmp_path / "ev", "md-r5-ls", range(4))
+    given = {"include_other": True, "follow_symlinks": True, "max_mb": 7, "stage": True,
+             "carve": True, "unallocated_only": True, "documents": True}
+    assert set(given) == set(SPEC_OPTIONS)
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "x", "path": str(files[0]), **given}]}),
+                   encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(cli, "ingest_sources", lambda _case, sources: seen.extend(sources) or 0)
+    assert cli_main(["-c", str(tmp_path / "case"), "ingest", str(job), "--no-process"]) == 0
+    assert len(seen) == 1
+    src = seen[0]
+    assert len(src.members) == 4 and src.name == "x"
+    assert {opt: getattr(src, opt) for opt in SPEC_OPTIONS} == given
+
+
+def test_include_other_from_a_job_file_registers_the_members_found(tmp_path):
+    files = _members(tmp_path / "ev", "md-r5-ls", range(4))
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "x", "path": str(files[0]),
+                                            "include_other": True}]}), encoding="utf-8")
+    assert cli_main(["-c", str(tmp_path / "case"), "ingest", str(job), "--no-process"]) == 0
+    case = open_case(tmp_path / "case")
+    walked = _walked(case, "x")
+    assert _tree(walked, "md_qp_qp21_3090d8cb/lba0/", "md-r5-ls") == _expected("md-r5-ls")
+    case.close()
+
+
+# ---- one image whose own partitions hold an array ------------------------------------
+def _gpt_disk(path: Path, parts: list[bytes]) -> Path:
+    """A GPT disk holding each of ``parts`` as one partition, the first at LBA 2048,
+    each followed by a 1 MiB gap, with both headers and their CRCs as the UEFI
+    specification lays them out."""
+    import struct                                      # pylint: disable=import-outside-toplevel
+    import uuid                                        # pylint: disable=import-outside-toplevel
+    import zlib                                        # pylint: disable=import-outside-toplevel
+    ss, linux_raid = 512, uuid.UUID("A19D880F-05FC-4D3B-A006-743F0F84911E")
+    spans, lba = [], 2048
+    for blob in parts:
+        assert len(blob) % ss == 0
+        spans.append((lba, lba + len(blob) // ss - 1))
+        lba += len(blob) // ss + 2048
+    total = lba + 2048
+    img = bytearray(total * ss)
+    mbr = bytearray(ss)
+    mbr[446:462] = struct.pack("<BBBBBBBBII", 0, 0, 2, 0, 0xEE, 0xFF, 0xFF, 0xFF, 1,
+                               min(total - 1, 0xFFFFFFFF))
+    mbr[510:512] = b"\x55\xaa"
+    img[0:ss] = mbr
+    ents = bytearray(128 * 128)
+    for i, ((first, last), blob) in enumerate(zip(spans, parts)):
+        ents[i * 128:(i + 1) * 128] = (linux_raid.bytes_le + uuid.UUID(int=i + 1).bytes_le
+                                       + struct.pack("<QQQ", first, last, 0)
+                                       + f"p{i}".encode("utf-16-le").ljust(72, b"\0"))
+        img[first * ss:(last + 1) * ss] = blob
+    disk = uuid.UUID(int=99).bytes_le
+
+    def header(cur, alt, ent_lba):
+        h = bytearray(struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x10000, 92, 0, 0, cur,
+                                  alt, 34, total - 34, disk, ent_lba, 128, 128,
+                                  zlib.crc32(ents)))
+        h[16:20] = struct.pack("<I", zlib.crc32(h))
+        return bytes(h).ljust(ss, b"\0")
+    img[ss:2 * ss] = header(1, total - 1, 2)
+    img[2 * ss:2 * ss + len(ents)] = ents
+    img[(total - 33) * ss:(total - 33) * ss + len(ents)] = ents
+    img[(total - 1) * ss:total * ss] = header(total - 1, 1, total - 33)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(img))
+    return path
+
+
+def _member_blobs(stem: str, roles) -> list[bytes]:
+    return [gzip.decompress((RAID / f"{stem}-{i}.img.gz").read_bytes()) for i in roles]
+
+
+_FAT = build_fat32([("A", "TXT", b"beside the array", (2020, 1, 1, 0, 0, 0))])
+
+
+@pytest.mark.parametrize("stem, prefix", [("md-r5-ls", "md_qp_qp21_3090d8cb/lba0/"),
+                                          ("md-r5ls-090", "md_8f61b69f/lba0/")])
+def test_an_array_in_one_images_own_partitions_is_read_to_the_known_data(
+        tmp_path, stem, prefix):
+    """One disk whose partitions hold all four members of a RAID5 array, metadata 1.2
+    and 0.90, with a FAT32 partition beside them: the array is assembled from the
+    partitions, as qnxprobe does, and every file it holds is the kernel's bytes; the
+    FAT32 partition is walked as the member's own volume; the member partitions are not
+    walked or reported unread. A later session reads every row from the place recorded."""
+    image = _gpt_disk(tmp_path / "ev" / "one.img", _member_blobs(stem, range(4)) + [_FAT])
+    assert archive.holds_own_array(image)
+    case = open_case(tmp_path / "case", create=True, examiner="t")
+    sources, _ = parse_source_spec(image)
+    assert sources[0].members == []
+    sources[0].include_other = True
+    ingest_sources(case, sources)
+    walked = _walked(case, "one.img")
+    assert _tree(walked, prefix, stem) == _expected(stem)
+    fat = {k: v for k, v in walked.items() if not k.startswith(prefix)}
+    assert fat == {"one.img/p4/A.TXT": hashlib.sha256(b"beside the array").hexdigest()}
+    rec = archive.source_record(case, "one.img")
+    assert [Path(m["path"]).name for m in rec["members"]] == ["one.img"]
+    assert [p["key"].split(":")[0] for p in rec["layout"]] == ["member", "md"]
+    assert rec["volumes_not_read"] == ""
+    assert isinstance(archive.image_ref(rec), archive.MemberSet)
+    status = archive.source_status(case)[0]
+    assert status["status"] == "ok" and [m["status"] for m in status["members"]] == ["ok"]
+    layout = case.db.get_meta("archive:one.img:layout")
+    case.close()
+    archive.close_zips()
+    case = open_case(tmp_path / "case")               # a new session
+    assert _walked(case, "one.img") == walked
+    assert case.db.get_meta("archive:one.img:layout") == layout
+    case.close()
+
+
+def test_an_image_holding_part_of_an_array_is_not_read_as_one(tmp_path):
+    """Two of four RAID5 members in one image's partitions cannot be read: it stays an
+    ordinary image source and its record says why the partitions were not walked."""
+    image = _gpt_disk(tmp_path / "ev" / "half.img", _member_blobs("md-r5-ls", (0, 1)))
+    assert not archive.holds_own_array(image)
+    case, rec = _ingest_one(tmp_path, image, "c")
+    assert "members" not in rec
+    refused = json.loads(rec["volumes_not_read"])
+    assert len(refused) == 2 and all("md RAID member" in r and "two or more of its members" in r
+                                     for r in refused), refused
+    case.close()
+
+
+def test_a_lone_whole_disk_mirror_member_is_not_read_as_a_set_of_itself(tmp_path):
+    """qnxprobe assembles a RAID1 array degraded from one member; a disk that is one
+    member and nothing else is still read as an ordinary image, as before."""
+    image = _members(tmp_path / "ev", "md-r1", (0,))[0]
+    assert not archive.holds_own_array(image)
+    case, rec = _ingest_one(tmp_path, image, "c")
+    assert "members" not in rec and "md RAID member" in rec["volumes_not_read"]
+    case.close()
+
+
+def test_a_source_registered_as_one_image_keeps_being_read_as_one(tmp_path, monkeypatch):
+    """A case whose earlier ingest registered rows from such an image as an ordinary
+    image (what a GLEAPP before this one did) is not switched to a set by a later pass,
+    so its rows stay where they were registered."""
+    image = _gpt_disk(tmp_path / "ev" / "one.img", _member_blobs("md-r5-ls", range(4)) + [_FAT])
+    monkeypatch.setattr(archive, "holds_own_array", lambda _p: False)
+    case, rec = _ingest_one(tmp_path, image, "c")
+    assert "members" not in rec
+    before = _walked(case, "one.img")
+    assert list(before) == ["p4/A.TXT"]
+    monkeypatch.undo()
+    sources, _ = parse_source_spec(image)
+    sources[0].include_other = True
+    ingest_sources(case, sources)
+    rec = archive.source_record(case, "one.img")
+    assert "members" not in rec and "layout" not in rec
+    assert _walked(case, "one.img") == before
+    case.close()
+
+
+def test_a_passphrase_opens_luks_inside_an_array_in_one_images_partitions(tmp_path, capsys):
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    image = _gpt_disk(tmp_path / "ev" / "one.img", [f.read_bytes() for f in files])
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"sources": [{"name": "one", "path": str(image),
+                                            "include_other": True}]}), encoding="utf-8")
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text("not it\n", encoding="utf-8")
+    assert cli_main(["-c", str(tmp_path / "locked"), "--password-file", str(wrong), "ingest",
+                     str(job), "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "md_qp_qp21_3090d8cb/whole image of one.img stays locked" in err
+    assert "no passphrase given opens a keyslot" in err
+    pw = tmp_path / "pass.txt"
+    pw.write_text(LUKS_PASSPHRASE + "\n", encoding="utf-8")
+    assert cli_main(["-c", str(tmp_path / "case"), "--password-file", str(pw), "ingest",
+                     str(job), "--no-process"]) == 0
+    assert "stays locked" not in capsys.readouterr().err
+    case = open_case(tmp_path / "case")
+    got = {k.split("/", 2)[2]: v for k, v in _walked(case, "one").items()}
+    assert got == _luks_known()
+    case.close()
+
+
+def test_the_web_asks_for_luks_inside_an_array_in_one_images_partitions(tmp_path):
+    from gleapp.web.app import create_app              # pylint: disable=import-outside-toplevel
+    luks = gzip.decompress((Path(__file__).parent / "fixtures" / "luks1-cbc.img.gz").read_bytes())
+    files = _raid5_holding(tmp_path / "ev", luks)
+    image = _gpt_disk(tmp_path / "ev" / "one.img", [f.read_bytes() for f in files])
+    cl = create_app(None).test_client()
+    assert cl.post("/api/case/create", json={"path": str(tmp_path / "case"), "name": "c",
+                                             "examiner": "t"}).status_code == 200
+    body = {"sources": [{"name": "one", "path": str(image)}], "options": {"screen": False}}
+    r = cl.post("/api/case/ingest", json=body)
+    assert r.status_code == 409
+    [need] = r.get_json()["needs_password"]
+    assert need["needs"] == "luks" and need["volume"].startswith("md_qp_qp21_3090d8cb/")
+    r = cl.post("/api/case/ingest", json={**body, "luks": {need["path"]: {"secret": "not it"}}})
+    [need] = r.get_json()["needs_password"]
+    assert need["wrong"] is True and "no passphrase given opens a keyslot" in need["note"]
+    r = cl.post("/api/case/ingest", json={**body, "luks": {need["path"]: {
+        "secret": LUKS_PASSPHRASE}}})
+    assert r.status_code == 200, r.get_json()
+    for _ in range(600):                               # capped: at most 60 s
+        if not cl.get("/api/job").get_json()["running"]:
+            break
+        import time                                    # pylint: disable=import-outside-toplevel
+        time.sleep(0.1)
+    src = next(s for s in cl.get("/api/context").get_json()["archive_sources"]
+               if s["name"] == "one")
+    assert json.loads(src["luks"]) and "luks_lba" in src["volumes"]
