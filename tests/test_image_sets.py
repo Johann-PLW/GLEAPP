@@ -398,8 +398,11 @@ def test_a_set_relinks_from_one_member_and_reads_again(tmp_path):
     name = files[0].name
     before = _walked(case, name)
     moved = tmp_path / "moved"
-    shutil.move(tmp_path / "ev", moved)
+    # Reading the rows leaves the members open in the image cache, as a single
+    # image's reads do; Windows cannot move a folder with a file open in it, so
+    # they are let go first, as the single-image relink tests do.
     archive.close_zips()
+    shutil.move(tmp_path / "ev", moved)
     status = next(s for s in archive.source_status(case) if s["name"] == name)
     assert status["status"] == "missing"
     assert {m["status"] for m in status["members"]} == {"missing"}
@@ -422,6 +425,7 @@ def test_a_set_relinks_from_paths_given_in_any_order_and_keeps_its_own(tmp_path)
     moved.mkdir()
     # renamed, so only what each file is can match it to its member
     renamed = []
+    archive.close_zips()                               # nothing of the set is held open
     for i, f in enumerate(reversed(files)):
         dest = moved / f"disk{i}.img"
         shutil.move(f, dest)
@@ -438,6 +442,7 @@ def test_a_set_refuses_a_relink_that_lacks_a_member(tmp_path):
     case = _ingest(tmp_path / "case", image_set_source(files))
     name = files[0].name
     other = _members(tmp_path / "other", "md-r1", (0,))[0]
+    archive.close_zips()
     shutil.copy(other, tmp_path / "ev" / "md-r5-ls-3.img")    # same name, another disk
     with pytest.raises(ValueError, match="md-r5-ls-3.img: no image given or beside it"):
         archive.relink_source(case, name, files[0])
@@ -861,8 +866,7 @@ def _hashes(case, name):
 def _process(case):
     """A forced processing pass, as a new session runs it: nothing cached."""
     from gleapp.pipeline import process                # pylint: disable=import-outside-toplevel
-    archive._IMAGES.clear()                            # pylint: disable=protected-access
-    archive._WALKERS.clear()                           # pylint: disable=protected-access
+    archive.close_zips()                               # closes every cached handle too
     process(case, force=True, workers=2, screen=False, similar=False)
 
 
@@ -1064,10 +1068,9 @@ def test_a_part_whose_size_changed_is_not_read_at_its_old_place(tmp_path):
     case = _ingest(tmp_path / "case", image_set_source([one, two]))
     name = one.name
     before = _walked(case, name)
+    archive.close_zips()                               # let go of what the reads opened
     with open(two, "ab") as fh:                        # the second member grows
         fh.write(bytes(1 << 20))
-    archive._IMAGES.clear()                            # pylint: disable=protected-access
-    archive._WALKERS.clear()                           # pylint: disable=protected-access
     rec = archive.source_record(case, name)
     rows = {r["orig_path"]: r for r in case.db.iter_files("source = ?", (name,))}
     with archive.local_copy(case.root, rec, rows["m1.img/lba0/ONE.TXT"]) as local:
