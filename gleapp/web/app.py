@@ -497,6 +497,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         try:
             import webview
             win = webview.windows[0]
+            open_dialog = win.create_file_dialog
+            if many and sys.platform == "win32":
+                # pywebview's dialog hangs with several files allowed when shown from
+                # this request thread; see gleapp/_win_open_dialog.py
+                from .._win_open_dialog import open_files
+                open_dialog = lambda _type, allow_multiple=True, file_types=(): open_files(  # noqa: E731
+                    file_types, multiple=allow_multiple)
             if kind == "folder":
                 res = win.create_file_dialog(webview.FOLDER_DIALOG)
             elif kind == "hashlist":
@@ -507,7 +514,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                         "All files (*.*)"),
                 )
             elif kind == "archive":
-                res = win.create_file_dialog(
+                res = open_dialog(
                     webview.OPEN_DIALOG, **many,
                     file_types=("Extraction or disk image "
                                 "(*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
@@ -552,13 +559,13 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                     file_types=("GLEAPP case file (*.gleapp)", "All files (*.*)"),
                 )
             elif kind == "ingestfile":
-                res = win.create_file_dialog(
+                res = open_dialog(
                     webview.OPEN_DIALOG, **many,
                     file_types=(
                         "Evidence file (*.zip;*.tar;*.tgz;*.tar.gz;*.tbz2;*.tar.bz2;"
                         "*.txz;*.tar.xz;*.E01;*.e01;*.s01;*.S01;*.Ex01;*.ex01;*.aff;*.AFF;*.afm;*.aff4;*.dmg;*.DMG;*.sparseimage;*.sparsebundle;"
                         "*.vhd;*.vhdx;*.vmdk;*.qcow;*.qcow2;*.img;*.dd;*.raw;*.bin;*.000;"
-                        "*.001;*.json)",
+                        "*.001;*.json;*.xml)",
                         "All files (*.*)"),
                 )
             else:

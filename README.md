@@ -354,6 +354,13 @@ re-reads the original file and writes `reports/projectvic_export.json` with each
 entry's `Category` (and `Comments` from your notes) updated, ready to load back
 into Project VIC. You choose all-media or categorized-only.
 
+## C4All
+
+Pass a C4All `C4P Index.xml` or `C4M Index.xml` the same way. GLEAPP detects it
+(a `ReportIndex` root), registers every `Image` / `Movie` entry from the folders
+beside the index, and carries the MD5, SHA-1, size, times and original path. A
+category of 0 is left uncategorized; any other value is kept as the same code.
+
 Processing 30k+ files takes a while (thumbnails, perceptual hashes, optional
 face/skin screening) but is resumable: re-run `process` / reopen the case to
 continue. Turning off screening in the launcher roughly halves the time.

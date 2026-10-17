@@ -53,7 +53,7 @@ STAGED_DIR = "staged"           # archive members copied under the case (staged 
 class Source:
     name: str
     path: str
-    kind: str = "folder"          # 'folder' | 'projectvic' | 'archive'
+    kind: str = "folder"          # 'folder' | 'projectvic' | 'c4all' | 'archive'
     include_other: bool = False
     follow_symlinks: bool = False
     max_mb: int | None = None
@@ -297,6 +297,10 @@ def parse_source_spec(spec: str | Path) -> tuple[list[Source], dict]:
     # itself as one file, or walk a sparse bundle's band files as a folder.
     if (p.is_file() or p.is_dir()) and is_archive_file(p):
         return [Source(name=p.name, path=str(p.resolve()), kind="archive")], {}
+    # A C4All report index (C4P/C4M Index.xml) - the media sits beside it.
+    from . import c4all
+    if p.is_file() and c4all.is_c4all_file(p):
+        return [Source(name=p.name, path=str(p.resolve()), kind="c4all")], {}
     if p.is_dir() or (p.exists() and p.suffix.lower() not in {".json"}):
         return [Source(name=p.name or str(p), path=str(p.resolve()))], {}
 

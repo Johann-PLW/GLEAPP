@@ -157,6 +157,12 @@ your user settings, not in any case.
       automatically. The VIC media folder is resolved next to the file.
       MediaID, category, original path, MIME and victim-offender flags are
       imported. See §3 for how duplicate entries are handled.
+    - **C4All index**: a C4All `C4P Index.xml` (pictures) or `C4M Index.xml`
+      (movies), detected automatically. Each entry's file is opened in place
+      from the folders beside the index (`DVD01(...)` and so on), with its MD5,
+      SHA-1, size, times and original path; a category other than 0 is kept as
+      the same code. Pick both indexes together to add both. Entries whose file
+      is not there are registered with *file not found on disk*.
 
 **Ingest options** (under **Processing options**, collapsed until you click it):
 
@@ -347,7 +353,7 @@ Beside the menu:
 
 | Button | What it does |
 |---|---|
-| **+ Add evidence…** | Ingests another folder, extraction archive, disk image (E01 or raw) or Project VIC / job JSON into this case. |
+| **+ Add evidence…** | Ingests another folder, extraction archive, disk image (E01 or raw), Project VIC / job JSON or C4All index XML into this case. |
 | **⇤ Close case** | Snapshots first. |
 | **Details pane**, **Export report** | Toggle the pane; open the export dialog. |
 | **↻ Refresh** | Re-runs the current filter, so files that no longer match (e.g. ones you just categorized) drop out. |
