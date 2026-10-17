@@ -239,6 +239,64 @@ def test_relink_accepts_the_same_raw_image_and_refuses_another_of_the_same_size(
         case.close()
 
 
+def _mid_disk(data: bytes) -> bytes:
+    """``data`` as the one partition of a disk with 8 MiB on either side of it, so
+    every byte of its files lies outside the first and last 4 MiB."""
+    pad = 8 * 1024 * 1024
+    mbr = bytearray(pad)
+    mbr[446:462] = bytes([0x00, 0, 0, 0, 0x0C, 0, 0, 0]) + (pad // 512).to_bytes(
+        4, "little") + (len(data) // 512).to_bytes(4, "little")
+    mbr[510:512] = b"\x55\xaa"
+    return bytes(mbr) + data + bytes(pad)
+
+
+def test_relink_refuses_a_raw_image_whose_files_differ_mid_disk(tmp_path):
+    """The head-and-tail sample is all a raw image carries, so a disk of the same
+    size and the same first and last 4 MiB was relinked as the same disk, and a
+    forced processing run then wrote its hashes over the ones the case recorded.
+    Relink and unstage now read back every file the case has hashed and refuse on
+    any change."""
+    from gleapp.pipeline import process   # pylint: disable=import-outside-toplevel
+    data = _mid_disk(_volume())
+    image = _raw(tmp_path / "ev", "acq.img", data)
+    case, name, _ = _ingest(tmp_path, image)
+    try:
+        process(case, workers=1, keyframes=0, screen=False, similar=False)
+        recorded = {k: r["sha256"] for k, r in _rows(case).items()}
+        assert recorded["lba16384/HOLIDAY.JPG"] == hashlib.sha256(JPG).hexdigest()
+
+        other = bytearray(data)
+        at = other.find(JPG)
+        assert 4 * 1024 * 1024 < at < len(other) - 4 * 1024 * 1024
+        other[at + 200:at + 204] = bytes(b ^ 0xFF for b in other[at + 200:at + 204])
+        flipped = _raw(tmp_path / "other", "acq.img", bytes(other))
+        archive.close_zips()
+        with pytest.raises(ValueError, match="HOLIDAY.JPG: its SHA-256 in this image"):
+            archive.relink_source(case, name, flipped)
+        assert archive.source_record(case, name)["path"] == str(image.resolve())
+        # nothing the refused image would have changed was written
+        process(case, force=True, workers=1, keyframes=0, screen=False, similar=False)
+        assert {k: r["sha256"] for k, r in _rows(case).items()} == recorded
+
+        archive.close_zips()
+        moved = tmp_path / "moved"
+        moved.mkdir()
+        shutil.move(str(image), str(moved / image.name))
+        assert archive.relink_source(case, name, moved / image.name)["status"] == "ok"
+
+        # the copies are kept when the image beside them has changed in the middle
+        archive.stage_source(case, name)
+        archive.close_zips()
+        (moved / image.name).write_bytes(bytes(other))
+        with pytest.raises(ValueError, match="keeping the copies.*HOLIDAY.JPG"):
+            archive.unstage_source(case, name)
+        assert archive.source_record(case, name)["mode"] == archive.MODE_STAGED
+        assert all(Path(r["path"]).is_file() for r in _rows(case).values())
+    finally:
+        archive.close_zips()
+        case.close()
+
+
 @pytest.mark.parametrize("form", ["raw", "ewf"])
 def test_stage_then_unstage_round_trips_a_walked_source(tmp_path, form):
     """Unstaging checked every row for a carved offset, so a walked source, E01

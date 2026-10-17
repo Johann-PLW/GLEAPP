@@ -431,6 +431,18 @@ at ingest and stored in the same `media_hash` slot. It tells two images of one s
 manual says so. Relinking an E01 onto a raw source, or the reverse, is refused as a format
 change, because the case cannot check that the two hold the same disk.
 
+So the sample is not all a relink or an unstage checks. Found by review 2026-10-16: a
+disk of the same size and the same first and last 4 MiB, different in the middle,
+relinked as `ok`, and `process --force` then wrote its hashes over the recorded
+ones. When a source's identity is that sample, or an acquisition (or any member image)
+whose tool recorded no hash, relink and unstage now read back every row processing has
+hashed and refuse if any SHA-256 differs or a row cannot be read
+(`_weak_identity`, `_verify_row_hashes`). A row not yet hashed has no recorded value and
+is not read. The cost is one read of every hashed file, at relink and unstage only; an
+E01 with the tool's hash is not read back. A test changes four bytes of a file 8 MiB
+from either end: relink and unstage are refused and `process --force` leaves the
+recorded hashes as they were.
+
 **A partition table that reaches past the end of the file is recorded, not hidden.** A
 lone first segment with no siblings, or a truncated image, walks whatever is there and
 reports the rest as empty; nothing in a probe can tell that from a small disk. The walk
@@ -596,9 +608,24 @@ Relink and unstage cannot check a member list, so they check the acquisition ins
 media size and the hash the acquiring tool wrote into the E01, both read out of the image's
 own header, plus a requirement that every recorded extent still lies inside it. That says
 the file is that acquisition; it does not re-hash the disk, which is the same standard as
-the zip check comparing recorded CRCs rather than recomputing them. A read that comes back
+the zip check comparing recorded CRCs rather than recomputing them. (A raw image, or one
+whose tool recorded no hash, has its hashed files read back as well; see above.) A
+logical volume read through a map lies past the end of the image on purpose, so for it
+the check is that its runs lie inside; until 2026-10-16 unstage and relink refused every
+row of one with "its volume lies past the end of the image". A read that comes back
 short is reported rather than written out, since an image swapped for a shorter one at the
 same path is never re-verified.
+
+**A pass that cannot see a volume keeps it in the record.** `:volumes` is what every
+walked row is read back through (`_row_walker`). A session without an encrypted source's
+key sees less of the same image: a LUKS container's data is no volume until it is opened,
+and a locked BitLocker volume is named `bitlocker` at the base where the record holds the
+filesystem inside it. Until 2026-10-16 every walk rewrote `:volumes` from what it saw, so
+`add_documents` run without the key dropped those volumes, and keyed `process --force` and
+`source stage` then failed on every row in them until the source was ingested again (on
+the fixtures: 2 of 2 LUKS1 rows and 612 of 612 BitLocker rows errored). A walk now
+replaces only the volumes it walked and adds the ones new to the record
+(`_merged_volumes`); it never removes one.
 
 ## Several member images are one source
 
