@@ -2296,6 +2296,16 @@ def _unclaimed_space(img, vols, *, min_bytes=64 * 1024):
     return joined
 
 
+# What a carve asks mediacarve for: the images and the video it carves by default.
+# GLEAPP files a carved file as an image or a video and has no audio kind (see
+# ISOBMFF_AUDIO_BRANDS in ingest.py), so the audio kinds mediacarve also carves by
+# default are not asked for, and nor are the categories it carves only when asked
+# (databases, plists, archives, documents, icons). Since mediacarve 0.3.0 an M4A is
+# an audio kind of its own rather than an MP4, so it stays out with the rest.
+CARVE_KINDS = frozenset(mediacarve.DEFAULT_KINDS
+                        & (mediacarve.IMAGE_KINDS | mediacarve.VIDEO_KINDS))
+
+
 def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
                 skip_offsets: set[int] | None = None) -> int:
     """Register the media carved out of a disk image, E01 or raw.
@@ -2350,10 +2360,11 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
         # hits are each copied to the end of the image, and the copies outgrow
         # the disk they came from. A cut hit is the start of a file and not the
         # whole of it, as a hit cut by fragmentation is.
-        hits = (mediacarve.carve(img, progress=scan_progress) if spans is None
+        hits = (mediacarve.carve(img, kinds=CARVE_KINDS, progress=scan_progress)
+                if spans is None
                 else itertools.chain.from_iterable(
-                    mediacarve.carve(img, start=at, end=at + n, clip=True,
-                                     progress=scan_progress)
+                    mediacarve.carve(img, kinds=CARVE_KINDS, start=at, end=at + n,
+                                     clip=True, progress=scan_progress)
                     for at, n in spans))
         for hit in hits:
             if max_bytes and hit.length > max_bytes:
@@ -2365,8 +2376,9 @@ def _ingest_ewf(case, src, image_path: Path, fmt: str, *, count: int, progress,
             if hit.offset in seen:
                 tally.mirrored += 1
                 continue
-            # Every kind the carver reports is media, so include_other has
-            # nothing to decide here: there is no third kind to keep or drop.
+            # The carver reports only the kinds asked for (CARVE_KINDS), images
+            # and video, so include_other has nothing to decide here: there is no
+            # third kind to keep or drop.
             kind = "image" if hit.kind in mediacarve.IMAGE_KINDS else "video"
             name = _carved_name(hit)
             dest = _staged_path(staged_dir, slug, name)

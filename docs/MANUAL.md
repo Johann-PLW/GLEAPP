@@ -1584,11 +1584,14 @@ recovering files no surviving record names.
   offset 4,211,712), and its date columns are blank.
 - Carved files are read back on demand by seeking to that offset, so the
   acquisition has to stay where the case recorded it.
-- **Seven signatures and nothing else**: JPEG, PNG, GIF, WebP and HEIC/AVIF as
-  images, AVI and MP4/MOV as video. No documents, archives or databases.
+- **Eleven signatures and nothing else**: JPEG, PNG, GIF, WebP, HEIC/AVIF, TIFF
+  and BMP as images, AVI, MP4/MOV/3GP, Matroska/WebM and Ogg with Theora as video.
+  No audio (GLEAPP has no audio kind), and no documents, archives or databases,
+  which mediacarve can carve but GLEAPP does not ask it for.
 - Each kind has a size ceiling so a false header cannot claim the rest of the
-  disk (64 MB for the stills, 32 MB for GIF, 4 GB for video) and a floor so a
-  header with nothing behind it is not reported as a file.
+  disk (64 MB for JPEG, PNG, WebP and HEIC, 32 MB for GIF, 1 GB for BMP, 4 GB for
+  TIFF and for video) and a floor so a header with nothing behind it is not
+  reported as a file.
 - A carved file never runs past its ceiling, the end of the image or, in a
   scoped carve, the end of the free run it was found in. One cut at any of those
   is the start of a file and not the whole of it.

@@ -480,6 +480,47 @@ def test_carved_media_is_registered_at_the_offset_it_was_found(tmp_path):
         c.close()
 
 
+def _wav():
+    """One second of noise written by Python's own wave module."""
+    import random
+    import wave
+    buf = io.BytesIO()
+    w = wave.Wave_write(buf)
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(8000)
+    rnd = random.Random(4)
+    w.writeframes(bytes(rnd.randrange(256) for _ in range(16000)))
+    w.close()
+    return buf.getvalue()
+
+
+def test_a_carve_asks_only_for_what_it_can_file(tmp_path):
+    """GLEAPP files a carved hit as an image or a video and has no audio kind, so
+    the carver is asked for those and an audio file on the disk is not registered.
+    The carver does find it when asked, so leaving it out is the request's doing."""
+    from gleapp.vendor import mediacarve
+    assert archive.CARVE_KINDS <= mediacarve.IMAGE_KINDS | mediacarve.VIDEO_KINDS
+    assert not archive.CARVE_KINDS & mediacarve.AUDIO_KINDS
+    assert {"jpeg", "png", "mp4", "tiff", "bmp", "mkv"} <= archive.CARVE_KINDS
+    data, laid = _disk(tmp_path)
+    wav = _wav()
+    at = len(data)
+    disk = data + wav + bytes(BLOCK - len(wav) % BLOCK)
+    assert [(h.offset, h.length) for h in mediacarve.carve(io.BytesIO(disk), kinds={"wav"})] \
+        == [(at, len(wav))]
+    folder = tmp_path / "ev"
+    folder.mkdir()
+    image = Path(write_ewf(folder, "acq", disk)[0])
+    c, n = _ingest(tmp_path, image, "case", do_process=False)
+    try:
+        offsets = {r["member_offset"] for r in _rows(c).values()}
+        assert n == 3 and offsets == {off for off, _ in laid.values()}
+        assert at not in offsets
+    finally:
+        c.close()
+
+
 def test_a_carved_case_processes_without_copying_the_image(tmp_path):
     image, _, _ = _acquire(tmp_path / "ev", tmp_path)
     c, _ = _ingest(tmp_path, image, "case")
