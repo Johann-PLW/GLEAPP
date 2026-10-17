@@ -600,6 +600,119 @@ the zip check comparing recorded CRCs rather than recomputing them. A read that 
 short is reported rather than written out, since an image swapped for a shorter one at the
 same path is never re-verified.
 
+## Several member images are one source
+
+The disks of a RAID set arrive as one image each, and they are one source
+(`archive.MemberSet`, `archive._SetImage`). Each member is read as a single image
+of it would be, and each Linux md array or LVM2 volume group over several of them
+that `qnxprobe.raid_assemble` (1.70) reads is a part of its own, named as qnxprobe
+names it: walked files are `<member file>/<volume>/<path>` or
+`md_<name>_<uuid8>/<volume>/<path>`, `lvm_<group>_<volume>/...`. The parts lie one
+after another in one address space, each on a GiB, and every offset a row records
+for a set (a volume's base, a carved hit) is in that space; a read never crosses
+from one part into the next. A member region read into an array (an md member, or
+a physical volume of a group spread over the images) is not a volume of its own and
+not "not read"; an array that cannot be read is in `volumes_not_read` with the
+reader's reason. A RAID1 array whose data starts at a member's first byte (0.90,
+1.0) is read from its first member as that member's own volume (qnxprobe's
+`same_as`); its other members are copies, listed in `:set_notes` and not walked.
+
+**Rows are read only through the layout they were registered with.** Where each part
+lies is recorded at ingest in `:layout`, each under a key that names it whatever else
+a session sees (`member:<n>`, `md:<uuid>`, `lvm:<group>/<volume>`,
+`<part>|lv:<group id>/<name>` for a mapped logical volume). A later session places
+every part at its recorded start; one it cannot produce is absent, and a row in it,
+or at a place where no volume of its kind lies now, is refused with why
+(`_SetImage.unavailable`) rather than read from whatever lies there; a part seen for
+the first time goes after every recorded one. Found by review 2026-10-16: a set
+whose first member is a LUKS container holding an LVM2 group placed the group's
+mapped volumes after it only when unlocked, so a session without the passphrase
+moved every later member up, and `process --force` wrote member 2's hashes onto
+member 1's rows. Now, on that set without the passphrase, all 12 rows keep their
+hashes (7 refused with why), and with it again they are what the ingest recorded.
+A set recorded with `:members` and no `:layout` (written by an early build of this
+work) is refused with what to do, re-ingest it, never placed again by guessing. A
+volume group's part is keyed by the group's whole lvm2 id, not its name. qnxprobe
+1.70's `_lvm_spanned` matched a group across images by name; 1.71 matches it by id and
+labels two groups of one name `<name>@<first six of the id>`, which `_array_key` turns
+back into the whole id. A test reads two such groups (the second the first's disks
+under other ids, built with qnxprobe's own helpers) to the kernel's bytes, six
+volumes under six keys.
+
+**A DDF or Intel IMSM member is walked only as qnxprobe 1.71 rules.** Its array is
+never assembled. GLEAPP's own `_volumes()` does not go through `qnxprobe.volumes()`,
+so it applies the same rule itself (`qnxprobe.raid_foreign_disk`): on a disk whose
+own end carries such metadata recording anything but a mirror in its normal state,
+every volume found (partitions, logical volumes, what an opened LUKS or BitLocker
+volume holds) is a `raid member`, not walked, with qnxprobe's note naming the level
+and what it starts with. A mirror member is walked and its note is kept in
+`volume_notes`. Before, a RAID0 IMSM disk's partition was walked into data half of
+which lies on another disk (a test builds one with qnxprobe's `_imsm_test_tail`), and
+md-ddf-2, a DDF RAID5 member that begins with ext4, is now a raid member.
+
+The case keeps `archive:<name>:path` as the first member, so a case made before sets
+existed, and a single image now, has the same record it always had and opens
+unchanged; a set adds `:members` (each member's path, whether it was found rather
+than given, format, size, mtime, segments, media size and own hash) and `:raid`
+(qnxprobe's report). Its `media_hash` is `member-set-sha256`, one value over each
+member's size and hash in order: it says the same images in the same order and is
+not a hash of any disk. Relink matches each member by size and its own hash, never
+by name alone, and refuses unless every member matches.
+
+One image given that holds part of an md array or LVM2 volume group, and not all of
+it, has the others looked for beside it with `qnxprobe.raid_siblings` (by array uuid,
+volume group and physical volume ids). Whether anything is missing is asked first
+with `max_candidates=0`, which opens no other file: measured on `lvm-fixture` (a
+volume group whose two physical volumes are both in the one image) beside three md
+members, the search opened all three before and opens none now, and nothing is said
+or recorded. The window asks before using what it finds; the command line prints the
+whole search and uses it, `--no-find-members` reads the image alone. What was done
+(found and used, the examiner chose the image alone, nothing found, not looked for)
+is kept in `:discovery`, by file name only, and shown in the Source panel, `source
+list` and the LAVA case page.
+
+Paths that open one disk are one member: `disk_identity` is the device and inode of
+the first file the image is read from after links are resolved, so the same path
+twice, another spelling, a hard or symbolic link, and a second segment of a split or
+EWF set are read once, and `:set_notes` says which. Logical evidence (L01, Lx01,
+AD1) and any file that is not a disk image are refused before anything is read. Two
+members of one file name are `<name>` and `<name> (2)`.
+
+What opens a volume inside an image is tried inside each member and each array read
+from them too: `bitlocker_volumes`, `unlock_bitlocker`, `apfs_volumes`,
+`unlock_apfs`, `luks_volumes` and `unlock_luks` take a `MemberSet` and look in every
+part, and what opens one is held for the set. Measured on a LUKS1 container written
+as the bytes of md-r5-ls's array (the parity computed, the array read back to those
+bytes first): the command line's `--password-file` and the web ingest's prompt open
+it and its files read to the fixture's hashes.
+
+Measured 2026-10-16 on qnxprobe's own fixtures (tests/fixtures/raid at v1.70, the
+kernel's file hashes in `raid-trees.sha256`): md RAID5 1.2, RAID5 0.90 with role 2
+not given (rebuilt from parity), RAID1 1.2 and 0.90, and the five-image LVM raid5,
+raid6 and raid10 volumes all walk to the kernel's bytes, and processing 16 files of
+two sets wrote the same SHA-256 values. An ordinary raw image (Honeynet FC7
+`victoria-v8.sda1.img`, 3,332 files) and an E01 (NTFS-HiddenFiles) ingested,
+processed and reported on origin/main and on this change at the same case path
+differ only in times. Not exercised: an encrypted member image, BitLocker or APFS
+volumes inside a member or an array (the same code path as LUKS, with no fixture).
+A RAID5 set whose member 0 is a split raw set and member 1 an E01 set (each also given
+by its second segment) reads to the kernel's bytes in a test.
+
+## XFS, Btrfs and ReFS, measured in GLEAPP
+
+qnxprobe 1.68 added the readers; GLEAPP ingested qnxprobe v1.70's fixtures on
+2026-10-16. XFS (v4, v5, v5 4Kn, dirty, mounted: 5,319, 4,920, 116, 525 and 525 files)
+and Btrfs (seven volumes of 572 files, one converted from ext4 of 3, one live of 17)
+registered every file with the SHA-256 the fixture records. ReFS registered 2,547
+files: 2,540 hash to the SHA-256 Windows recorded; 7 were not compared, 4 that Windows
+listed and the fixture does not ship (big/frag_a.bin, big/frag_b.bin,
+big/large_48MiB.bin, sparse/punched.bin) and 3 in System Volume Information that
+Windows' listing leaves out. A ReFS file's node holds bytes (`RefsEntry`), so nodes
+are stored with `node_json`, which keeps every older node's JSON as it was. A volume
+of these three kinds that lists nothing records the reader's note in
+`volumes_not_read` (one device of a two-device Btrfs RAID1, a ReFS whose newest
+changes are in its log); a note on one that lists files goes in `volume_notes`.
+
 ## A walked file is copied as what its volume holds
 
 A file's recorded size and the bytes its volume stores for it part company for a sparse
