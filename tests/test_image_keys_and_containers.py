@@ -60,6 +60,9 @@ def _isolate(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(archive, "_APFS", {})
     monkeypatch.setattr(archive, "_LUKS", {})
     monkeypatch.setattr(archive, "_LUKS_TRIED", {})
+    monkeypatch.setattr(archive, "_LUKS_TRIED_UUID", {})
+    monkeypatch.setattr(archive, "_BITLOCKER_TRIED", {})
+    monkeypatch.setattr(archive, "_APFS_TRIED", {})
     from gleapp import hashstore, stash  # pylint: disable=import-outside-toplevel
     hashstore.close()
     stash.close()
@@ -669,3 +672,132 @@ def test_a_luks_container_a_wrong_passphrase_was_tried_on_says_so(tmp_path, caps
     err = capsys.readouterr().err
     assert "stays locked" in err and "no passphrase given opens a keyslot" in err
     assert "give its passphrase)" not in err
+
+
+# ---- a wrong secret, remembered ----------------------------------------------
+# What the reader says, in its own words, of a volume no secret given opens, and of
+# one given nothing (BitLocker.locked_note and ApfsLock.locked_note in the vendored
+# qnxprobe).
+BITLOCKER_NONE_OPENS = "none of the passwords or key files given opens it"
+BITLOCKER_OPENS_WITH = ("BitLocker-encrypted and not read: it opens with its password or its "
+                        "recovery password (protector id E35ADDD4-23B9-5C12-1159-E24DBEF968E9) "
+                        "or its startup key")
+APFS_NONE_OPENS = "none of the passwords given opens it"
+APFS_OPENS_WITH = f'it opens with a password (its passphrase hint, as stored: "{APFS_HINT}")'
+
+
+def _refused(case_dir, name) -> list:
+    c = open_case(case_dir)
+    try:
+        return json.loads(archive.source_record(c, name)["volumes_not_read"] or "[]")
+    finally:
+        c.close()
+
+
+def _wrong_bitlocker(tmp_path, kind) -> list:
+    """The command line's options for a wrong password, recovery password or .BEK."""
+    if kind == "startup key":
+        bek = tmp_path / "wrong.BEK"
+        bek.write_bytes(bytes(range(256)))
+        return ["--bitlocker-key", str(bek)]
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text({"password": "not it",
+                      "recovery password": "-".join(["000000"] * 8)}[kind] + "\n",
+                     encoding="utf-8")
+    return ["--password-file", str(wrong)]
+
+
+@pytest.mark.parametrize("kind", ["password", "recovery password", "startup key"])
+def test_a_bitlocker_volume_a_wrong_secret_was_tried_on_says_so(tmp_path, monkeypatch,
+                                                                capsys, kind):
+    """The console and the record both say none of the secrets given opens it, rather
+    than that it opens with its password, as if none had been given."""
+    image = _copy(tmp_path, "bitlocker-xts128.img.gz")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+    case_dir = tmp_path / "c"
+    assert cli.main(["-c", str(case_dir), *_wrong_bitlocker(tmp_path, kind), "ingest",
+                     str(_job(tmp_path, image)), "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "stays locked" in err and BITLOCKER_NONE_OPENS in err
+    [refused] = _refused(case_dir, image.name)
+    assert refused == ("lba0 (bitlocker): BitLocker-encrypted and not read: "
+                       f"{BITLOCKER_NONE_OPENS}; {BITLOCKER_OPENS_WITH.split(': ', 1)[1]}")
+
+
+def test_a_bitlocker_volume_opens_with_the_right_key_after_a_wrong_one(tmp_path,
+                                                                      monkeypatch, capsys):
+    image = _copy(tmp_path, "bitlocker-xts128.img.gz")
+    bek = FIXTURES / "bitlocker-xts128.BEK"
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+    assert archive.unlock_bitlocker(image, secret="not it") is False
+    [vol] = archive.bitlocker_volumes(image)
+    assert (vol["open"], vol["askable"]) == (False, True)
+    assert BITLOCKER_NONE_OPENS in vol["note"]
+    # the right key, later in the same session, opens it and the record is clean
+    case_dir = tmp_path / "c"
+    assert cli.main(["-c", str(case_dir), *_wrong_bitlocker(tmp_path, "password"),
+                     "--bitlocker-key", str(bek), "ingest", str(_job(tmp_path, image)),
+                     "--no-process"]) == 0
+    assert "stays locked" not in capsys.readouterr().err
+    assert archive.bitlocker_volumes(image)[0] == {"label": "whole image", "open": True,
+                                                   "askable": False, "note": ""}
+    assert not _refused(case_dir, image.name)
+    c = open_case(case_dir)
+    try:
+        row = {s["name"]: s for s in archive.source_status(c)}[image.name]
+        assert row["walked"] > 600, "the SquashFS inside, 612 files"
+    finally:
+        c.close()
+
+
+def test_an_apfs_volume_a_wrong_password_was_tried_on_says_so(tmp_path, monkeypatch, capsys):
+    image = _copy(tmp_path, "apfs-converted.sparseimage.gz")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+    case_dir = tmp_path / "c"
+    assert cli.main(["-c", str(case_dir), *_wrong_bitlocker(tmp_path, "password"), "ingest",
+                     str(_job(tmp_path, image)), "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert "stays locked" in err and APFS_NONE_OPENS in err and "it opens with" not in err
+    [refused] = _refused(case_dir, image.name)
+    assert refused == ("disk image/CONVVOL (apfs, encrypted): "
+                       f'{APFS_NONE_OPENS} (its passphrase hint, as stored: "{APFS_HINT}")')
+
+
+def test_an_apfs_volume_opens_with_the_right_password_after_a_wrong_one(tmp_path,
+                                                                       monkeypatch, capsys):
+    image = _copy(tmp_path, "apfs-converted.sparseimage.gz")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+    assert archive.unlock_apfs(image, "not it") is False
+    [vol] = archive.apfs_volumes(image)
+    assert (vol["open"], vol["askable"], vol["hint"]) == (False, True, APFS_HINT)
+    assert vol["note"].startswith(APFS_NONE_OPENS)
+    password = tmp_path / "apfs-password.txt"
+    password.write_text(APFS_PASSWORD + "\n", encoding="utf-8")
+    case_dir = tmp_path / "c"
+    assert cli.main(["-c", str(case_dir), *_wrong_bitlocker(tmp_path, "password"),
+                     "--password-file", str(password), "ingest", str(_job(tmp_path, image)),
+                     "--no-process"]) == 0
+    assert "stays locked" not in capsys.readouterr().err
+    assert archive.apfs_volumes(image)[0]["open"] is True
+    assert not _refused(case_dir, image.name)
+    c = open_case(case_dir)
+    try:
+        assert len(json.loads(archive.source_record(c, image.name)["apfs"])) == 1
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("fixture, said", [
+    ("bitlocker-xts128.img.gz", f"lba0 (bitlocker): {BITLOCKER_OPENS_WITH}"),
+    ("apfs-converted.sparseimage.gz", f"disk image/CONVVOL (apfs, encrypted): {APFS_OPENS_WITH}"),
+])
+def test_a_volume_given_no_secret_is_recorded_as_before(tmp_path, monkeypatch, capsys,
+                                                         fixture, said):
+    image = _copy(tmp_path, fixture)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))            # not a terminal
+    case_dir = tmp_path / "c"
+    assert cli.main(["-c", str(case_dir), "ingest", str(_job(tmp_path, image)),
+                     "--no-process"]) == 0
+    err = capsys.readouterr().err
+    assert said.split(": ", 1)[1] in err and "given opens it" not in err
+    assert _refused(case_dir, image.name) == [said]
