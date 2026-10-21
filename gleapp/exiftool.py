@@ -210,10 +210,42 @@ CATEGORIES = (
     ("xmp", "XMP"),
     ("iptc", "IPTC"),
     ("video", "Video"),
-    ("composite", "Calculated (Composite)"),
+    ("composite", "Calculated by ExifTool (not in the file)"),
     ("file", "File & format"),
     ("other", "Other"),
 )
+# What each category holds, shown as the hover tip on its heading.
+CATEGORY_HELP = {
+    "exif": "Standard EXIF stored in the file: camera, lens, exposure, dates.",
+    "gps": "GPS fields stored in the file.",
+    "makernotes": "The camera or phone maker's own fields, stored in the file. Often "
+                  "holds serial numbers, firmware and settings.",
+    "xmp": "XMP metadata stored in the file, often written by editing software.",
+    "iptc": "IPTC fields stored in the file: captions, keywords, credits.",
+    "video": "Fields from the video container (QuickTime, AVI, Matroska...).",
+    "composite": "Values ExifTool works out from other fields. They are NOT stored in "
+                 "the file; cite the stored field they come from instead.",
+    "file": "The file's format and structure: type, encoding, color profile.",
+    "other": "Fields from any other group ExifTool reads.",
+}
+# Fields an examiner looks for first, shown above the categories when present. Only
+# stored fields count: a Composite value is never a highlight.
+HIGHLIGHTS = ("Make", "Model", "LensModel", "DateTimeOriginal", "CreateDate",
+              "OffsetTimeOriginal", "Software", "SerialNumber", "InternalSerialNumber",
+              "BodySerialNumber", "GPSLatitude", "GPSLatitudeRef", "GPSLongitude",
+              "GPSLongitudeRef", "GPSAltitude", "Artist", "Copyright")
+
+
+def highlights(fields: list[dict]) -> list[dict]:
+    """The ``HIGHLIGHTS`` present in ``fields``, in that order, each once (the first
+    stored occurrence)."""
+    first: dict[str, dict] = {}
+    for x in fields:
+        if x.get("family") != "Composite" and x["tag"] in HIGHLIGHTS:
+            first.setdefault(x["tag"], x)
+    return [first[t] for t in HIGHLIGHTS if t in first]
+
+
 _VIDEO = {"QuickTime", "RIFF", "Matroska", "M2TS", "H264", "MPEG", "ASF", "FLV", "MXF"}
 _FILE = {"File", "JFIF", "PNG", "ICC_Profile", "Photoshop", "JPEG", "GIF", "BMP",
          "Adobe", "APP14", "FlashPix", "MPF", "PrintIM"}
@@ -222,7 +254,9 @@ _FILE = {"File", "JFIF", "PNG", "ICC_Profile", "Photoshop", "JPEG", "GIF", "BMP"
 def category(field: dict) -> str:
     """Which of ``CATEGORIES`` a field from ``read`` belongs to."""
     fam, grp = field.get("family", ""), field.get("group", "")
-    if grp == "GPS" or (fam == "Composite" and field.get("tag", "").startswith("GPS")):
+    if fam == "Composite":      # calculated, so never filed with what the file stores
+        return "composite"
+    if grp == "GPS":
         return "gps"
     if fam == "EXIF":
         return "exif"

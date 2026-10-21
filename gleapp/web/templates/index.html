@@ -436,6 +436,20 @@
   #flagList .fp-item:hover{background:var(--panel2)}
   #flagList .dot{width:9px;height:9px;border-radius:50%;flex:none}
   /* flag chips - on a tile's metadata pane and wherever a file's flags list renders */
+  /* ExifTool section in the details pane: filter, tabs, one flat table */
+  .exFind{width:100%;box-sizing:border-box;margin:6px 0 4px}
+  .exTabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .exTab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);padding:4px 8px;cursor:pointer;font-size:12px;margin-bottom:-1px}
+  .exTab:hover{color:var(--fg)}
+  .exTab.on{color:var(--fg);border-bottom-color:var(--accent)}
+  .exTab.dim{opacity:.55}
+  .exTable{width:100%;table-layout:fixed;border-collapse:collapse}
+  .exTable td{padding:3px 0;border-top:1px solid var(--line);vertical-align:top;word-break:break-word}
+  .exTable td:first-child{color:var(--muted);width:44%;padding-right:8px}
+  .exTable tr.exCalc td{font-style:italic}
+  .exBadge{font-size:10.5px;padding:0 6px;border-radius:8px;background:var(--panel2);color:var(--muted);margin-left:4px;font-style:normal}
+  .exNote{font-size:11.5px;margin:4px 0}
+  .exFoot{font-size:11px;margin-top:6px}
   .flagchip{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:2px 8px 2px 6px;margin:0 4px 4px 0;font-size:11.5px}
   .flagchip .dot{width:7px;height:7px;border-radius:50%;flex:none}
   .flagchip b{font-weight:400;opacity:.55;cursor:pointer;margin-left:1px}

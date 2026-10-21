@@ -51,8 +51,17 @@ def test_every_field_falls_in_one_of_the_menu_categories(monkeypatch):
     got = {x["tag"]: exiftool.category(x) for x in exiftool.read("ignored")}
     assert got == {"FileType": "file", "Make": "exif", "ExposureTime": "exif",
                    "GPSLatitude": "gps", "LensModel": "makernotes", "Subject": "xmp",
-                   "GPSPosition": "gps", "Duration": "video", "Tag": "other"}
+                   "GPSPosition": "composite", "Duration": "video", "Tag": "other"}
     assert {k for k, _ in exiftool.CATEGORIES} >= set(got.values())
+    assert set(exiftool.CATEGORY_HELP) == {k for k, _ in exiftool.CATEGORIES}
+
+
+def test_highlights_are_stored_fields_in_a_fixed_order(monkeypatch):
+    monkeypatch.setattr(exiftool, "_ask", lambda args: _ANSWER)
+    hl = exiftool.highlights(exiftool.read("ignored"))
+    assert [x["tag"] for x in hl] == ["Make", "LensModel", "GPSLatitude"]
+    # a value ExifTool calculated is never a highlight
+    assert all(x["family"] != "Composite" for x in hl)
 
 
 @pytest.fixture()
@@ -97,7 +106,9 @@ def test_the_report_carries_only_the_categories_picked(case, monkeypatch):
     monkeypatch.setattr(exiftool, "_ask", lambda args: _ANSWER)
     out = case.root / "r.html"
     everything = report.export_html(case, out, exiftool=True, maps=False).read_text("utf-8")
-    assert everything.count("class='exifc'") == 7      # file, exif, gps, makernotes, xmp, video, other
+    # file, exif, gps, makernotes, xmp, video, composite, other
+    assert everything.count("class='exifc'") == 8
+    assert "Calculated by ExifTool (not in the file)" in everything
     assert "Maker notes" in everything and "LensModel" in everything
     gps_only = report.export_html(case, out, exiftool=True, exiftool_categories=["gps"],
                                   maps=False).read_text("utf-8")
