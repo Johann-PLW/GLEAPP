@@ -3933,6 +3933,18 @@ $("#stashMerge").onclick = async () => {
   toast(`Merged — +${r.added.toLocaleString()} new, ${r.total.toLocaleString()} total`);
   stashRefreshAndSidebar();
 };
+$("#stashMergePrecat").onclick = async () => {
+  const p = await pick("precategorized", "Path to the pre-categorized hash set (.json):");
+  if (!p) return;
+  const r = await api("/api/stash/merge-precategorized", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: p })
+  });
+  if (r.error) return toast(r.message || "Merge failed");
+  const skipped = r.skipped_category ? `, ${r.skipped_category.toLocaleString()} outside categories 1–3 skipped` : "";
+  toast(`Merged — +${r.added.toLocaleString()} new, ${r.total.toLocaleString()} total${skipped}`);
+  stashRefreshAndSidebar();
+};
 async function stashSetPath(p) {
   const r = await api("/api/stash/path", {
     method: "POST", headers: { "Content-Type": "application/json" },
