@@ -844,7 +844,8 @@ def cmd_report(args: argparse.Namespace) -> int:
                                        full_videos=not args.thumbs_only,
                                        maps=not args.no_maps, fields=fields,
                                        thumbs=not args.no_media,
-                                       by_flag=args.scope == "flags"))
+                                       by_flag=args.scope == "flags",
+                                       exiftool=args.exiftool))
     if "kml" in fmts:
         made.append(report.export_kml(case, out_dir / f"geolocation{tag}.kmz", where,
                                       thumbs=not args.no_media))
@@ -1063,6 +1064,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="metadata only, for discovery: the HTML report and the KMZ carry "
                         "no thumbnail, full-size copy or video frame of any file (CSV, "
                         "JSON, MD5 and VIC never do); refused with the lava format")
+    s.add_argument("--exiftool", action="store_true",
+                   help="HTML: add each file's ExifTool metadata, collapsed, to its card")
     s.add_argument("--no-maps", action="store_true",
                    help="HTML and LAVA reports: skip the location maps (drawn from "
                         "the active basemap)")

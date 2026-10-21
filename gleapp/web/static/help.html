@@ -395,6 +395,7 @@ number key, context menu, details pane) applies to the whole selection.</p>
   <tr><td><strong>Dates</strong></td><td>Captured (EXIF, camera local), FS created, FS written, FS accessed, Recorded (as stored, no zone). See &sect;3.</td></tr>
   <tr><td><strong>Project&nbsp;VIC</strong></td><td>MediaID, record MediaID, series, tags, flags. <strong>VIC Exif, as recorded</strong> opens a collapsed list of the Exif the VIC record carries, shown as text. It is not the file's own metadata.</td></tr>
   <tr><td><strong>Screening</strong></td><td>Faces, Skin ratio</td></tr>
+  <tr><td><strong>Metadata (ExifTool)</strong></td><td>A collapsed section under the table with every field ExifTool reads from the file: maker notes, XMP, IPTC, lens and exposure, video. Grouped by the same categories as the HTML export's ExifTool option, each holding ExifTool's own groups. Read the first time it is opened and kept in the case. ExifTool only reads; fields about the examiner's copy (its name, folder, permissions) are left out. Needs ExifTool: a build that carries it, or <code>exiftool</code> installed.</td></tr>
   <tr><td><strong>Matches</strong></td><td>Matched in (which hash sources flagged it), Exact copies, Visually similar, Similar-group, Error</td></tr>
   <tr><td><strong>Location</strong></td><td>GPS, with a <strong>Copy</strong> button</td></tr>
   <tr><td><strong>Hashes</strong></td><td>MD5, SHA-1, SHA-256, pHash</td></tr>
@@ -1322,6 +1323,7 @@ control bar above the first section has two switches: <strong>Blur images</stron
 (on by default; hover a thumbnail for a clear look) and <strong>Dark mode</strong>;
 both remember your choice per browser. Printing shows every card's metadata and
 unblurred images in light mode.</p>
+<p><strong>ExifTool metadata</strong> (off by default, saved with the case): <strong>Include ExifTool metadata</strong> adds each file's ExifTool reading to its card, collapsed, grouped by the categories ticked beneath it. A file with nothing in the ticked categories gets no block. Files not read yet are read during the export, which takes longer and makes the report larger. <code>gleapp report --exiftool</code> includes every category.</p>
 <p>The report also draws its own <strong>location maps</strong> from the active
 basemap (&sect;19), if one is imported and any files are geolocated: a
 <strong>Locations</strong> overview near the top, and a small locator map on each

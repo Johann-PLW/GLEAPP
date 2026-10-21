@@ -396,6 +396,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         ``close_current``'s job."""
         stopping.set()
         indexer.stop()
+        from .. import exiftool
+        exiftool.stop()
         snapshot_thread.join(timeout=30)   # at most the snapshot it may be writing
 
     state["shutdown"] = _shutdown
@@ -1359,6 +1361,23 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             {"ts": k["ts"], "thumb": f"/thumb/{k['thumb']}"}
             for k in C().db.keyframes_for(file_id)
         ])
+
+    @app.get("/api/file/<int:file_id>/exiftool")
+    def file_exiftool(file_id: int):
+        """ExifTool's full metadata for a file, read the first time it is asked for
+        and kept in the case. ``available`` is false when no ExifTool is found."""
+        from .. import exiftool
+        case = C()
+        r = case.db.get_file(file_id)
+        if not r:
+            abort(404)
+        meta = exiftool.for_row(case, r)
+        # each field's category, and the categories in the export menu's order, so
+        # the pane groups exactly as the report and its menu do
+        for x in meta.get("fields") or []:
+            x["category"] = exiftool.category(x)
+        meta["categories"] = [{"key": k, "label": v} for k, v in exiftool.CATEGORIES]
+        return jsonify(meta)
 
     @app.get("/api/file/<int:file_id>/hex")
     def file_hex(file_id: int):
@@ -2656,6 +2675,11 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "maps": case.db.get_meta("report_maps") != "0",
             "blur": case.db.get_meta("report_blur") != "0",
             "no_media": case.db.get_meta("report_no_media") == "1",
+            "exiftool": case.db.get_meta("report_exiftool") == "1",
+            "exiftool_categories": json.loads(
+                case.db.get_meta("report_exiftool_categories") or "null"),
+            "exiftool_category_options": [{"key": k, "label": v}
+                                          for k, v in _exiftool_categories()],
         })
 
     @app.post("/api/report")
@@ -2677,6 +2701,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         full_images = body.get("full_images", True)
         full_videos = body.get("full_videos", True)
         want_maps = body.get("maps", True)
+        want_exiftool = bool(body.get("exiftool", False))
+        exif_cats = body.get("exiftool_categories")
+        exif_cats = [str(c) for c in exif_cats] if isinstance(exif_cats, list) else None
         blur = body.get("blur", True)
         no_media = bool(body.get("no_media", False))
         if no_media and "lava" in fmts:
@@ -2698,6 +2725,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case.db.set_meta("report_maps", "1" if want_maps else "0")
         case.db.set_meta("report_blur", "1" if blur else "0")
         case.db.set_meta("report_no_media", "1" if no_media else "0")
+        case.db.set_meta("report_exiftool", "1" if want_exiftool else "0")
+        case.db.set_meta("report_exiftool_categories", json.dumps(exif_cats))
 
         tz =case.db.get_meta("display_tz") or appconfig.get_timezone()
 
@@ -2733,6 +2762,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                         fields=fields, full_images=full_images,
                         full_videos=full_videos, maps=want_maps, tz=tz, blur=blur,
                         no_media=no_media, by_flag=by_flag, only_flags=only_flags,
+                        exiftool=want_exiftool, exiftool_categories=exif_cats,
                         only_categorized=body.get("scope") == "categorized"
                         or bool(body.get("only_categorized")),
                         progress=lambda d, t: j.update(done=d, total=t),
@@ -2754,7 +2784,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 case, fmts, out, tag, where, label, header=header, fields=fields,
                 full_images=full_images, full_videos=full_videos,
                 maps=want_maps, tz=tz, blur=blur, no_media=no_media,
-                by_flag=by_flag, only_flags=only_flags,
+                by_flag=by_flag, only_flags=only_flags, exiftool=want_exiftool,
+                exiftool_categories=exif_cats,
                 only_categorized=body.get("scope") == "categorized"
                 or bool(body.get("only_categorized")))
         except FileNotFoundError as exc:
@@ -2872,10 +2903,15 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 REPORT_FORMATS = ("html", "csv", "json", "kml", "md5", "vic", "lava")
 
 
+def _exiftool_categories():
+    from .. import exiftool
+    return exiftool.CATEGORIES
+
+
 def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
                    full_images, full_videos, maps, tz, only_categorized, blur=True,
-                   no_media=False, by_flag=False, only_flags=None,
-                   progress=None, stage_cb=None) -> list[str]:
+                   no_media=False, by_flag=False, only_flags=None, exiftool=False,
+                   exiftool_categories=None, progress=None, stage_cb=None) -> list[str]:
     """Write every picked format into ``out`` and return the paths written.
 
     Shared by the inline route and the job the LAVA format runs in, so the two
@@ -2899,6 +2935,7 @@ def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
             header=header, fields=fields, scope_label=label,
             full_images=full_images, full_videos=full_videos, tz=tz, maps=maps,
             blur=blur, thumbs=not no_media, by_flag=by_flag, only_flags=only_flags,
+            exiftool=exiftool, exiftool_categories=exiftool_categories,
             progress=progress)))
     if "kml" in fmts:
         made.append(str(report.export_kml(case, out / f"geolocation{tag}.kmz", where,

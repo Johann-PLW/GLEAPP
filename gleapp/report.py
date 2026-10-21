@@ -570,6 +570,11 @@ _HTML_HEAD = """<!doctype html><html class="{blur_cls}"><head><meta charset="utf
  .card details.meta > summary::before{{content:"\\25B8 ";color:var(--mut)}}
  .card details.meta[open] > summary::before{{content:"\\25BE "}}
  .card .fields{{padding:0 10px 8px}}
+ .card details.exif, .card details.exifc, .card details.exifg{{margin:0 10px 6px}}
+ .card details.exif > summary, .card details.exifc > summary,
+ .card details.exifg > summary{{cursor:pointer;color:var(--mut)}}
+ .card details.exifc > summary{{font-weight:600}}
+ .card details.exifg .fields{{padding:0 0 4px}}
  .card .f{{display:flex;gap:6px;padding:1px 0}}
  .card .f .k{{color:var(--mut);flex:0 0 84px}}
  .card .f .v{{flex:1;word-break:break-all;white-space:pre-line}}
@@ -1158,7 +1163,8 @@ def _copy_full_size(case: Case, d: dict, media_dir: Path, *, want_video: bool,
 
 def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
                full_images: bool, full_videos: bool, loc_map: str = "",
-               media_dir: Path | None = None, thumbs: bool = True) -> str:
+               media_dir: Path | None = None, thumbs: bool = True,
+               exif: str = "") -> str:
     code = d.get("category")
     catbar = (f"<div class='catbar' style='background:"
               f"{html.escape(categories.color(case.db, code))}'>"
@@ -1232,7 +1238,48 @@ def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
     meta_open = "" if thumbs else " open"
     return (f"<div class='card' id='file-{d['id']}'>{img}{catbar}{flagrow}"
             f"<details class='meta'{meta_open}><summary>{name}</summary>{locimg}"
-            f"<div class='fields'>{''.join(parts)}</div></details></div>")
+            f"<div class='fields'>{''.join(parts)}</div>{exif}</details></div>")
+
+
+def _exiftool_html(case: Case, d: dict, categories_: list[str] | None = None) -> str:
+    """A file's ExifTool reading as a collapsed block, one collapsed group per
+    ExifTool group, for the card's metadata drop. Read now if it never was.
+    ``categories_`` (keys of ``exiftool.CATEGORIES``) limits which fields go in;
+    None keeps every one."""
+    from . import exiftool
+    meta = exiftool.for_row(case, d)
+    fields = meta.get("fields") or []
+    if categories_ is not None:
+        keep = set(categories_)
+        fields = [x for x in fields if exiftool.category(x) in keep]
+        if not fields and meta.get("fields"):
+            return ""
+    if not fields:
+        why = ("ExifTool is not available" if not meta.get("available")
+               else meta.get("error") or "no fields")
+        return (f"<details class='exif'><summary>Metadata (ExifTool)</summary>"
+                f"<div class='fields'><span class='k'>{html.escape(why)}</span></div></details>")
+    # the export menu's categories, in its order, each holding ExifTool's own groups
+    by_cat: dict[str, dict[str, list[dict]]] = {k: {} for k, _ in exiftool.CATEGORIES}
+    for x in fields:
+        by_cat[exiftool.category(x)].setdefault(x["group"], []).append(x)
+    labels = dict(exiftool.CATEGORIES)
+
+    def _group(g: str, xs: list[dict]) -> str:
+        return (f"<details class='exifg'><summary>{html.escape(g)} ({len(xs)})</summary>"
+                f"<div class='fields'>" + "".join(
+                    f"<div class='f'><span class='k'>{html.escape(x['tag'])}</span>"
+                    f"<span class='v'>{html.escape(x['value'])}</span></div>" for x in xs)
+                + "</div></details>")
+    inner = "".join(
+        f"<details class='exifc'><summary>{html.escape(labels[c])} "
+        f"({sum(len(xs) for xs in groups.values())})</summary>"
+        + "".join(_group(g, xs) for g, xs in groups.items()) + "</details>"
+        for c, groups in by_cat.items() if groups)
+    ver = (f"<div class='fields'><span class='k'>Read by ExifTool "
+           f"{html.escape(meta['version'])}</span></div>" if meta.get("version") else "")
+    return (f"<details class='exif'><summary>Metadata (ExifTool) &middot; {len(fields)} "
+            f"fields</summary>{inner}{ver}</details>")
 
 
 _KIND_LABELS = (("image", "Images"), ("video", "Videos"), ("other", "Other files"))
@@ -1256,6 +1303,7 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 map_flavor: str = "light", map_cap: int = 400,
                 blur: bool = True, by_flag: bool = False,
                 only_flags: list[int] | None = None,
+                exiftool: bool = False, exiftool_categories: list[str] | None = None,
                 progress=None) -> Path:
     """Write the HTML report. ``progress(done, total)``, when given, is called as
     each file's card is written, so the gallery's bottom bar can follow a long export.
@@ -1323,7 +1371,9 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 body.append(_card_html(case, d, keys, thumb_root,
                                        full_images, full_videos,
                                        loc_map=loc_maps.get(d["id"], ""),
-                                       media_dir=media_dir, thumbs=thumbs))
+                                       media_dir=media_dir, thumbs=thumbs,
+                                       exif=_exiftool_html(case, d, exiftool_categories)
+                                       if exiftool else ""))
                 written += 1
                 if progress:
                     # a flag report shows a file once per flag, so cap at the total

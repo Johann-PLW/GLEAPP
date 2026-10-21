@@ -945,6 +945,13 @@
   </div>
 
   <div id="rptHtmlOpts">
+    <details class="rsec"><summary>ExifTool metadata</summary>
+    <label><input type="checkbox" id="rhExif"> Include ExifTool metadata
+      <span class="muted" style="font-size:11px">(every field ExifTool reads, collapsed on each
+      file's card; files not read yet are read during the export, which takes longer and makes
+      the report larger)</span></label>
+    <div id="rhExifCats" style="margin:6px 0 0 22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 12px"></div>
+    </details>
     <details class="rsec"><summary>Report header <span class="muted" style="font-size:11px;font-weight:400">— saved with the case</span></summary>
     <div class="rgrid">
       <label>Agency<input type="text" id="rhAgency"></label>

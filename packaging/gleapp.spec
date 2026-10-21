@@ -59,6 +59,14 @@ for mod in ("webview", "cv2", "imagehash", "PIL", "pi_heif",
 
 datas += collect_data_files("scipy", includes=["**/*.dll", "**/*.pyd"])
 datas += collect_data_files("tzdata")   # IANA tz database for zoneinfo on Windows
+# ExifTool for the details pane (gleapp/exiftool.py), copied from the folder named by
+# GLEAPP_EXIFTOOL_DIR at build time: the Windows package, exiftool(-k).exe renamed
+# exiftool.exe beside its exiftool_files folder (which carries the license texts).
+# Not set: not bundled, and the pane uses an installed exiftool if there is one.
+_exiftool_dir = os.environ.get("GLEAPP_EXIFTOOL_DIR")
+if _exiftool_dir:
+    datas.append((_exiftool_dir, "exiftool"))
+    hiddenimports.append("gleapp.exiftool")
 
 block_cipher = None
 

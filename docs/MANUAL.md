@@ -458,6 +458,7 @@ A field appears only when the file has a value for it.
 | **Matches** | Matched in (which hash sources flagged it), Exact copies, Visually similar, Similar-group, Error |
 | **Location** | GPS, with a **Copy** button |
 | **Hashes** | MD5, SHA-1, SHA-256, pHash |
+| **Metadata (ExifTool)** | A collapsed section under the table with every field ExifTool reads from the file: maker notes, XMP, IPTC, lens and exposure, video. Grouped by the same categories as the HTML export's ExifTool option (Camera & capture (EXIF), GPS, Maker notes, XMP, IPTC, Video, Calculated (Composite), File & format, Other), each holding ExifTool's own groups. Read the first time it is opened and kept in the case. ExifTool only reads; fields about the examiner's copy (its name, folder, permissions) are left out. Needs ExifTool: a build that carries it, or `exiftool` installed (`$GLEAPP_EXIFTOOL` names a specific one). |
 
 ### Hex view
 
@@ -1435,6 +1436,12 @@ obtain the same file and see the same map. The maps carry the place, water and
 street names the basemap holds, where Pillow can supply a scalable font. Untick
 **Draw location maps** in the Export dialog, or pass `--no-maps` to `gleapp
 report`, to leave them out.
+
+**ExifTool metadata** (off by default, saved with the case): **Include ExifTool
+metadata** adds each file's ExifTool reading (§6) to its card, collapsed, grouped by
+the categories ticked beneath it. A file with nothing in the ticked categories gets
+no block. Files not read yet are read during the export, which takes longer and
+makes the report larger. `gleapp report --exiftool` includes every category.
 
 **Media** (dialog checkboxes, on by default, saved with the case; shown while
 **HTML report** is ticked and **Metadata only** is not):
