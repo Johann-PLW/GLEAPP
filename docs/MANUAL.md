@@ -456,7 +456,7 @@ A field appears only when the file has a value for it.
 | **Project VIC** | MediaID, record MediaID, series, tags, flags. **VIC Exif, as recorded** opens a collapsed list of the Exif the VIC record carries, shown as text. It is not the file's own metadata. |
 | **Screening** | Faces, Skin ratio |
 | **Matches** | Matched in (which hash sources flagged it), Exact copies, Visually similar, Similar-group, Error |
-| **Location** | GPS, with a **Copy** button |
+| **Location** | GPS, with a **Copy** button. For a photo it comes from EXIF (degrees/minutes/seconds, degrees and decimal minutes, or decimal degrees), or from XMP when EXIF has none; for a video, from its QuickTime metadata (UserData GPSCoordinates, or the iPhone location key). A video's **Captured** comes from the iPhone creation date, the device's local time. A case processed before this version picks them up when it is processed again (`gleapp process --force <case>`, which redoes every file) or ingested into a new case. |
 | **Hashes** | MD5, SHA-1, SHA-256, pHash |
 | **Metadata (ExifTool)** | A collapsed section under the table with every field ExifTool reads from the file: maker notes, XMP, IPTC, lens and exposure, video. Grouped by the same categories as the HTML export's ExifTool option (Camera & capture (EXIF), GPS, Maker notes, XMP, IPTC, Video, Calculated (Composite), File & format, Other), each holding ExifTool's own groups. Read the first time it is opened and kept in the case. ExifTool only reads; fields about the examiner's copy (its name, folder, permissions) are left out. Needs ExifTool: a build that carries it, or `exiftool` installed (`$GLEAPP_EXIFTOOL` names a specific one). |
 
