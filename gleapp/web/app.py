@@ -1376,7 +1376,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         # the pane groups exactly as the report and its menu do
         for x in meta.get("fields") or []:
             x["category"] = exiftool.category(x)
-        meta["categories"] = [{"key": k, "label": v} for k, v in exiftool.CATEGORIES]
+        meta["categories"] = [{"key": k, "label": v, "help": exiftool.CATEGORY_HELP.get(k, "")}
+                              for k, v in exiftool.CATEGORIES]
+        meta["highlights"] = exiftool.highlights(meta.get("fields") or [])
         return jsonify(meta)
 
     @app.get("/api/file/<int:file_id>/hex")
@@ -2678,7 +2680,8 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "exiftool": case.db.get_meta("report_exiftool") == "1",
             "exiftool_categories": json.loads(
                 case.db.get_meta("report_exiftool_categories") or "null"),
-            "exiftool_category_options": [{"key": k, "label": v}
+            "exiftool_category_options": [{"key": k, "label": v,
+                                           "help": _exiftool_help().get(k, "")}
                                           for k, v in _exiftool_categories()],
         })
 
@@ -2906,6 +2909,11 @@ REPORT_FORMATS = ("html", "csv", "json", "kml", "md5", "vic", "lava")
 def _exiftool_categories():
     from .. import exiftool
     return exiftool.CATEGORIES
+
+
+def _exiftool_help():
+    from .. import exiftool
+    return exiftool.CATEGORY_HELP
 
 
 def _write_reports(case, fmts, out, tag, where, label, *, header, fields,

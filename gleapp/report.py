@@ -1272,7 +1272,8 @@ def _exiftool_html(case: Case, d: dict, categories_: list[str] | None = None) ->
                     f"<span class='v'>{html.escape(x['value'])}</span></div>" for x in xs)
                 + "</div></details>")
     inner = "".join(
-        f"<details class='exifc'><summary>{html.escape(labels[c])} "
+        f"<details class='exifc'><summary title='"
+        f"{html.escape(exiftool.CATEGORY_HELP.get(c, ''), quote=True)}'>{html.escape(labels[c])} "
         f"({sum(len(xs) for xs in groups.values())})</summary>"
         + "".join(_group(g, xs) for g, xs in groups.items()) + "</details>"
         for c, groups in by_cat.items() if groups)

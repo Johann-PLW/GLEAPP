@@ -2727,7 +2727,7 @@ async function openReportDlg() {
   $("#rhExif").checked = p.exiftool === true;
   const exifPicked = new Set(p.exiftool_categories || (p.exiftool_category_options || []).map(o => o.key));
   $("#rhExifCats").innerHTML = (p.exiftool_category_options || []).map(o =>
-    `<label style="font-size:12px"><input type="checkbox" class="rhExifCat" value="${esc(o.key)}"
+    `<label style="font-size:12px" title="${esc(o.help || "")}"><input type="checkbox" class="rhExifCat" value="${esc(o.key)}"
       ${exifPicked.has(o.key) ? "checked" : ""}> ${esc(o.label)}</label>`).join("");
   const exifCatsState = () => document.querySelectorAll(".rhExifCat")
     .forEach(c => { c.disabled = !$("#rhExif").checked; });
@@ -4201,10 +4201,14 @@ function wireExifTool(id) {
     const body = $("#mExifBody");
     const r = await api(`/api/file/${id}/exiftool`).catch(() => ({ error: "request failed" }));
     if (!document.body.contains(body)) return;            // another file opened meanwhile
-    if (r.available === false) { body.textContent = "ExifTool is not available on this computer."; return; }
+    if (r.available === false) {
+      body.textContent = "ExifTool is not available on this computer. Install ExifTool (exiftool.org) " +
+        "or use a GLEAPP build that includes it, then open this section again.";
+      return;
+    }
     if (r.error && !(r.fields || []).length) { body.textContent = `ExifTool could not read this file: ${r.error}`; return; }
     // the export menu's categories, in its order, each holding ExifTool's own groups
-    const cats = new Map((r.categories || []).map(c => [c.key, { label: c.label, groups: new Map() }]));
+    const cats = new Map((r.categories || []).map(c => [c.key, { label: c.label, help: c.help || "", groups: new Map() }]));
     for (const x of r.fields || []) {
       const c = cats.get(x.category) || cats.get("other");
       if (!c) continue;
@@ -4213,15 +4217,48 @@ function wireExifTool(id) {
     }
     box.querySelector("summary").textContent = `Metadata (ExifTool) · ${(r.fields || []).length} fields`;
     body.classList.remove("muted");
-    const groupHtml = ([g, xs]) => `<details style="margin:2px 0 0 12px">
+    const row = x => `<tr data-find="${esc((x.tag + " " + x.value).toLowerCase())}"${x.family === "Composite"
+        ? ' title="Calculated by ExifTool, not stored in the file"' : ""}><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`;
+    const groupHtml = ([g, xs]) => `<details class="exg" style="margin:2px 0 0 12px">
         <summary class="muted">${esc(g)} (${xs.length})</summary>
-        <table>${xs.map(x => `<tr><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`).join("")}</table>
+        <table>${xs.map(row).join("")}</table>
       </details>`;
-    body.innerHTML = [...cats.values()].filter(c => c.groups.size).map(c => {
-      const n = [...c.groups.values()].reduce((a, xs) => a + xs.length, 0);
-      return `<details style="margin:4px 0 0 6px"><summary style="font-weight:600">${esc(c.label)} (${n})</summary>
-        ${[...c.groups].map(groupHtml).join("")}</details>`;
-    }).join("") + (r.version ? `<div class="muted" style="font-size:11px;margin-top:4px">Read by ExifTool ${esc(r.version)}</div>` : "");
+    const hl = r.highlights || [];
+    body.innerHTML = (hl.length ? `<div class="muted" style="margin:4px 0 0 6px;font-size:11px"
+          title="The fields examiners usually look for first, as stored in the file. Every field is in the categories below.">Highlights</div>
+        <table style="margin-left:6px">${hl.map(x => `<tr><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`).join("")}</table>` : "")
+      + `<input id="mExifFind" type="search" placeholder="Filter fields (name or value)…"
+          style="width:calc(100% - 12px);margin:6px 0 2px 6px;box-sizing:border-box">`
+      + `<div id="mExifNone" class="muted" style="display:none;margin:4px 6px">No field matches.</div>`
+      + [...cats.values()].filter(c => c.groups.size).map(c => {
+        const n = [...c.groups.values()].reduce((a, xs) => a + xs.length, 0);
+        return `<details class="exc" style="margin:4px 0 0 6px"><summary style="font-weight:600" title="${esc(c.help)}">${esc(c.label)} (${n})</summary>
+          ${[...c.groups].map(groupHtml).join("")}</details>`;
+      }).join("") + (r.version ? `<div class="muted" style="font-size:11px;margin-top:4px">Read by ExifTool ${esc(r.version)}</div>` : "");
+    // typing filters every field by name or value, opening the sections that match;
+    // clearing it puts every section back as it was (collapsed)
+    $("#mExifFind").addEventListener("input", e => {
+      const q = e.target.value.trim().toLowerCase();
+      let any = false;
+      body.querySelectorAll("details.exc").forEach(c => {
+        let inCat = false;
+        c.querySelectorAll("details.exg").forEach(g => {
+          let inGrp = false;
+          g.querySelectorAll("tr[data-find]").forEach(tr => {
+            const hit = !q || tr.dataset.find.includes(q);
+            tr.style.display = hit ? "" : "none";
+            inGrp = inGrp || hit;
+          });
+          g.style.display = inGrp ? "" : "none";
+          g.open = !!q && inGrp;
+          inCat = inCat || inGrp;
+        });
+        c.style.display = inCat ? "" : "none";
+        c.open = !!q && inCat;
+        any = any || inCat;
+      });
+      $("#mExifNone").style.display = q && !any ? "" : "none";
+    });
   };
   box.addEventListener("toggle", () => {
     try { localStorage.setItem(EXIF_OPEN_KEY, box.open ? "1" : "0"); } catch (e) { /* not kept */ }
