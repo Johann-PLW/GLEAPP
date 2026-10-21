@@ -29,6 +29,7 @@ from .hashing import crypto_hashes, perceptual_hashes
 from .ingest import _head, is_document, scan, sniff_kind
 from .media import extract_video_isolated, make_image_thumb
 from .metadata import extract_image
+from . import videometa
 
 # process()'s "reason" values, purely to label its audit-log entry so the
 # processing-history panel can tell an ingest-time run apart from a scoped
@@ -348,6 +349,8 @@ def _process_one_at(thumb_dir, row, local: str, *, force: bool, keyframes: int,
                 im.close()
 
         elif kind == "video":
+            # read first: a clip that will not decode still has its location
+            _add_video_metadata(upd, decode_path, existing_dt)
             # isolated: a corrupt/partial clip can hard-crash the decoder
             res = extract_video_isolated(decode_path, thumb_dir, count=keyframes,
                                          screen=screen)
@@ -588,6 +591,17 @@ def _video_failure_reason(path: str, fallback: str) -> str:
     return fallback
 
 
+def _add_video_metadata(upd: dict, path: str, existing_dt) -> None:
+    """The location and capture date a video carries in its own metadata
+    (``gleapp/videometa.py``), added to ``upd``. A capture date already on the row,
+    such as one a Project VIC import supplied, is kept."""
+    vm = videometa.read(path)
+    if vm["gps_lat"] is not None:
+        upd["gps_lat"], upd["gps_lon"] = vm["gps_lat"], vm["gps_lon"]
+    if vm["created_dt"] and not existing_dt:
+        upd["created_dt"] = vm["created_dt"]
+
+
 def _video_result_to_payload(row, res: dict | None, *, screen: bool,
                              local: str | None = None) -> dict:
     """``local`` is where the bytes were read from, when that is not the registered
@@ -606,6 +620,8 @@ def _video_result_to_payload(row, res: dict | None, *, screen: bool,
             err = imaging.scrub_local_paths(str(exc), row["path"]) or type(exc).__name__
             return {"id": fid, "status": "error",
                     "fields": {**upd, "error": err[:300]}, "keyframes": []}
+    # read first: a clip that will not decode still has its location
+    _add_video_metadata(upd, src, existing_dt)
     if res is None:
         upd["error"] = _video_failure_reason(
             src, "video could not be decoded (corrupt or unsupported)")
