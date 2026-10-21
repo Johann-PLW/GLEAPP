@@ -1142,6 +1142,7 @@ The *Sharing* section of the Hash stash panel:
 | **Export a backup...** | writes a portable `hash-stash-<date>.hstash` into `%LOCALAPPDATA%\GLEAPP\hashsets\`; hand it to a colleague |
 | **Export CSV...** | same, as a `md5,category,source` CSV |
 | **Merge external hash stash...** | folds another `.hstash` or `.csv` stash into yours (an older `.gleapp`-named export still works too); the more-severe code wins on any overlapping hash |
+| **Merge external pre-categorized hash set...** | folds in MD5s another tool has already categorized, from a JSON file of records that each carry an `MD5` and a numeric `Category`. Categories 1–3 are kept; how many records fell outside them, or had no MD5, is reported. A file with no such records is refused |
 | **Use a shared hash stash...** | point GLEAPP at one stash file on a shared / network drive; the whole team reads and writes the same stash |
 | **Back to my own** | revert to your per-user `stash.hstash` (the shared file is left untouched) |
 
@@ -1160,6 +1161,7 @@ gleapp stash                       # show totals and the file location
 gleapp -c <case dir> stash --add   # add that case's category 1-3 MD5s
 gleapp stash --export stash.hstash # portable copy  (.csv also works)
 gleapp stash --merge theirs.hstash # fold in a colleague's stash
+gleapp stash --merge-precategorized hashes.json   # MD5s another tool categorized
 gleapp stash --set-path "\\nas\team\stash.hstash"   # use a shared file
 gleapp stash --set-path ""         # back to the per-user default
 gleapp stash --clear

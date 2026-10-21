@@ -1250,6 +1250,23 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                               f"{Path(src).name}: +{res['added']} new, {res['total']} total")
         return jsonify({"ok": True, **res})
 
+    @app.post("/api/stash/merge-precategorized")
+    def stash_merge_precategorized():
+        from .. import stash
+        src = str((request.get_json(force=True) or {}).get("path", "")).strip()
+        if not src or not Path(src).is_file():
+            abort(400, description=f"file not found: {src}")
+        try:
+            res = stash.merge_precategorized(src)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            abort(400, description=f"could not read {Path(src).name}: {exc}")
+        case = state["case"]
+        if case is not None:
+            case.db.audit_log(case.examiner, "stash_merge_precategorized",
+                              f"{Path(src).name}: +{res['added']} new, {res['total']} total, "
+                              f"{res['skipped_category']} outside categories 1-3")
+        return jsonify({"ok": True, **res})
+
     @app.post("/api/redup")
     def run_redup():
         if state["case"] is None:

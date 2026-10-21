@@ -619,6 +619,13 @@ def cmd_stash(args: argparse.Namespace) -> int:
         _p(f"Wrote the stash to {dest}")
         return 0
 
+    if args.merge_precategorized:
+        res = stash.merge_precategorized(Path(args.merge_precategorized))
+        _p(f"Merged {Path(args.merge_precategorized).name}: +{res['added']:,} new, "
+           f"{res['total']:,} total; {res['skipped_category']:,} of {res['records']:,} "
+           f"records were outside categories 1-3 and {res['skipped_no_md5']:,} had no MD5.")
+        return 0
+
     if args.merge:
         res = stash.merge(Path(args.merge))
         _p(f"Merged {Path(args.merge).name}: +{res['added']:,} new, "
@@ -1016,6 +1023,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write the stash to FILE (.csv = hash list, else a portable .hstash copy)")
     s.add_argument("--merge", metavar="FILE",
                    help="fold another examiner's stash (.csv, .hstash, or .gleapp) into yours")
+    s.add_argument("--merge-precategorized", metavar="FILE",
+                   help="fold an external pre-categorized hash set (JSON records with "
+                        "MD5 and Category) into yours")
     s.add_argument("--set-path", metavar="PATH", default=None,
                    help="use a different stash file (e.g. on a shared drive); "
                         "pass '' to reset to the per-user default")

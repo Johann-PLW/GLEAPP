@@ -350,3 +350,44 @@ def merge(src: str | Path) -> dict:
                 if cat.isdigit():
                     entries.append((row[0], int(cat), f"merged {src.name}"))
     return add(entries)
+
+
+def merge_precategorized(src: str | Path) -> dict:
+    """Fold an external pre-categorized hash set into the stash: a JSON list of
+    records, each carrying an ``MD5`` and a numeric ``Category``. The records may sit
+    at the top level or under ``value``.
+
+    Only categories 1-3 are kept, as for every stash entry. Returns ``add()``'s
+    result plus ``records``, ``skipped_category`` and ``skipped_no_md5``. Raises
+    ``ValueError`` when no record carries both fields, rather than reporting a
+    merge that added nothing.
+    """
+    from . import jsonstream
+
+    src = Path(src)
+    if not jsonstream.starts_as_json(src):
+        raise ValueError("not a JSON file")
+    label = f"pre-categorized: {src.name}"
+    entries = []
+    records = no_md5 = other_cat = 0
+    for rec in jsonstream.iter_records(src):
+        if not isinstance(rec, dict):
+            continue
+        records += 1
+        low = {str(k).lower(): v for k, v in rec.items()}
+        md5 = normalize_md5(low.get("md5"))
+        try:
+            cat = int(low.get("category"))
+        except (TypeError, ValueError):
+            cat = None
+        if not md5:
+            no_md5 += 1
+        elif cat not in STASH_CATEGORIES:
+            other_cat += 1
+        else:
+            entries.append((md5, cat, label))
+    if not entries and not other_cat:
+        raise ValueError("no records with an MD5 and a Category were found")
+    res = add(entries)
+    res.update(records=records, skipped_category=other_cat, skipped_no_md5=no_md5)
+    return res
