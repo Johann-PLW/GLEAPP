@@ -4185,11 +4185,42 @@ async function pickMany(kind, label) {
 }
 
 /* ---------- ExifTool metadata in the details pane ---------- */
-// Collapsed by default and read only when opened; whether it was left open is
-// remembered for the next file. Each ExifTool group is collapsible on its own.
+// Collapsed by default and read only when opened. Inside: a filter box, then tabs:
+// "Key" (the fields examiners look for first, in plain words) and one tab per
+// category, each a flat table. Whether the section was left open, and which tab,
+// is remembered for the next file.
 const EXIF_OPEN_KEY = "gleapp.exiftoolOpen";
+const EXIF_TAB_KEY = "gleapp.exiftoolTab";
+const EXIF_TAB_SHORT = { exif: "EXIF", gps: "GPS", makernotes: "Maker", xmp: "XMP", iptc: "IPTC",
+  video: "Video", composite: "Calc", file: "File", other: "Other" };
 function exifRemembered() {
   try { return localStorage.getItem(EXIF_OPEN_KEY) === "1"; } catch (e) { return false; }
+}
+function exifTabRemembered() {
+  try { return localStorage.getItem(EXIF_TAB_KEY) || "key"; } catch (e) { return "key"; }
+}
+// The Key tab: ExifTool's highlight fields joined into plain-language rows.
+function exifKeyRows(hl) {
+  const v = Object.fromEntries((hl || []).map(x => [x.tag, x.value]));
+  const rows = [];
+  const add = (label, val) => { if (val) rows.push([label, val]); };
+  // many models already start with the maker ("Canon EOS 5D"): don't say it twice
+  const model = v.Model || "";
+  add("Camera", v.Make && !model.toLowerCase().startsWith(String(v.Make).toLowerCase())
+    ? [v.Make, model].filter(Boolean).join(" ") : model || v.Make);
+  add("Lens", v.LensModel);
+  add("Taken", v.DateTimeOriginal ? `${v.DateTimeOriginal}${v.OffsetTimeOriginal ? " " + v.OffsetTimeOriginal : ""}` : "");
+  if (!v.DateTimeOriginal) add("Created", v.CreateDate);
+  add("Software", v.Software);
+  add("Serial", v.SerialNumber || v.BodySerialNumber || v.InternalSerialNumber);
+  if (v.GPSLatitude && v.GPSLongitude) {
+    const ref = r => r ? " " + String(r).charAt(0) : "";
+    add("GPS", `${v.GPSLatitude}${ref(v.GPSLatitudeRef)}, ${v.GPSLongitude}${ref(v.GPSLongitudeRef)}`);
+  }
+  add("Altitude", v.GPSAltitude);
+  add("Artist", v.Artist);
+  add("Copyright", v.Copyright);
+  return rows;
 }
 function wireExifTool(id) {
   const box = $("#mExif");
@@ -4207,58 +4238,58 @@ function wireExifTool(id) {
       return;
     }
     if (r.error && !(r.fields || []).length) { body.textContent = `ExifTool could not read this file: ${r.error}`; return; }
-    // the export menu's categories, in its order, each holding ExifTool's own groups
-    const cats = new Map((r.categories || []).map(c => [c.key, { label: c.label, help: c.help || "", groups: new Map() }]));
-    for (const x of r.fields || []) {
-      const c = cats.get(x.category) || cats.get("other");
-      if (!c) continue;
-      if (!c.groups.has(x.group)) c.groups.set(x.group, []);
-      c.groups.get(x.group).push(x);
-    }
-    box.querySelector("summary").textContent = `Metadata (ExifTool) · ${(r.fields || []).length} fields`;
+    const fields = r.fields || [];
+    const cats = (r.categories || []).map(c => ({ ...c, rows: fields.filter(x => x.category === c.key) }))
+      .filter(c => c.rows.length);
+    const keyRows = exifKeyRows(r.highlights);
+    box.querySelector("summary").textContent = `Metadata (ExifTool) · ${fields.length} fields`;
     body.classList.remove("muted");
-    const row = x => `<tr data-find="${esc((x.tag + " " + x.value).toLowerCase())}"${x.family === "Composite"
-        ? ' title="Calculated by ExifTool, not stored in the file"' : ""}><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`;
-    const groupHtml = ([g, xs]) => `<details class="exg" style="margin:2px 0 0 12px">
-        <summary class="muted">${esc(g)} (${xs.length})</summary>
-        <table>${xs.map(row).join("")}</table>
-      </details>`;
-    const hl = r.highlights || [];
-    body.innerHTML = (hl.length ? `<div class="muted" style="margin:4px 0 0 6px;font-size:11px"
-          title="The fields examiners usually look for first, as stored in the file. Every field is in the categories below.">Highlights</div>
-        <table style="margin-left:6px">${hl.map(x => `<tr><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`).join("")}</table>` : "")
-      + `<input id="mExifFind" type="search" placeholder="Filter fields (name or value)…"
-          style="width:calc(100% - 12px);margin:6px 0 2px 6px;box-sizing:border-box">`
-      + `<div id="mExifNone" class="muted" style="display:none;margin:4px 6px">No field matches.</div>`
-      + [...cats.values()].filter(c => c.groups.size).map(c => {
-        const n = [...c.groups.values()].reduce((a, xs) => a + xs.length, 0);
-        return `<details class="exc" style="margin:4px 0 0 6px"><summary style="font-weight:600" title="${esc(c.help)}">${esc(c.label)} (${n})</summary>
-          ${[...c.groups].map(groupHtml).join("")}</details>`;
-      }).join("") + (r.version ? `<div class="muted" style="font-size:11px;margin-top:4px">Read by ExifTool ${esc(r.version)}</div>` : "");
-    // typing filters every field by name or value, opening the sections that match;
-    // clearing it puts every section back as it was (collapsed)
-    $("#mExifFind").addEventListener("input", e => {
-      const q = e.target.value.trim().toLowerCase();
-      let any = false;
-      body.querySelectorAll("details.exc").forEach(c => {
-        let inCat = false;
-        c.querySelectorAll("details.exg").forEach(g => {
-          let inGrp = false;
-          g.querySelectorAll("tr[data-find]").forEach(tr => {
-            const hit = !q || tr.dataset.find.includes(q);
-            tr.style.display = hit ? "" : "none";
-            inGrp = inGrp || hit;
-          });
-          g.style.display = inGrp ? "" : "none";
-          g.open = !!q && inGrp;
-          inCat = inCat || inGrp;
-        });
-        c.style.display = inCat ? "" : "none";
-        c.open = !!q && inCat;
-        any = any || inCat;
+    const fieldRow = (x, withCat) => `<tr${x.family === "Composite" ? ' class="exCalc" title="Calculated by ExifTool, not stored in the file"' : ""}>
+        <td title="${esc(x.group)}">${esc(x.tag)}${withCat ? ` <span class="exBadge">${esc(EXIF_TAB_SHORT[x.category] || x.category)}</span>` : ""}</td>
+        <td>${esc(x.value)}</td></tr>`;
+    const tabs = [{ key: "key", short: "Key", label: "Key fields", help: "The fields examiners usually look for first, as stored in the file." },
+      ...cats.map(c => ({ key: c.key, short: EXIF_TAB_SHORT[c.key] || c.label, label: c.label, help: c.help || "" }))];
+    let current = exifTabRemembered();
+    if (!tabs.some(t => t.key === current)) current = "key";
+    body.innerHTML = `
+      <input id="mExifFind" type="search" placeholder="Filter fields (name or value)" class="exFind">
+      <div class="exTabs" role="tablist">${tabs.map(t =>
+        `<button type="button" role="tab" class="exTab" data-tab="${esc(t.key)}" title="${esc(t.label + (t.help ? ": " + t.help : ""))}">${esc(t.short)}</button>`).join("")}</div>
+      <div id="mExifNote" class="muted exNote"></div>
+      <table class="exTable"><tbody id="mExifRows"></tbody></table>
+      <div class="muted exFoot">${fields.length} fields${r.version ? ` · ExifTool ${esc(r.version)}` : ""}</div>`;
+    const rowsEl = $("#mExifRows"), note = $("#mExifNote"), find = $("#mExifFind");
+    const draw = () => {
+      const q = find.value.trim().toLowerCase();
+      body.querySelectorAll(".exTab").forEach(b => {
+        b.classList.toggle("on", !q && b.dataset.tab === current);
+        b.classList.toggle("dim", !!q);
       });
-      $("#mExifNone").style.display = q && !any ? "" : "none";
+      let html = "", msg = "";
+      if (q) {
+        const hits = fields.filter(x => (x.tag + " " + x.value).toLowerCase().includes(q));
+        html = hits.map(x => fieldRow(x, true)).join("");
+        msg = hits.length ? `${hits.length} matching field${hits.length === 1 ? "" : "s"}, from every tab` : "No field matches.";
+      } else if (current === "key") {
+        html = keyRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("");
+        msg = keyRows.length ? "" : "None of the key fields are in this file. The other tabs have everything ExifTool read.";
+      } else {
+        const c = cats.find(c => c.key === current);
+        html = c ? c.rows.map(x => fieldRow(x, false)).join("") : "";
+        msg = current === "composite" ? "Calculated by ExifTool from other fields. Not stored in the file." : "";
+      }
+      rowsEl.innerHTML = html;
+      note.textContent = msg;
+      note.style.display = msg ? "" : "none";
+    };
+    body.querySelectorAll(".exTab").forEach(b => b.onclick = () => {
+      current = b.dataset.tab;
+      try { localStorage.setItem(EXIF_TAB_KEY, current); } catch (e) { /* not kept */ }
+      find.value = "";
+      draw();
     });
+    find.addEventListener("input", draw);
+    draw();
   };
   box.addEventListener("toggle", () => {
     try { localStorage.setItem(EXIF_OPEN_KEY, box.open ? "1" : "0"); } catch (e) { /* not kept */ }
