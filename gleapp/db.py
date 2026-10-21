@@ -296,6 +296,15 @@ CREATE TABLE IF NOT EXISTS file_flags (
     flag_code INTEGER NOT NULL REFERENCES flags(code) ON DELETE CASCADE,
     PRIMARY KEY (file_id, flag_code)
 );
+
+-- ExifTool's full reading of a file, kept once the details pane asked for it
+-- (gleapp/exiftool.py): a JSON list of {group, tag, value}, and the version
+-- that read it.
+CREATE TABLE IF NOT EXISTS exiftool_meta (
+    file_id  INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    version  TEXT,
+    fields   TEXT NOT NULL
+);
 """
 
 # Auto color palette, assigned by creation order (cycles if exhausted).

@@ -1624,6 +1624,9 @@ async function showMeta(id) {
           title="The Exif reading the Project VIC record carries for the file it describes. It is shown as recorded and is not this file's own metadata; a location in it is not drawn on any map.">VIC Exif, as recorded (${vic.exif.length})</summary>
         <table>${vic.exif.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? "")}</td></tr>`).join("")}</table>
       </details>` : ""}
+      ${f.kind !== "archive" ? `<details id="mExif" style="margin-top:8px"><summary class="muted"
+          title="Every field ExifTool reads from this file. Read the first time it is opened and kept in the case.">Metadata (ExifTool)</summary>
+        <div id="mExifBody" class="muted">Loading…</div></details>` : ""}
 
       <div class="muted" style="margin-top:8px">Notes <span id="mNoteState" class="muted" style="font-size:11px"></span></div>
       <textarea id="mNotes" placeholder="autosaves as you type">${esc(f.notes || "")}</textarea>
@@ -1640,6 +1643,7 @@ async function showMeta(id) {
     </div>`;
 
   renderDetailMap(f);
+  wireExifTool(f.id);
   if ($("#mGpsCopy")) $("#mGpsCopy").onclick = async () => {
     try { await navigator.clipboard.writeText(`${f.gps_lat}, ${f.gps_lon}`); toast("Coordinates copied"); }
     catch (e) { toast("Clipboard unavailable; select the text instead"); }
@@ -2719,6 +2723,16 @@ async function openReportDlg() {
   $("#rhBlur").checked = p.blur !== false;
   $("#rhMaps").checked = p.maps !== false;
   $("#rNoMedia").checked = p.no_media === true;
+  // ExifTool metadata: on or off, and which categories of it (all when none saved)
+  $("#rhExif").checked = p.exiftool === true;
+  const exifPicked = new Set(p.exiftool_categories || (p.exiftool_category_options || []).map(o => o.key));
+  $("#rhExifCats").innerHTML = (p.exiftool_category_options || []).map(o =>
+    `<label style="font-size:12px"><input type="checkbox" class="rhExifCat" value="${esc(o.key)}"
+      ${exifPicked.has(o.key) ? "checked" : ""}> ${esc(o.label)}</label>`).join("");
+  const exifCatsState = () => document.querySelectorAll(".rhExifCat")
+    .forEach(c => { c.disabled = !$("#rhExif").checked; });
+  $("#rhExif").onchange = exifCatsState;
+  exifCatsState();
   // a remembered "no images" must not sit unseen in a collapsed section
   if (p.no_media === true) $("#rMediaSec").open = true;
   $("#rhMapsRow").style.display = state.basemap ? "" : "none";
@@ -2814,6 +2828,9 @@ $("#reportGo").onclick = async () => {
   body.full_videos = $("#rhVideo").checked;
   body.blur = $("#rhBlur").checked;
   body.maps = $("#rhMaps").checked;
+  body.exiftool = $("#rhExif").checked;
+  body.exiftool_categories = [...document.querySelectorAll(".rhExifCat:checked")].map(c => c.value);
+  if (body.exiftool && !body.exiftool_categories.length) return toast("Pick at least one ExifTool category");
   body.no_media = $("#rNoMedia").checked;
   closeReportDlg();
   const r = await api("/api/report", {
@@ -4165,6 +4182,52 @@ async function pickMany(kind, label) {
   }
   const typed = await askText(label || "Path to the evidence file (extraction archive, E01, Ex01, AFF, AFF4, DMG, virtual machine disk or raw disk image, or .json job/VIC file, or C4All index .xml):");
   return typed ? [typed] : null;
+}
+
+/* ---------- ExifTool metadata in the details pane ---------- */
+// Collapsed by default and read only when opened; whether it was left open is
+// remembered for the next file. Each ExifTool group is collapsible on its own.
+const EXIF_OPEN_KEY = "gleapp.exiftoolOpen";
+function exifRemembered() {
+  try { return localStorage.getItem(EXIF_OPEN_KEY) === "1"; } catch (e) { return false; }
+}
+function wireExifTool(id) {
+  const box = $("#mExif");
+  if (!box) return;
+  let loaded = false;
+  const load = async () => {
+    if (loaded) return;
+    loaded = true;
+    const body = $("#mExifBody");
+    const r = await api(`/api/file/${id}/exiftool`).catch(() => ({ error: "request failed" }));
+    if (!document.body.contains(body)) return;            // another file opened meanwhile
+    if (r.available === false) { body.textContent = "ExifTool is not available on this computer."; return; }
+    if (r.error && !(r.fields || []).length) { body.textContent = `ExifTool could not read this file: ${r.error}`; return; }
+    // the export menu's categories, in its order, each holding ExifTool's own groups
+    const cats = new Map((r.categories || []).map(c => [c.key, { label: c.label, groups: new Map() }]));
+    for (const x of r.fields || []) {
+      const c = cats.get(x.category) || cats.get("other");
+      if (!c) continue;
+      if (!c.groups.has(x.group)) c.groups.set(x.group, []);
+      c.groups.get(x.group).push(x);
+    }
+    box.querySelector("summary").textContent = `Metadata (ExifTool) · ${(r.fields || []).length} fields`;
+    body.classList.remove("muted");
+    const groupHtml = ([g, xs]) => `<details style="margin:2px 0 0 12px">
+        <summary class="muted">${esc(g)} (${xs.length})</summary>
+        <table>${xs.map(x => `<tr><td>${esc(x.tag)}</td><td style="word-break:break-word">${esc(x.value)}</td></tr>`).join("")}</table>
+      </details>`;
+    body.innerHTML = [...cats.values()].filter(c => c.groups.size).map(c => {
+      const n = [...c.groups.values()].reduce((a, xs) => a + xs.length, 0);
+      return `<details style="margin:4px 0 0 6px"><summary style="font-weight:600">${esc(c.label)} (${n})</summary>
+        ${[...c.groups].map(groupHtml).join("")}</details>`;
+    }).join("") + (r.version ? `<div class="muted" style="font-size:11px;margin-top:4px">Read by ExifTool ${esc(r.version)}</div>` : "");
+  };
+  box.addEventListener("toggle", () => {
+    try { localStorage.setItem(EXIF_OPEN_KEY, box.open ? "1" : "0"); } catch (e) { /* not kept */ }
+    if (box.open) load();
+  });
+  if (exifRemembered()) box.open = true;                  // fires toggle, which loads
 }
 
 /* ---------- RAID member images ---------- */
