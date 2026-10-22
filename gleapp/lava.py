@@ -1271,10 +1271,8 @@ def _artifact_vic_hashset_matches(writer: "_Writer", rows: list[dict],
             "rows here until it is imported again, and a file matched before the "
             "record named its own set and category shows the file's until the case is "
             "re-checked. An artifact with no rows is left "
-            "out of this report. Reference: fjollberg/GriffeyePS, "
-            "'ProjectVicDataModel.2.0.xml, Exif entity', https://github.com/fjollberg/GriffeyePS/blob/"
-            "cc4fb827a5dca2e3c194fb6e749b9cb62a58ac8a/Modules/GriffeyeJsonParser/Doc/"
-            "ProjectVicDataModel.2.0.xml#L47-L56"))
+            "out of this report. Reference: the Project VIC 2.0 data model, "
+            "ProjectVicDataModel.2.0.xml, Exif entity."))
 
 
 def _artifact_hashset_hits(writer: "_Writer", rows: list[dict],
