@@ -70,7 +70,9 @@ case.</p>
           extent files beside it), or a raw image (one <code>.img</code>/<code>.dd</code>, or any
           segment of a split set such as <code>.001</code>, <code>.002</code>). Raw
           images are identified by content, not extension. A split set with a missing
-          segment is refused and the gap is named.
+          segment is refused and the gap is named, and so is one whose segments before the
+          last are not one size (a segment cut short puts every byte after it at the wrong
+          offset); join such a set into one file if it is whole as it is.
             <ul>
               <li>Filesystems are walked file by file, so each file keeps the name,
               path and dates the filesystem recorded. Supported: ext2/3/4, F2FS,

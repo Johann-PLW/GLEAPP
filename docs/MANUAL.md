@@ -48,7 +48,9 @@ your user settings, not in any case.
       `.qcow2`, with any parent or extent files beside it), or a raw image (one
       `.img`/`.dd`, or any segment of a split set such as `.001`, `.002`). Raw
       images are identified by content, not extension. A split set with a
-      missing segment is refused and the gap is named.
+      missing segment is refused and the gap is named, and so is one whose segments
+      before the last are not one size (a segment cut short puts every byte after it
+      at the wrong offset); join such a set into one file if it is whole as it is.
       - An encrypted Apple disk image or sparse bundle (AES-128 or AES-256, as
         `hdiutil` writes them), an AFF encrypted with a passphrase, or an E01,
         SMART or raw set FTK Imager encrypted with AD encryption (point at its

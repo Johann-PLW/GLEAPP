@@ -597,7 +597,7 @@ def _is_raw_image(path: Path) -> bool:
     is wrong with the set rather than registering one segment as a lone file.
     """
     try:
-        qnxprobe.split_segments(os.fspath(path))
+        _split_segments(os.fspath(path))
     except qnxprobe.SplitImageError:
         return True
     try:
@@ -1340,6 +1340,29 @@ def _luks_data(image, regions, ss) -> list[tuple[int, int, str]]:
 _IMAGE_ERRORS = (OSError, ewfprobe.EwfError, qnxprobe.SplitImageError)
 
 
+def _split_segments(path: str) -> list:
+    """The segments of the split set ``path`` belongs to, as qnxprobe joins them.
+
+    Since qnxprobe 1.75 a set whose segments before the last are not one size is
+    refused: a segment cut short or padded puts every byte after it at the wrong
+    offset. qnxprobe's message offers its own --allow-unequal-segments, which
+    GLEAPP does not have, so the refusal is said here with what to do in GLEAPP.
+    """
+    try:
+        return qnxprobe.split_segments(path)
+    except qnxprobe.SplitSegmentSizeError as exc:
+        odd = ", ".join(f"{os.path.basename(exc.segments[i])} is {exc.sizes[i]:,} bytes"
+                        for i in exc.odd[:3])
+        raise qnxprobe.SplitImageError(
+            f"{os.path.basename(path)} is one segment of a split image whose segments "
+            f"are not one size: {os.path.basename(exc.segments[0])} is "
+            f"{exc.sizes[0]:,} bytes and {odd}. Not read: a segment cut short or padded "
+            f"would put every byte after it at the wrong offset. Compare the segments "
+            f"with the acquisition's own record. If the set is whole as it is, join the "
+            f"segments into one file in order and add that file (or relink the source "
+            f"to it).") from None
+
+
 class _RawImage:
     """A raw disk image, one file or a numbered split set, with the surface the
     E01 reader offers: ``media_size``, ``paths``, ``stored_hashes``, and seek,
@@ -1357,7 +1380,7 @@ class _RawImage:
 
     def __init__(self, path) -> None:
         path = os.fspath(path)
-        segments = qnxprobe.split_segments(path)
+        segments = _split_segments(path)
         self.paths = [os.fspath(p) for p in segments] or [path]
         self._fh = (qnxprobe.SegmentedImage(segments) if segments
                     else open(path, "rb"))            # pylint: disable=consider-using-with
@@ -1551,7 +1574,7 @@ def _segment_count(path: str, fmt: str) -> int:
         # and parents only once read, so ask the image already open rather than
         # read the set again.
         return len(_open_image(path)[0].paths)
-    return len(qnxprobe.split_segments(path)) or 1
+    return len(_split_segments(path)) or 1
 
 
 def _logical_refusal(name: str, kind: str, encrypted: bool = False) -> str:
@@ -4113,7 +4136,9 @@ def disk_identity(path) -> tuple[int, int]:
             elif kind == "UDIF":
                 first = (ewfprobe.udif_segments(p) or [p])[0]
             elif kind not in _ACQUISITIONS:
-                first = (qnxprobe.split_segments(p) or [p])[0]
+                # only the first segment is asked for, so a set of unequal segments
+                # is one disk here too; reading it is what refuses it (_split_segments)
+                first = (qnxprobe.split_segments(p, allow_unequal=True) or [p])[0]
         except (qnxprobe.SplitImageError, ewfprobe.EwfError, OSError):
             first = p
     st = os.stat(os.path.realpath(os.fspath(first)))
