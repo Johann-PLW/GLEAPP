@@ -416,7 +416,8 @@ others still register: one unreadable filesystem must not cost the rest of an im
 
 A split set is joined by `qnxprobe.split_segments` from the numbering beside whichever
 segment was given, and a set that cannot be joined as it stands (a hole, no first segment,
-mixed digit widths) is refused with the gap named, never joined around: a join with a gap
+mixed digit widths, and since qnxprobe 1.75 segments before the last that are not one size)
+is refused with the gap named, never joined around: a join with a gap
 reads every volume past it at the wrong offset. `_RawImage` wraps the file or the joined
 set with the surface `EwfImage` offers (`media_size`, `paths`, `stored_hashes`, seek and
 read), so every walk, carve, recovery, relink and unstage path is one code path for both

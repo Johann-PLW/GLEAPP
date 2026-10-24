@@ -188,6 +188,28 @@ def test_a_split_set_with_a_hole_is_refused_with_the_gap_named(tmp_path):
         case.close()
 
 
+def test_a_split_set_with_a_short_middle_segment_is_refused_saying_what_to_do(tmp_path):
+    """qnxprobe 1.75 refuses a set whose segments before the last are not one size,
+    since a segment cut short puts every byte after it at the wrong offset. Its own
+    message offers --allow-unequal-segments, which GLEAPP has not got, so GLEAPP says
+    to join the segments by hand. Both segments still name one disk."""
+    segs = _split(tmp_path / "ev", "cut.img", _volume(), parts=3)
+    segs[1].write_bytes(segs[1].read_bytes()[:-512])
+    assert archive.archive_format(segs[0]) == archive.FORMAT_RAW   # so the ingest can say why
+    assert archive.disk_identity(segs[0]) == archive.disk_identity(segs[2])
+    case = open_case(tmp_path / "c", create=True, examiner="t")
+    try:
+        sources, _ = parse_source_spec(segs[0])
+        with pytest.raises(Exception) as caught:
+            ingest_sources(case, sources)
+    finally:
+        case.close()
+    message = str(caught.value)
+    assert "cut.img.002 is" in message and "not one size" in message
+    assert "join the segments into one file in order" in message
+    assert "--allow-unequal-segments" not in message
+
+
 def test_a_lone_first_segment_says_which_volume_is_not_all_here(tmp_path):
     """A partition table that reaches past the end of the file is what a split
     set missing its later segments looks like, and nothing else in a probe can
