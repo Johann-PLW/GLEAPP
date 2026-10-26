@@ -713,6 +713,31 @@
       </div>
     </details>
 
+    <details class="fsec" data-sec="c2pa">
+      <summary>Content Credentials <span class="fdot"></span></summary>
+      <div class="fbody">
+        <label class="flabel" title="What a picture or video declares about its own provenance: a C2PA manifest store, or an IPTC digital source type in its XMP. Nothing is verified: a signer is as the file states. A file with none says nothing about whether it is authentic; many platforms and tools remove them. Not read: the files have not been read yet; use Read Content Credentials below.">Credentials
+          <select id="fc2pa">
+            <option value="">All</option>
+            <option value="declared">Any declared (C2PA or XMP)</option>
+            <option value="c2pa">C2PA manifest</option>
+            <option value="xmp">XMP source type only</option>
+            <option value="none">None found</option>
+            <option value="unsettled">Not settled (read stopped early)</option>
+            <option value="unread">Not read</option>
+          </select></label>
+        <label class="flabel" title="Yes for the IPTC codes whose definition names generative AI (trainedAlgorithmicMedia, compositeWithTrainedAlgorithmicMedia, compositeSynthetic), read over every manifest in the store and every XMP statement, so an AI ingredient counts. No for capture, scan, human edit, screen capture and software image codes. Unknown for any other code. A declaration, not a finding.">AI declared
+          <select id="fc2paAi">
+            <option value="">All</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+            <option value="unknown">Unknown</option>
+          </select></label>
+        <div id="c2paStatus" class="fnote"></div>
+        <button type="button" id="btnC2pa" class="btn" style="margin-top:6px">Read Content Credentials</button>
+      </div>
+    </details>
+
     <details class="fsec" data-sec="arch" hidden>
       <summary>Archives and documents <span class="fdot"></span></summary>
       <div class="fbody">
@@ -873,6 +898,7 @@
     <div class="muted" id="optExpandWarn" style="display:none;font-size:11px;margin:-2px 0 6px 22px;color:var(--warn)">&#9888; Expanding archives will add time to processing.</div>
     <label title="Open each PDF, HTML page, MHTML (.mht) and Safari web archive found in the sources and register the images and videos inside it. A JPEG or JPEG 2000 in a PDF, and anything embedded in a web page, comes out byte for byte; any other PDF image is rebuilt from its pixels as a PNG (named _rebuilt), so its hashes are not an original file's. Images under 32 pixels on a side are left out. Off, these documents are not kept in the case."><input type="checkbox" id="optDocs"> Extract media from documents (PDF, HTML, MHTML, web archive)</label>
     <label title="Disk images only (E01 or raw). After walking the filesystems, recover deleted media: first from deleted records (NTFS MFT, FAT32 and exFAT directory entries, and the nodes YAFFS2, JFFS2 and UBIFS leave on flash), which brings a deleted file back with its real name and reaches resident NTFS files a carve cannot, then by carving the space no volume claims for signatures (a carved file has no name, path or date of its own). Carving reads the whole free area, so it adds time. You can also run this later from the Source panel."><input type="checkbox" id="optCarve"> Recover media (filesystem records and carving)</label>
+    <label title="After processing, read what each picture and video declares about its own provenance: a C2PA manifest store (who signed it, with what tool, its actions and digital source types) and an IPTC digital source type in XMP. Nothing is verified. Off, nothing is read; you can read them later from the Content Credentials section of the sidebar."><input type="checkbox" id="optC2pa"> Read Content Credentials (C2PA)</label>
     <label>Video preview key frames: <span id="kfv">6</span>
       <input type="range" id="optKf" min="2" max="16" step="1" value="6" style="width:100%"></label>
     <label title="Off, an extraction archive or acquisition is read in place and the case stays small; the file must stay where it is. On, the media is copied out so the case stands alone. A compressed tar is always copied out."><input type="checkbox" id="optStage"> Copy media out of extraction/acquisition into the case</label>
@@ -965,6 +991,12 @@
       file's card; files not read yet are read during the export, which takes longer and makes
       the report larger)</span></label>
     <div id="rhExifCats" style="margin:6px 0 0 22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 12px"></div>
+    </details>
+    <details class="rsec"><summary>Content Credentials</summary>
+    <label><input type="checkbox" id="rhC2pa"> Include Content Credentials
+      <span class="muted" style="font-size:11px">(what each picture and video declares about
+      its provenance, collapsed on its card, as the Content Credentials pass read it; nothing is
+      read during the export, and a file not read says so)</span></label>
     </details>
     <details class="rsec"><summary>Report header <span class="muted" style="font-size:11px;font-weight:400">— saved with the case</span></summary>
     <div class="rgrid">
@@ -1063,6 +1095,7 @@
   <div class="muted" id="aeExpandWarn" style="display:none;font-size:11px;margin:-2px 0 6px 22px;color:var(--warn)">&#9888; Expanding archives will add time to processing.</div>
   <label title="Open each PDF, HTML page, MHTML (.mht) and Safari web archive found in the sources and register the images and videos inside it. A JPEG or JPEG 2000 in a PDF, and anything embedded in a web page, comes out byte for byte; any other PDF image is rebuilt from its pixels as a PNG (named _rebuilt), so its hashes are not an original file's. Images under 32 pixels on a side are left out. Off, these documents are not kept in the case."><input type="checkbox" id="aeDocs"> Extract media from documents (PDF, HTML, MHTML, web archive)</label>
   <label title="Disk images only (E01 or raw). After walking the filesystems, recover deleted media from deleted records and by carving unclaimed space. You can also run this later from the Source panel."><input type="checkbox" id="aeCarve"> Recover deleted media (disk image sources only)</label>
+  <label title="After processing, read the Content Credentials (C2PA) and IPTC digital source type of every picture and video not read yet. Nothing is verified."><input type="checkbox" id="aeC2pa"> Read Content Credentials (C2PA)</label>
   <label>Video preview key frames: <span id="aeKfv">6</span>
     <input type="range" id="aeKf" min="2" max="16" step="1" value="6" style="width:100%"></label>
   <div class="row" style="margin-top:14px;display:flex;gap:6px">

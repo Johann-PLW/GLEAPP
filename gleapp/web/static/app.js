@@ -247,6 +247,8 @@ function filterParams() {
   if ($("#fflag").value !== "any") p.set("flag", $("#fflag").value);
   if ($("#fsrc").value) p.set("source", $("#fsrc").value);
   if ($("#forigin").value) p.set("origin", $("#forigin").value);
+  if ($("#fc2pa").value) p.set("c2pa", $("#fc2pa").value);
+  if ($("#fc2paAi").value) p.set("c2pa_ai", $("#fc2paAi").value);
   if ($("#finarch").checked) p.set("in_archive", "1");
   if ($("#findoc").checked) p.set("in_document", "1");
   if ($("#fdup").value) p.set("hasdup", $("#fdup").value);
@@ -1627,6 +1629,9 @@ async function showMeta(id) {
       ${f.kind !== "archive" ? `<details id="mExif" style="margin-top:8px"><summary class="muted"
           title="Every field ExifTool reads from this file. Read the first time it is opened and kept in the case.">Metadata (ExifTool)</summary>
         <div id="mExifBody" class="muted">Loading…</div></details>` : ""}
+      ${f.kind === "image" || f.kind === "video" ? `<details id="mC2pa" style="margin-top:8px"><summary class="muted"
+          title="What this file declares about its own provenance: a C2PA manifest store, or an IPTC digital source type in its XMP, as the Content Credentials pass read it. Nothing is verified.">Content Credentials</summary>
+        <div id="mC2paBody" class="muted">Loading…</div></details>` : ""}
 
       <div class="muted" style="margin-top:8px">Notes <span id="mNoteState" class="muted" style="font-size:11px"></span></div>
       <textarea id="mNotes" placeholder="autosaves as you type">${esc(f.notes || "")}</textarea>
@@ -1644,6 +1649,7 @@ async function showMeta(id) {
 
   renderDetailMap(f);
   wireExifTool(f.id);
+  wireC2pa(f.id);
   if ($("#mGpsCopy")) $("#mGpsCopy").onclick = async () => {
     try { await navigator.clipboard.writeText(`${f.gps_lat}, ${f.gps_lon}`); toast("Coordinates copied"); }
     catch (e) { toast("Clipboard unavailable; select the text instead"); }
@@ -2306,7 +2312,7 @@ document.addEventListener("keydown", e => {
 
 /* ---------- filter wiring ---------- */
 // #fsort has its own handler (it maps to state.sortCol/Dir), so it's not here
-["#fq", "#fkind", "#fcat", "#fflag", "#fsrc", "#forigin", "#finarch", "#findoc", "#fdup", "#ffaces", "#fgps",
+["#fq", "#fkind", "#fcat", "#fflag", "#fsrc", "#forigin", "#fc2pa", "#fc2paAi", "#finarch", "#findoc", "#fdup", "#ffaces", "#fgps",
  "#fhit", "#fhashset", "#fhidegood", "#ferr", "#fskin", "#fcollapse", "#fdfrom", "#fdto", "#fdnone"].forEach(s => {
   const el = $(s);
   el.addEventListener(s === "#fq" ? "input" : "change", debounce(reload, 250));
@@ -2327,6 +2333,7 @@ const SEC_ACTIVE = {
   date:   () => !!($("#fdfrom").value || $("#fdto").value) || $("#fdnone").checked,
   loc:    () => $("#fgps").checked,
   carve:  () => !!$("#forigin").value,
+  c2pa:   () => !!($("#fc2pa").value || $("#fc2paAi").value),
   arch:   () => $("#finarch").checked || $("#findoc").checked,
 };
 // Each active filter drives a removable chip under "N filters" - "Clear"
@@ -2353,6 +2360,12 @@ const FILTER_DEFS = [
   { active: () => !!$("#forigin").value,
     label: () => `How recovered: ${esc($("#forigin").selectedOptions[0].textContent)}`,
     clear: () => { $("#forigin").value = ""; } },
+  { active: () => !!$("#fc2pa").value,
+    label: () => `Content Credentials: ${esc($("#fc2pa").selectedOptions[0].textContent)}`,
+    clear: () => { $("#fc2pa").value = ""; } },
+  { active: () => !!$("#fc2paAi").value,
+    label: () => `AI declared: ${esc($("#fc2paAi").selectedOptions[0].textContent)}`,
+    clear: () => { $("#fc2paAi").value = ""; } },
   { active: () => !!$("#fhashset").value,
     label: () => `Known hashes: ${esc($("#fhashset").selectedOptions[0].textContent)}`,
     clear: () => { $("#fhashset").value = ""; } },
@@ -2585,6 +2598,7 @@ async function refreshContext() {
   refreshSimIndexInfo();
   updateArchInfo(c.archives); updateContainerCounts(c.containers);
   updateKnownHash(c.known_hash);
+  updateC2paInfo(c.c2pa);
   const src = $("#fsrc"), have = new Set([...src.options].map(o => o.value));
   (c.sources || []).forEach(s => {
     if (!have.has(s)) src.insertAdjacentHTML("beforeend", `<option>${esc(s)}</option>`);
@@ -2606,6 +2620,7 @@ $("#btnClearFilters").onclick = () => {
   $("#fflag").value = "any";
   $("#fsrc").value = "";
   $("#forigin").value = "";
+  $("#fc2pa").value = ""; $("#fc2paAi").value = "";
   $("#finarch").checked = false;
   $("#findoc").checked = false;
   $("#fdup").value = "";
@@ -2725,6 +2740,7 @@ async function openReportDlg() {
   $("#rNoMedia").checked = p.no_media === true;
   // ExifTool metadata: on or off, and which categories of it (all when none saved)
   $("#rhExif").checked = p.exiftool === true;
+  $("#rhC2pa").checked = p.c2pa === true;
   const exifPicked = new Set(p.exiftool_categories || (p.exiftool_category_options || []).map(o => o.key));
   $("#rhExifCats").innerHTML = (p.exiftool_category_options || []).map(o =>
     `<label style="font-size:12px" title="${esc(o.help || "")}"><input type="checkbox" class="rhExifCat" value="${esc(o.key)}"
@@ -2829,6 +2845,7 @@ $("#reportGo").onclick = async () => {
   body.blur = $("#rhBlur").checked;
   body.maps = $("#rhMaps").checked;
   body.exiftool = $("#rhExif").checked;
+  body.c2pa = $("#rhC2pa").checked;
   body.exiftool_categories = [...document.querySelectorAll(".rhExifCat:checked")].map(c => c.value);
   if (body.exiftool && !body.exiftool_categories.length) return toast("Pick at least one ExifTool category");
   body.no_media = $("#rNoMedia").checked;
@@ -3641,7 +3658,7 @@ const HIST_RUN_ACTIONS = new Set([
   "ingest", "ingest-archive", "process", "screen_pass", "rematch_hashes", "redup",
   "hashset_import", "hashset_remove", "import_vic", "export_vic",
   "carve-source", "stage-source", "unstage-source", "relink-source", "relink-folder",
-  "snapshot", "restore_snapshot",
+  "snapshot", "restore_snapshot", "c2pa_read",
 ]);
 // GLEAPP-triggered actions (a timer, a close-time save) read this exact actor
 // string from the backend (gleapp.db.TOOL_ACTOR) - anything else is a name an
@@ -3664,7 +3681,7 @@ const ACTION_LABELS = {
   category_reorder: "Categories reordered", redup: "Re-scanned for duplicates",
   set_timezone: "Timezone changed", set_use_stash: "Hash stash matching toggled",
   stash_add: "Added to hash stash", stash_clear: "Hash stash cleared",
-  stash_merge: "Hash stash merged",
+  stash_merge: "Hash stash merged", c2pa_read: "Content Credentials read",
 };
 // process()'s "scope" -> a name worth reading, rather than the internal reason.
 const PROCESS_SCOPE_LABELS = {
@@ -4030,6 +4047,7 @@ $("#btnAddEvidence").onclick = () => {
   $("#aeScreen").checked = true;
   $("#aeStage").checked = false;
   $("#aeCarve").checked = false;
+  $("#aeC2pa").checked = false;
   $("#aeExpand").checked = false;
   $("#aeExpandWarn").style.display = "none";
   $("#aeDocs").checked = false;
@@ -4055,6 +4073,7 @@ $("#aeGo").onclick = async () => {
     spec: specs[0] || null, sources: folders,
     options: { screen: $("#aeScreen").checked, keyframes: +$("#aeKf").value,
                stage: $("#aeStage").checked, carve: $("#aeCarve").checked,
+               c2pa: $("#aeC2pa").checked,
                expand_archives: $("#aeExpand").checked,
                expand_documents: $("#aeDocs").checked }
   });
@@ -4234,6 +4253,44 @@ function exifKeyRows(hl) {
   add("Copyright", v.Copyright);
   return rows;
 }
+const C2PA_OPEN_KEY = "gleapp.c2paOpen";
+// The details pane's Content Credentials section: what the read pass kept for this
+// file, grouped as the report card shows it. Nothing is read from here.
+function wireC2pa(id) {
+  const box = $("#mC2pa");
+  if (!box) return;
+  let loaded = false;
+  const load = async () => {
+    if (loaded) return;
+    loaded = true;
+    const body = $("#mC2paBody");
+    const r = await api(`/api/file/${id}/c2pa`).catch(() => ({ error: "request failed" }));
+    if (!document.body.contains(body)) return;            // another file opened meanwhile
+    if (r.error) { body.textContent = `Could not load: ${r.error}`; return; }
+    const label = (r.credential_labels || {})[r.read ? r.credentials : ""] || "";
+    box.querySelector("summary").textContent = `Content Credentials · ${label}`;
+    if (!r.read) {
+      body.textContent = "Not read yet. Use Read Content Credentials in the sidebar's "
+        + "Content Credentials section to read every picture and video not read.";
+      return;
+    }
+    body.classList.remove("muted");
+    const help = (r.credential_help || {})[r.credentials] || "";
+    body.innerHTML = (r.groups || []).map(([title, rows]) =>
+      `<div class="muted" style="margin-top:6px">${esc(title)}</div>
+       <table class="exTable"><tbody>${rows.map(([k, v]) =>
+         `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>`).join("")
+      + `<div class="muted exFoot" title="${esc(r.ai_rule || "")}">${esc(help)} ${esc(r.caveat || "")}</div>`;
+  };
+  box.addEventListener("toggle", () => {
+    try { localStorage.setItem(C2PA_OPEN_KEY, box.open ? "1" : "0"); } catch (e) {}
+    if (box.open) load();
+  });
+  let remembered = false;
+  try { remembered = localStorage.getItem(C2PA_OPEN_KEY) === "1"; } catch (e) {}
+  if (remembered) box.open = true;   // fires toggle, which loads
+}
+
 function wireExifTool(id) {
   const box = $("#mExif");
   if (!box) return;
@@ -4707,7 +4764,7 @@ async function pollJob() {
   }
   // Open the gallery as soon as files exist — the user reviews already-processed
   // files while the rest process, with a live progress bar at the bottom.
-  if (j.stage === "process" || j.stage === "done" || j.stage === "carve" ||
+  if (j.stage === "process" || j.stage === "done" || j.stage === "carve" || j.stage === "c2pa" ||
       (j.stage === "ingest" && j.done > 0)) {
     $("#jobMsg").textContent = "Opening case…";
     setTimeout(() => location.reload(), 400);
@@ -4770,6 +4827,7 @@ $("#createGo").onclick = async () => {
     spec: specs[0] || null, sources: folders,
     options: { screen: $("#optScreen").checked, keyframes: +$("#optKf").value,
                stage: $("#optStage").checked, carve: $("#optCarve").checked,
+               c2pa: $("#optC2pa").checked,
                expand_archives: $("#optExpand").checked,
                expand_documents: $("#optDocs").checked }
   });
@@ -5051,6 +5109,38 @@ function renderSourcePanel(list) {
 }
 
 /* ---------- Carving section (disk images only: E01 or raw) ---------- */
+// The Content Credentials section: how many pictures and videos have been read and
+// what was found, and the button that reads the rest (or all of them again).
+function updateC2paInfo(c) {
+  const el = $("#c2paStatus"), b = $("#btnC2pa");
+  if (!el || !c) return;
+  const n = (x) => (x || 0).toLocaleString();
+  const read = (c.media || 0) - (c.unread || 0);
+  el.innerHTML = !c.media ? "No pictures or videos in the case."
+    : !read ? `Not read for any of the ${n(c.media)} pictures and videos.`
+    : `${n(read)} of ${n(c.media)} read · ${n(c.c2pa)} C2PA · ${n(c.xmp)} XMP only`
+      + ` · ${n(c.none)} none · ${n(c.unsettled)} not settled`
+      + (c.ai_yes ? ` · <b>${n(c.ai_yes)} AI declared</b>` : "");
+  b.textContent = c.unread ? `Read Content Credentials (${n(c.unread)} not read)`
+    : "Read Content Credentials again";
+  b.disabled = !c.media;
+  b.dataset.reread = c.unread ? "" : "1";
+}
+$("#btnC2pa").onclick = async () => {
+  const reread = $("#btnC2pa").dataset.reread === "1";
+  if (!await askConfirm((reread ? "Read every picture and video again" : "Read the pictures and videos not read yet")
+    + " for Content Credentials (C2PA) and an IPTC digital source type?\n\n"
+    + "Nothing is verified: a signer is as the file states, and an AI reading is a "
+    + "declaration, not a finding.")) return;
+  const r = await api("/api/c2pa", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reread }),
+  }).catch(() => ({ error: true, message: "request failed" }));
+  if (r.error) { toast(r.message || "Could not start reading Content Credentials"); return; }
+  toast("Reading Content Credentials. The bar at the bottom follows it.");
+  liveTick = 0; liveJob();
+};
+
 function renderCarveSection(list) {
   const sec = document.querySelector('.fsec[data-sec="carve"]');
   const ewf = (list || []).filter(s => s.format === "ewf" || s.format === "raw");
@@ -5424,6 +5514,7 @@ $("#mapViewClose").onclick = closeMapView;
     refreshSimIndexInfo();
     updateArchInfo(c.archives); updateContainerCounts(c.containers);
     updateKnownHash(c.known_hash);
+    updateC2paInfo(c.c2pa);
     if (c.errors > 0) $("#errCount").textContent = `(${c.errors.toLocaleString()})`;
     const retry = c.retryable ?? c.errors;     // placeholders are noted, not failed
     if (retry > 0) {
