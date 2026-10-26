@@ -282,3 +282,58 @@ def test_the_screens_carry_the_option_and_the_filters():
     assert re.search(r'c2pa:\s*\$\("#aeC2pa"\)\.checked', js)
     assert 'p.set("c2pa", $("#fc2pa").value)' in js
     assert 'j.stage === "c2pa"' in js
+
+
+def test_the_gallery_tiles_carry_the_reading(tmp_path):
+    case = _made_case(tmp_path)
+    provenance.read_pass(case)
+    root = case.root
+    case.close()
+    cl = _client(root)
+    files = {Path(f["rel_path"]).name: f for f in
+             cl.get("/api/files?limit=50&collapse=0").get_json()["files"]}
+    assert (files["signed.png"]["c2pa_credentials"], files["signed.png"]["c2pa_ai"]) == ("c2pa", "yes")
+    assert (files["declared.jpg"]["c2pa_credentials"], files["declared.jpg"]["c2pa_ai"]) == ("xmp", "no")
+    assert files["plain.jpg"]["c2pa_ai"] is None
+    js = (Path(__file__).resolve().parents[1] / "gleapp" / "web" / "static" / "app.js").read_text(
+        encoding="utf-8")
+    assert 'f.c2pa_ai === "yes"' in js and 'f.c2pa_credentials === "c2pa"' in js
+
+
+def test_lava_carries_the_reading(tmp_path):
+    import sqlite3                                      # pylint: disable=import-outside-toplevel
+    from gleapp import lava                             # pylint: disable=import-outside-toplevel
+    case = _made_case(tmp_path)
+    out0 = tmp_path / "lava0"
+    lava.export_lava(case, out0)
+    manifest = json.loads((out0 / "_lava_data.lava").read_text(encoding="utf-8"))
+    db0 = sqlite3.connect(out0 / manifest["lava_db_name"])
+    try:                                                # nothing read: no empty table
+        assert not db0.execute("SELECT 1 FROM sqlite_master WHERE name = "
+                               "'content_credentials'").fetchone()
+        assert db0.execute("SELECT content_credentials FROM media_files "
+                           "WHERE file_name = 'signed.png'").fetchone()[0] == "Not read"
+    finally:
+        db0.close()
+    provenance.read_pass(case)
+    out = tmp_path / "lava1"
+    lava.export_lava(case, out)
+    manifest = json.loads((out / "_lava_data.lava").read_text(encoding="utf-8"))
+    db = sqlite3.connect(out / manifest["lava_db_name"])
+    try:
+        rows = db.execute("SELECT file_name, manifest, ai_declared, digital_source_type, "
+                          "metadata_source, signed_by_stated, signing_time_tsa, "
+                          "content_credentials FROM content_credentials ORDER BY file_name, "
+                          "manifest").fetchall()
+        media = dict(db.execute("SELECT file_name, content_credentials FROM media_files"))
+    finally:
+        db.close()
+    case.close()
+    assert [(r[0], r[1], r[2], r[4]) for r in rows] == [
+        ("declared.jpg", "IPTC tag", "No", "XMP/IPTC"),
+        ("signed.png", "1 of 2", "Yes", "C2PA"),
+        ("signed.png", "2 of 2 (active)", "Unknown", "C2PA")]
+    assert rows[1][3] == "Created using Generative AI (trainedAlgorithmicMedia)"
+    assert rows[1][5] == "Example Org (Test Signer)"
+    assert rows[1][6] == 1748859072                    # 2025-06-02 10:11:12 UTC
+    assert media["signed.png"] == "C2PA manifest" and media["plain.jpg"] == "None found"

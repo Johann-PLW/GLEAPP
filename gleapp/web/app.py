@@ -1712,12 +1712,21 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
         stack_n = _counts("stack_id", {r["stack_id"] for r in rows if r["stack_id"]})
         vstack_n = _counts("vstack_id", {r["vstack_id"] for r in rows if r["vstack_id"]})
+        # Content Credentials for the files on this page, for the tile badges: one
+        # query, and nothing for a file not read
+        page_ids = [r["id"] for r in rows]
+        c2pa_n = {}
+        if page_ids:
+            c2pa_n = {row["file_id"]: (row["credentials"], row["ai"]) for row in case.db.conn.execute(
+                "SELECT file_id, credentials, ai FROM c2pa_meta WHERE file_id IN "
+                f"({','.join('?' * len(page_ids))})", page_ids)}
 
         out = []
         for r in rows:
             d = row_dict(r)
             d["stack_count"] = stack_n.get(r["stack_id"], 1)
             d["vstack_count"] = vstack_n.get(r["vstack_id"], 0)
+            d["c2pa_credentials"], d["c2pa_ai"] = c2pa_n.get(r["id"], (None, None))
             out.append(d)
         # server time for this request, shown by the gallery's timing readout
         return jsonify({"total": total, "offset": offset, "files": out,

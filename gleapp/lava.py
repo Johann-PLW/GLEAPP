@@ -45,7 +45,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from .db import category_code, is_uncategorized
-from . import (__version__, archive, basemaps, categories, exocache, hashstore, stash,
+from . import (__version__, archive, basemaps, categories, exocache, hashstore, provenance, stash,
                staticmap, timeutil, vicdetails)
 from .case import Case
 # The two helpers that decide what a report may say about where a file lived.
@@ -501,8 +501,10 @@ class _Writer:
 def _rows(case: Case, where: str) -> list[dict]:
     """Every file in scope, with the derived fields the report writers share."""
     out = []
+    c2pa = provenance.all_summaries(case.db)      # one statement, not one per row
     for record in case.db.iter_files(where):
         row = dict(record)
+        row["c2pa"] = c2pa.get(row["id"]) if row.get("kind") in provenance.KINDS else None
         row["category_label"] = categories.label(case.db, row.get("category"))
         row["flags"] = ", ".join(f["name"] for f in case.db.flags_for(row["id"]))
         row["disp_path"] = _disp_path(row)
@@ -674,9 +676,11 @@ def _artifact_media_files(writer: "_Writer", rows: list[dict], media: dict[int, 
         "Known Hash Set", "Known Hash Set Kind",
         ("Duplicate Stack", "integer"), ("Visual Group", "integer"),
         ("Similar Cluster", "integer"), "Triage", "Error",
+        "Content Credentials", "AI Declared",
     ]
     data = []
     for row in rows:
+        cc = provenance.flat(row["c2pa"]) if row.get("kind") in provenance.KINDS else {}
         data.append([
             _epoch(row.get("mtime")), _epoch(row.get("ctime")), _epoch(row.get("atime")),
             _recorded(row),
@@ -697,12 +701,109 @@ def _artifact_media_files(writer: "_Writer", rows: list[dict], media: dict[int, 
             row.get("stack_id"), row.get("vstack_id"), row.get("cluster_id"),
             row.get("triage") or "",
             row.get("error") or unavailable.get(row["id"], ""),
+            cc.get("c2pa_credentials", ""), cc.get("c2pa_ai", ""),
         ])
     writer.add_artifact(
         "GLEAPP Media", name, headers, data, icon="image",
         source_path="case.gleapp",
         description="Media files registered in the GLEAPP case.",
-        notes=_MEDIA_NOTES.format(media=_media_note(thumbs)))
+        notes=_MEDIA_NOTES.format(media=_media_note(thumbs)) + " " + _C2PA_MEDIA_NOTE)
+
+
+_C2PA_MEDIA_NOTE = (
+    "Content Credentials and AI Declared are filled for pictures and videos by the "
+    "Content Credentials read, which the examiner runs on request: Not read means it "
+    "has not run for that file. The rows of each reading are in the Content "
+    "Credentials artifact.")
+
+
+def _utc_epoch(text: str) -> int | None:
+    """'YYYY-MM-DD HH:MM:SS' in UTC, as c2paprobe writes a time-stamp, to epoch."""
+    if not text:
+        return None
+    with suppress(ValueError):
+        return int(_dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+                   .replace(tzinfo=_dt.timezone.utc).timestamp())
+    return None
+
+
+def _artifact_c2pa(writer: "_Writer", rows: list[dict], media: dict[int, str]) -> None:
+    """One row per manifest in a file's store and per XMP statement of a digital
+    source type, laid out as iLEAPP's and ALEAPP's C2PA artifact lays them out."""
+    name = "Content Credentials"
+    headers = [
+        ("Signing Time (TSA)", "datetime"), "File Name", "Path", ("Media", "media"),
+        "Manifest", "AI Declared", "Digital Source Type", "Metadata Source",
+        "Claim Generator / Creator Tool", "Actions", "Software Agent(s)",
+        "Author(s) / Creator", "Title", "Ingredients", "Signed By (stated)",
+        "Certificate Issuer", "Certificate Validity", "Signature Algorithm",
+        "Manifest ID", "Format", "Location in File", "Content Credentials",
+    ]
+    yes_no = {True: "Yes", False: "No"}
+    data = []
+    for row in rows:
+        entry = row.get("c2pa")
+        if not entry or entry["credentials"] not in ("c2pa", "xmp"):
+            continue
+        rec = entry["record"]
+        ref = writer.reference(media.get(row["id"]), name, row.get("disp_name") or "")
+        status = provenance.CREDENTIAL_LABELS[entry["credentials"]]
+        manifests = rec.get("manifests") or []
+        where = rec["stores"][0]["where"] if rec.get("stores") else ""
+        for i, m in enumerate(manifests, 1):
+            sig = m.get("signature") or {}
+            state = f"{i} of {len(manifests)}" + (" (active)" if i == len(manifests) and len(manifests) > 1 else "")
+            validity = ""
+            if sig.get("not_before") or sig.get("not_after"):
+                validity = f"{sig.get('not_before', '')} to {sig.get('not_after', '')} UTC"
+            data.append([
+                _utc_epoch(sig.get("signing_time", "")), row.get("disp_name") or "",
+                row.get("disp_path") or "", ref, state,
+                yes_no.get(m.get("ai"), "Unknown"),
+                ", ".join(provenance.source_type_text(st) for st in m.get("source_types") or []),
+                "C2PA", m.get("claim_generator", ""), ", ".join(m.get("actions") or []),
+                ", ".join(m.get("software_agents") or []), ", ".join(m.get("authors") or []),
+                m.get("title", ""),
+                ", ".join(g.get("title") or "(unnamed)" for g in m.get("ingredients") or []),
+                sig.get("signed_by", ""), sig.get("issuer", ""), validity, sig.get("alg", ""),
+                m.get("label", ""), m.get("format", ""), where, status,
+            ])
+        for x in rec.get("xmp") or []:
+            st = x.get("source_type")
+            if not st:
+                continue
+            data.append([
+                None, row.get("disp_name") or "", row.get("disp_path") or "", ref,
+                "IPTC tag", yes_no.get(st.get("ai"), "Unknown"),
+                provenance.source_type_text(st), "XMP/IPTC", x.get("creator_tool", ""),
+                "", "", ", ".join(x.get("creators") or []), "", "", "", "", "", "", "", "",
+                x.get("where", ""), status,
+            ])
+    writer.add_artifact(
+        "GLEAPP Media", name, headers, data, icon="certificate",
+        source_path="case.gleapp",
+        description=("What pictures and videos declare about their own provenance: each "
+                     "manifest of a C2PA manifest store and each IPTC digital source type "
+                     "stated in XMP. Read from the file and not verified."),
+        notes=_C2PA_NOTES)
+
+
+_C2PA_NOTES = (
+    "Read by the vendored c2paprobe (github.com/abrignoni/c2paprobe), the reader iLEAPP "
+    "and ALEAPP use, when the examiner ran the Content Credentials read; a file not "
+    "read has no row. Signed By, Certificate Issuer, Certificate Validity, Signature "
+    "Algorithm and Signing Time are what the manifest states: no signature is checked, "
+    "no certificate chain is built and no revocation is looked up, so a signer is a lead "
+    "to corroborate, not proof of origin. Manifest numbers the manifests in the store; "
+    "the last is the active one and the earlier ones belong to the ingredients it names. "
+    "AI Declared is Yes for trainedAlgorithmicMedia, compositeWithTrainedAlgorithmicMedia "
+    "and compositeSynthetic, whose definitions in the IPTC Digital Source Type vocabulary "
+    "(cv.iptc.org/newscodes/digitalsourcetype, release dated 2024-10-23) name generative AI "
+    "or a model trained on captured content; No for the capture, scan, human edit, screen "
+    "capture and software image codes; Unknown for any other code and when a row states "
+    "none. It is a declaration, not a finding. Digital Source Type shows IPTC's label and "
+    "the stated code. A file without credentials says nothing about whether it is "
+    "authentic: many platforms and tools remove them.")
 
 
 def _artifact_categorized(writer: "_Writer", rows: list[dict],
@@ -1776,6 +1877,7 @@ def export_lava(case: Case, dest, where: str = "", *, thumbs: bool = False,
     _artifact_similar(writer, rows, media)
     _artifact_hashset_hits(writer, rows, media, sources=sources)
     _artifact_vic_hashset_matches(writer, rows, media)
+    _artifact_c2pa(writer, rows, media)
     _artifact_audit(writer, case)
 
     _write_device_info(case, writer.logs_dir, tz_name=tz_name)

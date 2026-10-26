@@ -340,7 +340,7 @@ def test_the_run_log_agrees_with_the_artifacts_it_describes(case, tmp_path):
         assert count == artifact["record_count"], artifact["name"]
         assert in_report, artifact["name"]
     # the log describes what was considered, so it is longer than the report
-    assert len(grid) == 14, sorted(grid)
+    assert len(grid) == 15, sorted(grid)
     written = {a["name"] for a in _artifacts(manifest)}
     assert {n for n, (_, yes) in grid.items() if yes} == written
 
@@ -409,7 +409,7 @@ def test_an_artifact_with_no_rows_is_left_out_of_the_report(case, tmp_path):
                        "Similar Clusters", "Visually Similar Groups",
                        "Known Hash Set Hits", "Known Hash Sets",
                        "Project VIC Hash-Set Matches",
-                       "Location Overview"}, sorted(skipped)
+                       "Location Overview", "Content Credentials"}, sorted(skipped)
     assert all(grid[name][0] == 0 for name in skipped), grid
     # absent from the manifest, and no empty table left behind in the database
     assert not skipped & {a["name"] for a in _artifacts(manifest)}
