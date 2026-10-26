@@ -28,7 +28,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from .. import (appconfig, archive, backup, basemaps, categories, docmedia, exocache, flags,
-               lava, relink, report, savedset)
+               lava, provenance, relink, report, savedset)
 from ..case import image_set_source, open_case, parse_source_spec
 from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
 from ..facematch import find_matching_faces
@@ -787,6 +787,37 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         threading.Thread(target=_job, daemon=True).start()
         return jsonify({"ok": True})
 
+    @app.post("/api/c2pa")
+    def run_c2pa():
+        """Read Content Credentials for every picture and video not read yet, or
+        for all of them again with ``{"reread": true}``."""
+        if state["case"] is None:
+            abort(409, description="no case open")
+        if state["job"]["running"]:
+            abort(409, description="a job is already running")
+        case = state["case"]
+        reread = bool((request.get_json(silent=True) or {}).get("reread"))
+        state["job"] = {"running": True, "stage": "c2pa", "done": 0, "total": 0,
+                        "message": "Reading Content Credentials…", "stats": None,
+                        "error": None}
+
+        def _job() -> None:
+            j = state["job"]
+            try:
+                counts = provenance.read_pass(
+                    case, reread=reread, workers=4,
+                    progress=lambda d, t: j.update(
+                        done=d, total=t,
+                        message=f"Reading Content Credentials… {d:,} of {t:,}"))
+                j.update(running=False, stage="done", message="Content Credentials read",
+                         stats={"c2pa": counts})
+            except (OSError, sqlite3.Error) as exc:
+                j.update(running=False, stage="error",
+                         error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_job, daemon=True).start()
+        return jsonify({"ok": True})
+
     # The rows a retry can do something about. A cloud provider's online-only
     # placeholder carries a note in the same column saying its content is not in the
     # image; processing skips it every time, so it is not a failed file to retry.
@@ -1398,6 +1429,23 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         meta["highlights"] = exiftool.highlights(meta.get("fields") or [])
         return jsonify(meta)
 
+    @app.get("/api/file/<int:file_id>/c2pa")
+    def file_c2pa(file_id: int):
+        """What the file declares about its provenance, as read by the Content
+        Credentials pass. ``read`` is false until a pass has read this file."""
+        case = C()
+        if not case.db.get_file(file_id):
+            abort(404)
+        got = provenance.for_file(case.db, file_id)
+        out = {"read": got is not None, "caveat": provenance.CAVEAT,
+               "ai_rule": provenance.AI_RULE,
+               "credential_labels": {k or "": v for k, v in provenance.CREDENTIAL_LABELS.items()},
+               "credential_help": {k or "": v for k, v in provenance.CREDENTIAL_HELP.items()}}
+        if got:
+            out.update(got)
+        out["groups"] = provenance.describe(got)
+        return jsonify(out)
+
     @app.get("/api/file/<int:file_id>/hex")
     def file_hex(file_id: int):
         """A slice of the raw bytes of a file, hex-encoded, for the hex viewer."""
@@ -1474,6 +1522,20 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             if q.get("flag") not in (None, "", "any"):
                 where.append("id IN (SELECT file_id FROM file_flags WHERE flag_code=?)")
                 params.append(int(q["flag"]))
+            # Content Credentials: what a read found, or files not read yet
+            c2pa = q.get("c2pa")
+            if c2pa in provenance.CREDENTIALS:
+                where.append("id IN (SELECT file_id FROM c2pa_meta WHERE credentials=?)")
+                params.append(c2pa)
+            elif c2pa == "declared":
+                where.append("id IN (SELECT file_id FROM c2pa_meta "
+                             "WHERE credentials IN ('c2pa','xmp'))")
+            elif c2pa == "unread":
+                where.append("kind IN ('image','video') AND id NOT IN "
+                             "(SELECT file_id FROM c2pa_meta)")
+            if q.get("c2pa_ai") in provenance.AI_VALUES:
+                where.append("id IN (SELECT file_id FROM c2pa_meta WHERE ai=?)")
+                params.append(q["c2pa_ai"])
             if q.get("cluster"):
                 eq("cluster_id", int(q["cluster"]))
             if q.get("hashset") == "1":
@@ -2103,7 +2165,20 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "FROM files WHERE container_id IS NOT NULL GROUP BY container_id) k "
             "ON k.container_id = files.id WHERE files.kind = 'archive' LIMIT -1)").fetchone()
         a_items, d_items = cont["a_items"], cont["d_items"]
+        # Content Credentials over the pictures and videos: read or not, and what
+        # each read found
+        c2 = case.db.conn.execute(
+            "SELECT COUNT(*) media, COALESCE(SUM(m.file_id IS NULL), 0) unread, "
+            "COALESCE(SUM(m.credentials = 'c2pa'), 0) c2pa, "
+            "COALESCE(SUM(m.credentials = 'xmp'), 0) xmp, "
+            "COALESCE(SUM(m.credentials = 'none'), 0) none, "
+            "COALESCE(SUM(m.credentials = 'unsettled'), 0) unsettled, "
+            "COALESCE(SUM(m.ai = 'yes'), 0) ai_yes, COALESCE(SUM(m.ai = 'no'), 0) ai_no, "
+            "COALESCE(SUM(m.ai = 'unknown'), 0) ai_unknown "
+            "FROM files LEFT JOIN c2pa_meta m ON m.file_id = files.id "
+            "WHERE files.kind IN ('image','video')").fetchone()
         return {
+            "c2pa": dict(c2),
             "srcs": srcs, "clusters": clusters, "scr": scr, "n_err": n_err,
             "n_retry": n_retry, "arch": arch,
             "cont": dict(cont), "a_items": a_items, "d_items": d_items,
@@ -2158,6 +2233,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "stats": cst,
             "vic": vic,
             "errors": n_err,
+            "c2pa": counts["c2pa"],
             "retryable": counts["n_retry"],
             "archives": {"total": arch["total"] or 0,
                          "expanded": arch["expanded"] or 0},
@@ -2695,6 +2771,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "blur": case.db.get_meta("report_blur") != "0",
             "no_media": case.db.get_meta("report_no_media") == "1",
             "exiftool": case.db.get_meta("report_exiftool") == "1",
+            "c2pa": case.db.get_meta("report_c2pa") == "1",
             "exiftool_categories": json.loads(
                 case.db.get_meta("report_exiftool_categories") or "null"),
             "exiftool_category_options": [{"key": k, "label": v,
@@ -2722,6 +2799,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         full_videos = body.get("full_videos", True)
         want_maps = body.get("maps", True)
         want_exiftool = bool(body.get("exiftool", False))
+        want_c2pa = bool(body.get("c2pa", False))
         exif_cats = body.get("exiftool_categories")
         exif_cats = [str(c) for c in exif_cats] if isinstance(exif_cats, list) else None
         blur = body.get("blur", True)
@@ -2746,6 +2824,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case.db.set_meta("report_blur", "1" if blur else "0")
         case.db.set_meta("report_no_media", "1" if no_media else "0")
         case.db.set_meta("report_exiftool", "1" if want_exiftool else "0")
+        case.db.set_meta("report_c2pa", "1" if want_c2pa else "0")
         case.db.set_meta("report_exiftool_categories", json.dumps(exif_cats))
 
         tz =case.db.get_meta("display_tz") or appconfig.get_timezone()
@@ -2783,6 +2862,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                         full_videos=full_videos, maps=want_maps, tz=tz, blur=blur,
                         no_media=no_media, by_flag=by_flag, only_flags=only_flags,
                         exiftool=want_exiftool, exiftool_categories=exif_cats,
+                        c2pa=want_c2pa,
                         only_categorized=body.get("scope") == "categorized"
                         or bool(body.get("only_categorized")),
                         progress=lambda d, t: j.update(done=d, total=t),
@@ -2805,7 +2885,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 full_images=full_images, full_videos=full_videos,
                 maps=want_maps, tz=tz, blur=blur, no_media=no_media,
                 by_flag=by_flag, only_flags=only_flags, exiftool=want_exiftool,
-                exiftool_categories=exif_cats,
+                exiftool_categories=exif_cats, c2pa=want_c2pa,
                 only_categorized=body.get("scope") == "categorized"
                 or bool(body.get("only_categorized")))
         except FileNotFoundError as exc:
@@ -2936,7 +3016,8 @@ def _exiftool_help():
 def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
                    full_images, full_videos, maps, tz, only_categorized, blur=True,
                    no_media=False, by_flag=False, only_flags=None, exiftool=False,
-                   exiftool_categories=None, progress=None, stage_cb=None) -> list[str]:
+                   exiftool_categories=None, c2pa=False, progress=None,
+                   stage_cb=None) -> list[str]:
     """Write every picked format into ``out`` and return the paths written.
 
     Shared by the inline route and the job the LAVA format runs in, so the two
@@ -2960,7 +3041,7 @@ def _write_reports(case, fmts, out, tag, where, label, *, header, fields,
             header=header, fields=fields, scope_label=label,
             full_images=full_images, full_videos=full_videos, tz=tz, maps=maps,
             blur=blur, thumbs=not no_media, by_flag=by_flag, only_flags=only_flags,
-            exiftool=exiftool, exiftool_categories=exiftool_categories,
+            exiftool=exiftool, exiftool_categories=exiftool_categories, c2pa=c2pa,
             progress=progress)))
     if "kml" in fmts:
         made.append(str(report.export_kml(case, out / f"geolocation{tag}.kmz", where,
@@ -3111,10 +3192,20 @@ def _run_job(state: dict, sources, opts: dict) -> None:
             stage_cb=lambda msg: job.update(message=msg),
             similar=False,        # the background indexer builds them after, see indexer.py
         )
+        result = stats.as_dict()
+        # Content Credentials, when asked for: read after processing, over every
+        # picture and video not read yet, so files added earlier are covered too.
+        if opts.get("c2pa"):
+            job.update(stage="c2pa", done=0, total=0,
+                       message="Reading Content Credentials…")
+            result["c2pa"] = provenance.read_pass(
+                case, workers=int(opts.get("workers", 4)),
+                progress=lambda d, t: job.update(
+                    done=d, total=t, message=f"Reading Content Credentials… {d:,} of {t:,}"))
         if state.get("indexer") is not None:
             state["indexer"].start()          # Find similar's indexes, in the background
         job.update(running=False, stage="done", message="Done",
-                   stats=stats.as_dict())
+                   stats=result)
     except Exception as exc:  # noqa: BLE001
         job.update(running=False, stage="error",
                    error=f"{type(exc).__name__}: {exc}")

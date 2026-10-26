@@ -64,6 +64,19 @@
       "licence": "MIT",
       "licence_file": "gleapp/vendor/LICENSE-exoprobe",
       "note": "Copied verbatim. Fix upstream and re-vendor; edits here are reverted by the next sync. Reads ExoPlayer caches, joins their pieces and DASH streams, and muxes video with its audio; gleapp/exocache.py registers what it produces."
+    },
+    {
+      "path": "gleapp/vendor/c2paprobe.py",
+      "name": "c2paprobe",
+      "version": "0.1.0",
+      "upstream": "https://github.com/abrignoni/c2paprobe",
+      "upstream_file": "c2paprobe/__init__.py",
+      "commit": "c51e60159b7655d194b63478e32e9ae76a8c0955",
+      "commit_date": "2026-10-25T19:57:10-04:00",
+      "sha256": "1c89c715d83ec735c6c69852aab3af53adbc1eb3c8df1bf17ade4cc8919da8f2",
+      "licence": "MIT",
+      "licence_file": "gleapp/vendor/LICENSE-c2paprobe",
+      "note": "Copied verbatim. Fix upstream and re-vendor; edits here are reverted by the next sync. Reads the Content Credentials (C2PA) and IPTC digital source type a picture or video declares; gleapp/provenance.py stores what it reads."
     }
   ]
 }

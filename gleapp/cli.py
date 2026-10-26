@@ -484,6 +484,31 @@ def _run_process(case, args) -> None:
     )
     print()
     _p(json.dumps(stats.as_dict(), indent=2))
+    if getattr(args, "c2pa", False):
+        _read_c2pa(case, reread=False, workers=args.workers)
+
+
+def _read_c2pa(case, *, reread: bool, workers: int) -> dict:
+    from . import provenance
+
+    def progress(done: int, total: int) -> None:
+        print(f"\r  reading Content Credentials {done}/{total}", end="", flush=True)
+
+    _p("Reading Content Credentials (C2PA)...")
+    counts = provenance.read_pass(case, reread=reread, workers=workers, progress=progress)
+    print()
+    _p(f"Read {counts['read']:,} file(s): {counts['c2pa']:,} with a C2PA manifest, "
+       f"{counts['xmp']:,} with only an XMP source type, {counts['none']:,} with neither, "
+       f"{counts['unsettled']:,} not settled; {counts['failed']:,} could not be read.")
+    return counts
+
+
+def cmd_provenance(args: argparse.Namespace) -> int:
+    case = open_case(args.case, examiner=args.examiner)
+    _unlock_case(case, args)
+    _read_c2pa(case, reread=args.reread, workers=args.workers)
+    case.close()
+    return 0
 
 
 def cmd_process(args: argparse.Namespace) -> int:
@@ -852,7 +877,7 @@ def cmd_report(args: argparse.Namespace) -> int:
                                        maps=not args.no_maps, fields=fields,
                                        thumbs=not args.no_media,
                                        by_flag=args.scope == "flags",
-                                       exiftool=args.exiftool))
+                                       exiftool=args.exiftool, c2pa=args.c2pa))
     if "kml" in fmts:
         made.append(report.export_kml(case, out_dir / f"geolocation{tag}.kmz", where,
                                       thumbs=not args.no_media))
@@ -943,6 +968,10 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--keyframes", type=int, default=6, help="frames per video")
         sp.add_argument("--no-screen", action="store_true", help="skip face/skin screening")
         sp.add_argument("--cluster-threshold", type=int, default=8)
+        sp.add_argument("--c2pa", action="store_true",
+                        help="after processing, read the Content Credentials (C2PA) and "
+                             "IPTC digital source type of every picture and video not "
+                             "read yet")
 
     s = sub.add_parser("ingest", help="ingest a folder, a full-file-system extraction archive "
                                       "(zip or tar), a disk image (E01, s01, Ex01, AFF, AFF4, "
@@ -1046,6 +1075,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--workers", type=int, default=4)
     s.set_defaults(func=cmd_screen)
 
+    s = sub.add_parser("provenance",
+                       help="read the Content Credentials (C2PA) and IPTC digital source "
+                            "type of every picture and video not read yet. Nothing is "
+                            "verified: signers and times are as the files state")
+    s.add_argument("--reread", action="store_true",
+                   help="read every picture and video again, not only those not read yet")
+    s.add_argument("--workers", type=int, default=4)
+    s.set_defaults(func=cmd_provenance)
+
     s = sub.add_parser("similar", help="list files perceptually similar to FILE_ID")
     s.add_argument("file_id", type=int)
     s.add_argument("--threshold", type=int, default=12)
@@ -1076,6 +1114,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "JSON, MD5 and VIC never do); refused with the lava format")
     s.add_argument("--exiftool", action="store_true",
                    help="HTML: add each file's ExifTool metadata, collapsed, to its card")
+    s.add_argument("--c2pa", action="store_true",
+                   help="HTML: add each picture's and video's Content Credentials, "
+                        "collapsed, to its card (as read by 'provenance')")
     s.add_argument("--no-maps", action="store_true",
                    help="HTML and LAVA reports: skip the location maps (drawn from "
                         "the active basemap)")

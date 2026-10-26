@@ -305,6 +305,25 @@ CREATE TABLE IF NOT EXISTS exiftool_meta (
     version  TEXT,
     fields   TEXT NOT NULL
 );
+
+-- What a picture or video declares about its own provenance, read by the
+-- vendored c2paprobe when the examiner asks for it (gleapp/provenance.py). A
+-- file with no row here has not been read. ``credentials`` is 'c2pa' (a manifest
+-- store), 'xmp' (only an XMP digital source type), 'none' (the whole container
+-- was read and holds neither) or 'unsettled' (the read stopped early or the
+-- container is not one the reader walks, so absence is not established). ``ai`` is
+-- 'yes', 'no' or 'unknown' over every stated source type, NULL when none is
+-- stated. ``record`` is the reader's whole result as JSON.
+CREATE TABLE IF NOT EXISTS c2pa_meta (
+    file_id      INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    reader       TEXT NOT NULL,
+    read_at      TEXT NOT NULL,
+    credentials  TEXT NOT NULL,
+    ai           TEXT,
+    signer       TEXT,
+    record       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_c2pa_credentials ON c2pa_meta(credentials, ai);
 """
 
 # Auto color palette, assigned by creation order (cycles if exhausted).

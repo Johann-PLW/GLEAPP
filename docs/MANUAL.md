@@ -183,6 +183,10 @@ your user settings, not in any case.
   not kept. Run it later with **Extract media from documents** in the sidebar
   (§16). The **+ Add evidence** dialog has the same box.
 - *Recover media*: disk images only, off by default (§16).
+- *Read Content Credentials (C2PA)*: off by default. After processing, reads
+  what each picture and video declares about its provenance (§8, Content
+  Credentials). Off, nothing is read; read them later from the sidebar. The
+  **+ Add evidence** dialog has the same box.
 - *Enable hash stash matching*: on by default. Turn it off for a case that
   isn't CSAM / Project VIC related, so an old stashed hit can't re-flag
   unrelated media. You can change it later from the *Known hashes* section
@@ -460,6 +464,7 @@ A field appears only when the file has a value for it.
 | **Matches** | Matched in (which hash sources flagged it), Exact copies, Visually similar, Similar-group, Error |
 | **Location** | GPS, with a **Copy** button. For a photo it comes from EXIF (degrees/minutes/seconds, degrees and decimal minutes, or decimal degrees), or from XMP when EXIF has none; for a video, from its QuickTime metadata (UserData GPSCoordinates, or the iPhone location key). A video's **Captured** comes from the iPhone creation date, the device's local time. A case processed before this version picks them up when it is processed again (`gleapp process --force <case>`, which redoes every file) or ingested into a new case. |
 | **Hashes** | MD5, SHA-1, SHA-256, pHash |
+| **Content Credentials** | A collapsed section under the table, for pictures and videos: what the file declares about its provenance, as the Content Credentials read kept it (§8). The status (*C2PA manifest*, *XMP source type only*, *None found*, *Not settled* or *Not read*) and *AI declared*, then each manifest in the store, the active one last, with its claim generator, stated signer and issuer, time-stamp, actions, digital source types and ingredients, and each XMP statement. Nothing is read from here and nothing is verified. Whether it was left open is remembered. |
 | **Metadata (ExifTool)** | A collapsed section under the table with every field ExifTool reads from the file. Inside: a **Filter fields** box, which searches every field by name or value and tags each match with its tab; a **Key** tab, first, with the fields examiners usually want in plain words (camera, lens, taken with its time offset, software, serial number, GPS, altitude, artist, copyright), as stored in the file; then one tab per category the file has (EXIF, GPS, Maker, XMP, IPTC, Video, Calc, File, Other), the same categories as the HTML export's ExifTool option. Hover a field for ExifTool's group and a tab for what it holds. **Calc** holds values ExifTool *calculates* from other fields (its Composite group): they are not stored in the file, so cite the stored field they come from. Dates are shown as the file writes them, not converted to the display time zone. The last tab used is remembered. Read the first time the section is opened and kept in the case. ExifTool only reads; fields about the examiner's copy (its name, folder, permissions) are left out. Needs ExifTool: a build that carries it, or `exiftool` installed (`$GLEAPP_EXIFTOOL` names a specific one). |
 
 ### Hex view
@@ -605,6 +610,44 @@ was. A reattach is recorded in Processing history.
 - Below it, each disk image in the case with its *walked* / *recovered from
   deleted records* / *carved* counts and a **Carve for deleted media** / **Carve
   again** button; see §16.
+
+### Content Credentials
+
+What a picture or video declares about its own provenance: a **C2PA manifest
+store** (Content Credentials: who signed it, with what tool, the actions and
+digital source types it states, the files it was made from) and an **IPTC
+digital source type** in its XMP. GLEAPP reads them with
+[c2paprobe](https://github.com/abrignoni/c2paprobe), the same reader iLEAPP and
+ALEAPP use.
+
+Nothing is read until you ask. Tick *Read Content Credentials (C2PA)* when you
+create the case or add evidence (§1), or press **Read Content Credentials** in
+this section to read every picture and video not read yet. Once all are read the
+button reads them all again. On the command line, `gleapp provenance` does the
+same, `--reread` reads all again, and `--c2pa` on `ingest` or `process` reads
+after processing.
+
+- **Credentials** has these choices:
+  - *Any declared (C2PA or XMP)*
+  - *C2PA manifest*: the file holds a manifest store
+  - *XMP source type only*: no manifest store, but its XMP states a digital
+    source type, which nothing signs
+  - *None found*: the whole container was read and holds neither
+  - *Not settled*: the read stopped early (a truncated or damaged file) or the
+    container is not one the reader walks, so absence is not established
+  - *Not read*: the file has not been read yet
+- **AI declared** is *Yes* for the IPTC codes whose definition names generative
+  AI (trainedAlgorithmicMedia, compositeWithTrainedAlgorithmicMedia,
+  compositeSynthetic), *No* for the capture, scan, human edit, screen capture
+  and software image codes, and *Unknown* for any other code. It reads every
+  manifest in the store and every XMP statement, so a file whose ingredient was
+  made with AI is *Yes* even when its own manifest states no code.
+
+What this does not do: **nothing is verified**. No signature is checked and no
+certificate chain is built, so a signer is what the file states, a lead to
+corroborate and not proof of who made it. *AI declared* is a declaration, not a
+finding. A file without credentials says nothing about whether it is authentic:
+many platforms and tools remove them.
 
 ### Archives and documents
 
@@ -1447,6 +1490,14 @@ the categories ticked beneath it. A file with nothing in the ticked categories g
 no block. Files not read yet are read during the export, which takes longer and
 makes the report larger. `gleapp report --exiftool` includes every category.
 
+**Content Credentials** (off by default, saved with the case): **Include Content
+Credentials** adds each picture's and video's reading (§8) to its card, collapsed.
+Nothing is read during the export: a file not read says *Not read*.
+`gleapp report --c2pa` does the same. The CSV always carries `c2pa_credentials`,
+`c2pa_ai`, `c2pa_signer_stated`, `c2pa_generator`, `c2pa_source_types` and
+`c2pa_actions`, and the JSON a `c2pa` object with the whole reading, for
+pictures and videos (*Not read* and null until they are read).
+
 **Media** (dialog checkboxes, on by default, saved with the case; shown while
 **HTML report** is ticked and **Metadata only** is not):
 
@@ -2112,8 +2163,11 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
 - **[exoprobe](https://github.com/abrignoni/exoprobe)** reads the media caches
   Android apps keep through ExoPlayer, joins each cached item's pieces and each
   DASH stream's segments, and puts a video and its audio into one MP4.
+- **[c2paprobe](https://github.com/abrignoni/c2paprobe)** reads the Content
+  Credentials (C2PA) and IPTC digital source type a picture or video declares,
+  without verifying them. iLEAPP and ALEAPP vendor the same file.
 
-All four are MIT licensed, © Alexis Brignoni. GLEAPP's Android storage-view
+All five are MIT licensed, © Alexis Brignoni. GLEAPP's Android storage-view
 table (`gleapp/storage_views.py`), which knows that credential-encrypted,
 device-encrypted and shared storage never collapse together, is ported from
 **ALEAPP**'s `scripts/artifacts/storagePathViews.py` (also Alexis Brignoni,

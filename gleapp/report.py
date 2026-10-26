@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .db import category_code, is_uncategorized
-from . import archive, basemaps, categories, exocache, flags, imaging, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
+from . import archive, basemaps, categories, exocache, flags, imaging, provenance, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
 from .case import Case
 
 # overview map size - shared so the clickable overlay in _overview_html always
@@ -35,6 +35,9 @@ _CSV_FIELDS = [
     "stack_id", "vstack_id", "cluster_id", "notes",
     "media_id", "orig_name", "orig_path", "mime", "origin", "recorded_times", "cache_info",
     "vic_record_media_id", "vic_series", "vic_flags", "vic_tags", "vic_exif",
+    # Content Credentials (gleapp/provenance.py); "Not read" until a pass read the file
+    "c2pa_credentials", "c2pa_ai", "c2pa_signer_stated", "c2pa_generator",
+    "c2pa_source_types", "c2pa_actions",
 ]
 
 
@@ -52,8 +55,16 @@ def _rows(case: Case, where: str = "") -> list[dict]:
     if "kind" not in where:
         where = _and(where, "kind != 'archive'")
     out = []
+    c2pa = provenance.all_summaries(case.db)      # one statement, not one per row
     for r in case.db.iter_files(where):
         d = dict(r)
+        # what the file declares about its provenance; None when not read
+        got = c2pa.get(d["id"]) if d.get("kind") in provenance.KINDS else None
+        d["c2pa"] = ({"credentials": got["credentials"],
+                      "credentials_label": provenance.CREDENTIAL_LABELS[got["credentials"]],
+                      "ai": got["ai"], "signer_stated": got["signer"],
+                      "record": got["record"]} if got else None)
+        d["_c2pa_entry"] = got
         d["category_label"] = categories.label(case.db, d.get("category"))
         d["flags"] = [dict(fr) for fr in case.db.flags_for(d["id"])]
         d["flags_label"] = ", ".join(fr["name"] for fr in d["flags"])
@@ -144,6 +155,8 @@ def export_csv(case: Case, dest: str | Path, where: str = "", *,
             vv = vicdetails.view(d)
             d.update(vic_record_media_id=vv["media_id"], vic_series=vv["series"],
                      vic_flags=vv["flags"], vic_tags=vv["tags"], vic_exif=vv["exif"])
+            if d.get("kind") in provenance.KINDS:
+                d.update(provenance.flat(d["_c2pa_entry"]))
             w.writerow(d)
     return dest
 
@@ -163,7 +176,8 @@ def export_json(case: Case, dest: str | Path, where: str = "",
                     if case.db.get_meta("basemap_sha256") else None),
         # files.path is where the bytes sat on this machine; rel_path, orig_path and
         # file_path say where the file was within the evidence, and that is what leaves.
-        "files": [{k: v for k, v in d.items() if k != "path"} for d in _rows(case, where)],
+        "files": [{k: v for k, v in d.items() if k not in ("path", "_c2pa_entry")}
+                  for d in _rows(case, where)],
     }
     dest.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return dest
@@ -1283,6 +1297,27 @@ def _exiftool_html(case: Case, d: dict, categories_: list[str] | None = None) ->
             f"fields</summary>{inner}{ver}</details>")
 
 
+def _c2pa_html(d: dict) -> str:
+    """A file's Content Credentials as a collapsed block for the card's metadata drop,
+    from what a read pass kept (``d["_c2pa_entry"]``, set by ``_rows``). Nothing is
+    read here: a file not read says so."""
+    if d.get("kind") not in provenance.KINDS:
+        return ""
+    entry = d.get("_c2pa_entry")
+    groups = provenance.describe(entry)
+    status = provenance.CREDENTIAL_LABELS[entry["credentials"] if entry else None]
+    inner = "".join(
+        f"<details class='exifc'{' open' if i == 0 else ''}><summary>{html.escape(title)}</summary>"
+        f"<div class='fields'>" + "".join(
+            f"<div class='f'><span class='k'>{html.escape(k)}</span>"
+            f"<span class='v'>{html.escape(str(v))}</span></div>" for k, v in rows)
+        + "</div></details>"
+        for i, (title, rows) in enumerate(groups))
+    note = (f"<div class='fields'><span class='k'>{html.escape(provenance.CAVEAT)}</span></div>")
+    return (f"<details class='exif c2pa'><summary>Content Credentials &middot; "
+            f"{html.escape(status)}</summary>{inner}{note}</details>")
+
+
 _KIND_LABELS = (("image", "Images"), ("video", "Videos"), ("other", "Other files"))
 
 
@@ -1305,6 +1340,7 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                 blur: bool = True, by_flag: bool = False,
                 only_flags: list[int] | None = None,
                 exiftool: bool = False, exiftool_categories: list[str] | None = None,
+                c2pa: bool = False,
                 progress=None) -> Path:
     """Write the HTML report. ``progress(done, total)``, when given, is called as
     each file's card is written, so the gallery's bottom bar can follow a long export.
@@ -1373,8 +1409,9 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
                                        full_images, full_videos,
                                        loc_map=loc_maps.get(d["id"], ""),
                                        media_dir=media_dir, thumbs=thumbs,
-                                       exif=_exiftool_html(case, d, exiftool_categories)
-                                       if exiftool else ""))
+                                       exif=(_exiftool_html(case, d, exiftool_categories)
+                                             if exiftool else "")
+                                       + (_c2pa_html(d) if c2pa else "")))
                 written += 1
                 if progress:
                     # a flag report shows a file once per flag, so cap at the total
