@@ -237,6 +237,13 @@ def test_a_mostly_empty_file_takes_less_room_where_the_filesystem_keeps_holes(tm
     dest = tmp_path / "sparse.bin"
     archive._write_stream(io.BytesIO(data), dest, holes=True)   # pylint: disable=protected-access
     assert dest.stat().st_size == len(data)
+    # Measured once the copy is on disk. Read while it is still cached, Windows
+    # reported the holes kept and then filled the leading one when it wrote the file
+    # out: the copy that only seeked over its holes passed here most of the time and
+    # failed on a CI runner whenever the write-out came first. Flushed, it fails
+    # every time (67,174,400 of these 134,283,264 bytes allocated, 200 runs of 200).
+    with open(dest, "r+b") as fh:
+        os.fsync(fh.fileno())
     taken = archive._allocated(dest)                            # pylint: disable=protected-access
     assert taken is not None and taken < len(data) // 4
     plain = tmp_path / "plain.bin"
