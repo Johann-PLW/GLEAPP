@@ -329,6 +329,23 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_region(args: argparse.Namespace) -> int:
+    """Show or set the category region new cases are created with."""
+    from . import appconfig, regions
+    if args.region:
+        if not regions.is_region(args.region):
+            _p(f"Unknown region {args.region!r}. Choose one of: "
+               + ", ".join(c["id"] for c in regions.choices()))
+            return 2
+        appconfig.set_region(args.region)
+    cur = appconfig.get_region()
+    for c in regions.choices():
+        _p(f"{'*' if c['id'] == cur else ' '} {c['id']:<8} {c['label']}")
+    if cur is None:
+        _p(f"No region chosen yet; new cases use {regions.DEFAULT_REGION}.")
+    return 0
+
+
 def _ingest_sources(args: argparse.Namespace):
     """The sources and job-file meta an ingest command names. Several paths are the
     member images of one source (a RAID set), read together; paths that open the same
@@ -627,7 +644,7 @@ def cmd_stash(args: argparse.Namespace) -> int:
     ``--export`` + a colleague's ``--merge``, or point a team at one file with
     ``--set-path`` (or $GLEAPP_STASH_PATH).
     """
-    from . import stash
+    from . import appconfig, stash
 
     if args.set_path is not None:
         p = stash.set_path(args.set_path or None)
@@ -645,10 +662,12 @@ def cmd_stash(args: argparse.Namespace) -> int:
         return 0
 
     if args.merge_precategorized:
-        res = stash.merge_precategorized(Path(args.merge_precategorized))
+        res = stash.merge_precategorized(Path(args.merge_precategorized),
+                                         appconfig.get_region())
         _p(f"Merged {Path(args.merge_precategorized).name}: +{res['added']:,} new, "
            f"{res['total']:,} total; {res['skipped_category']:,} of {res['records']:,} "
-           f"records were outside categories 1-3 and {res['skipped_no_md5']:,} had no MD5.")
+           f"records were outside the {res['region']} stash categories and "
+           f"{res['skipped_no_md5']:,} had no MD5.")
         return 0
 
     if args.merge:
@@ -660,12 +679,13 @@ def cmd_stash(args: argparse.Namespace) -> int:
     if args.add:
         case = open_case(args.case, examiner=args.examiner)
         label = case.db.get_meta("case_name") or Path(args.case).name
-        ph = ",".join("?" * len(stash.STASH_CATEGORIES))
+        cats = stash.stash_categories(case.db.scheme.id)
+        ph = ",".join("?" * len(cats))
         rows = case.db.conn.execute(
             f"SELECT md5, category FROM files WHERE category IN ({ph}) "
-            "AND md5 IS NOT NULL AND md5 != ''",
-            tuple(stash.STASH_CATEGORIES)).fetchall()
-        res = stash.add((r["md5"], r["category"], label) for r in rows)
+            "AND md5 IS NOT NULL AND md5 != ''", cats).fetchall()
+        res = stash.add(((r["md5"], r["category"], label) for r in rows),
+                        case.db.scheme.id)
         case.db.audit_log(args.examiner, "stash_add",
                           f"{res['submitted']} md5s, {res['added']} new")
         case.close()
@@ -673,12 +693,14 @@ def cmd_stash(args: argparse.Namespace) -> int:
            f"{res['total']:,} total.")
         return 0
 
-    s = stash.summary()
+    s = stash.summary(appconfig.get_region())
     _p(f"Local hash stash: {s['total']:,} MD5(s)"
        + (f", updated {s['updated']:.0f}" if s["updated"] else " (empty)"))
     _p(f"  file: {s['path']}" + ("  (shared)" if s["shared"] else ""))
+    for rid, n in sorted(s["by_region"].items()):
+        _p(f"  {rid}: {n:,}")
     for code, n in sorted(s["by_category"].items()):
-        _p(f"  category {code}: {n:,}")
+        _p(f"  {s['region']} category {code}: {n:,}")
     return 0
 
 
@@ -957,6 +979,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="for a BitLocker volume in an image source: its startup key "
                          "(.BEK) file. Repeatable. Held in memory for this run only")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("region", help="show or set the category region (the locked "
+                                      "categories new cases are created with)")
+    s.add_argument("region", nargs="?", help="region id, e.g. US, UK, AU")
+    s.set_defaults(func=cmd_region)
 
     s = sub.add_parser("init", help="create an empty case")
     s.add_argument("--name")

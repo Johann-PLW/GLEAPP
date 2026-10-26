@@ -51,7 +51,7 @@ def test_categories_one_to_three_are_merged_and_the_rest_counted(tmp_path):
     assert res["skipped_category"] == 1 and res["skipped_no_md5"] == 1
     assert (stash.lookup(_md5(1)) or {}).get("category") == 1
     assert stash.lookup(_md5(4)) is None
-    rows = {md5: src_ for md5, _cat, src_, _ in stash.iter_all()}
+    rows = {md5: src_ for md5, _rid, _cat, src_, _ in stash.iter_all()}
     assert rows[_md5(2)] == "pre-categorized: hashes.json"
 
 

@@ -17,7 +17,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import quote
 
-from .db import category_code, is_uncategorized
+from .db import is_uncategorized
 from . import archive, basemaps, categories, exocache, flags, imaging, provenance, staticmap, timeutil, vicdetails  # noqa: F401  (imaging: registers HEIF decoder)
 from .case import Case
 
@@ -74,7 +74,7 @@ def _rows(case: Case, where: str = "") -> list[dict]:
         d["hashset_vic"] = vicdetails.parse(d.get("hashset_vic"))
         # every source that flagged the file, as a list and as readable text
         d["hashset_sources"] = _sources(d.get("hashset_sources"))
-        d["hash_matches"] = matched_in(d["hashset_sources"])
+        d["hash_matches"] = matched_in(d["hashset_sources"], case.db)
         out.append(d)
     return out
 
@@ -94,7 +94,7 @@ def _sources(raw) -> list[dict]:
     return val if isinstance(val, list) else []
 
 
-def matched_in(sources: list[dict]) -> str:
+def matched_in(sources: list[dict], db=None) -> str:
     """The sources that flagged a file, as one line: ``Project VIC (VICS set,
     category 2); Hash stash (category 2)``. The stash is never named, since its
     name is the label."""
@@ -104,7 +104,8 @@ def matched_in(sources: list[dict]) -> str:
         detail = []
         if x.get("src") in ("vic", "other", "good") and x.get("name"):
             detail.append(str(x["name"]))
-        if not is_uncategorized(x.get("category")):
+        if not (db.is_uncategorized if db is not None
+                else is_uncategorized)(x.get("category")):
             detail.append(f"category {x['category']}")
         parts.append(label + (f" ({', '.join(detail)})" if detail else ""))
     return "; ".join(parts)
@@ -933,7 +934,7 @@ def _overview_html(case: Case, overview: str, tally: dict[str, int], drawn_rows:
 def _summary_html(case: Case, rows: list[dict], label: str, *,
                   flag_mode: bool = False) -> str:
     by_kind = Counter(d.get("kind") for d in rows)
-    by_cat = Counter(category_code(d.get("category")) for d in rows)
+    by_cat = Counter(case.db.category_code(d.get("category")) for d in rows)
     by_flag: Counter = Counter()
     flagged = 0
     for d in rows:
@@ -963,7 +964,7 @@ def _summary_html(case: Case, rows: list[dict], label: str, *,
         if by_kind.get(k):
             out.append(line("sub", lbl, by_kind[k]))
 
-    codes = sorted(by_cat, key=lambda c: (is_uncategorized(c), cmap.get(c, {}).get("position", c), c))
+    codes = sorted(by_cat, key=lambda c: (case.db.is_uncategorized(c), cmap.get(c, {}).get("position", c), c))
     if codes:
         out.append("<tr class='grp'><td colspan='3'>By category</td></tr>")
         for c in codes:
@@ -1183,7 +1184,7 @@ def _card_html(case: Case, d: dict, keys: list[str], thumb_root: Path,
     catbar = (f"<div class='catbar' style='background:"
               f"{html.escape(categories.color(case.db, code))}'>"
               f"{html.escape(d['category_label'])}</div>"
-              if not is_uncategorized(code) else "")
+              if not case.db.is_uncategorized(code) else "")
     # Flags sit right under the category bar - small and colored, never
     # confusable with the (bold, singular) category itself. A file can carry
     # any number, including zero.
@@ -1471,12 +1472,12 @@ def export_html(case: Case, dest: str | Path, where: str = "", *,
         # kind (image/video/other) only splitting whatever carries no flag.
         groups: dict[int, dict[str, list[dict]]] = {}
         for d in rows:
-            code = category_code(d.get("category"))
+            code = case.db.category_code(d.get("category"))
             kind = d.get("kind") if d.get("kind") in ("image", "video") else "other"
             groups.setdefault(code, {}).setdefault(kind, []).append(d)
 
         def _order(code: int) -> tuple:
-            if is_uncategorized(code):
+            if case.db.is_uncategorized(code):
                 return (1, 1e9, 0)
             return (0, cmap.get(code, {}).get("position", code), code)
         codes = sorted(groups, key=_order)

@@ -399,7 +399,7 @@ full-size viewer shows the complete image with nothing over it.
 | `VIC` (orange) | matched a **Project VIC hash set** (hover for the set name and category) |
 | `HASH` (blue) | matched an imported hash set that is not Project VIC, known-good or your stash (kind *known* or *other*) |
 | `NSRL` (green) | matched a *known-good* set (badge = the set name's first word, uppercased, cut to 6 characters); auto-categorized **Non-pertinent** if uncategorized |
-| `STASH` (purple) | matched your **local hash stash**: you previously categorized this file 1-3 in another case |
+| `STASH` (purple) | matched your **local hash stash**: you previously put this file in a notable category (1-3 in the US) in another case of the same region |
 | `ERR` (red) | processing error and no thumbnail: the file could not be decoded (open details for the reason) |
 | `N 👤` (teal) | face count from screening |
 | `📍` | has GPS coordinates |
@@ -476,10 +476,11 @@ A field appears only when the file has a value for it.
   any file.
 - Page through it, or jump to an offset (decimal, or `0x`-prefixed hex).
 
-## 7. Categories: the mandatory Project VIC scheme
+## 7. Categories: the mandatory regional scheme
 
-Every case is seeded with **codes 0-5**, the Project VIC 2.0 (US) category
-scheme. They are **locked**: cannot be renamed, recolored, reordered, hidden or
+Every case is seeded with its region's locked category scheme (see *Regions*
+below). In a US case that is **codes 0-5**, the Project VIC 2.0 (US) category
+scheme, described here. They are **locked**: cannot be renamed, recolored, reordered, hidden or
 deleted (they show read-only with a 🔒 in the ⚙ Categories editor). Number keys
 match the codes: `0` applies Non-pertinent, `1`-`4` apply codes 1-4, and `5`
 clears a category back to Uncategorized.
@@ -493,17 +494,54 @@ clears a category back to Uncategorized.
 | **4** | Comparison Images (Non-pertinent) | Images kept for comparison or identification: known-series reference images, images used to identify a victim, location or offender, that are themselves non-pertinent to the primary offense. Also for non-pertinent images an examiner wants specifically flagged. Not notable. |
 | **5** | Uncategorized | Not yet reviewed, no decision made. The default and the backlog you work down. Filter to it and categorize each file; the cursor advances to the next automatically, and ↻ Refresh clears the done ones. |
 
-**Adding your own.** "+ Add category" in the editor creates **code 6** and up.
+### Regions: other countries' category schemes
+
+The table above is the **United States** (Project VIC) scheme. Other countries
+and agencies categorize differently, and GLEAPP carries their locked schemes
+too: Australia, Austria, Canada (English and French), Denmark, Estonia,
+Europol, France, Ireland, the Netherlands, Norway, Romania, South Korea,
+Sweden, Switzerland and the United Kingdom.
+
+- **First launch asks.** The launcher asks for your region before the first
+  case is made, and shows each region's categories, codes and keys so you can
+  check them. Change it later from the launcher's **☰ Menu → Category region**,
+  or with `gleapp region <ID>` (`gleapp region` alone lists the IDs).
+- **It applies to new cases.** Every case is seeded with the region chosen when
+  it was created and keeps it, because the codes stored on its files mean
+  something only under that scheme. A case created before regions existed is a
+  US case. A case whose region differs from the app's current one says so in
+  its header.
+- **Each region keeps its own codes and keys.** In a UK case, for example,
+  `0` is Uncategorised and `1` to `9` are SC Category A through Supports
+  Identification, so your own categories start at code 10. Number keys follow
+  the region's own shortcuts; your categories take the digits it leaves free,
+  and a preset whose region gives it a letter key (Denmark) has no key in
+  GLEAPP.
+- **Known-good (NSRL) hits** auto-categorize a file only where the region's
+  scheme has a non-pertinent category: the US and South Korea (code 0) and
+  Europol (code 3, NON PERTINENT). Elsewhere the file keeps its known-good
+  badge and stays uncategorized.
+- **Notable.** A region's categories marked illegal in its scheme are the
+  notable ones: they are what the hash stash keeps (§12) and what reports treat
+  as evidential. In the US scheme that is codes 1-3, as before.
+- **Project VIC files.** Category codes are imported and exported as they are,
+  under the case's region. A VIC file names its data model's region in
+  `@odata.context` (`.../2.0.xml/US/$metadata`), and when that is not the case's
+  region the import says so, in the case header and the audit log.
+
+**Adding your own.** "+ Add category" in the editor creates **code 6** and up
+(in a US case; above the region's presets in any other).
 Your categories are fully editable: rename, recolor (click the color swatch
 next to the name), delete (soft while in use), drag to reorder (they always
-sort after the presets). The first four get number-key shortcuts 6-9 in order and
-start with an auto-assigned color.
+sort after the presets). The first four get number-key shortcuts 6-9 in order (the
+digits the region leaves free, in another region) and start with an auto-assigned
+color.
 
 **Carrying your own categories and flags to other cases.** In the ⚙ Categories
 or ⚙ Flags editor, **Save as my set…** keeps this case's own categories and,
 if you tick it, its flags, for other cases. Each part has its own box, so flags
 travel only when you choose. Only named, shown categories are saved; the
-Project VIC presets (0–5) are in every case already and are never saved. Saving
+regional presets (0–5 in a US case) are in every case already and are never saved. Saving
 a part replaces what you saved of it before (the dialog warns you); the part you
 leave unticked stays as it was. The set lives in `categories.json` in your
 GLEAPP settings folder (`%APPDATA%\GLEAPP` on Windows), outside any case.
@@ -853,7 +891,7 @@ Set **kinds**:
 | Flag files from a CyberTip or another one-off list, in this case only | **Import hash set...** in the sidebar's *Known hashes* section | *Importing a hash set into a case* |
 | Match every case against a Project VIC hash set | **☰ Menu → Reference → Project VIC hash sets** | *Project VIC hash sets* |
 | Hide operating system and app files | Import the NSRL: **☰ Menu → Reference → Reference data (NSRL)** | *Setting up the NSRL RDS* |
-| Match files I categorized 1-3 in past cases | The local hash stash | §12 |
+| Match files I put in notable categories (1-3 in the US) in past cases | The local hash stash | §12 |
 | Re-run matching without reprocessing | **Re-check** | *Importing a hash set into a case* |
 
 ### Importing a hash set into a case (e.g. a CyberTip)
@@ -1157,7 +1195,8 @@ decision; the stash holds only hashes of files **you** categorized.
 
 1. Work a case as normal: categorize files into codes 1, 2 and 3.
 2. Click **☰ Menu → Reference → Hash stash**. The panel shows how many of this case's
-   files are eligible (category 1-3, with an MD5 other than an empty file's) and
+   files are eligible (a notable category of the case's region, 1-3 in the US,
+   with an MD5 other than an empty file's) and
    the current stash totals.
 3. Click **Add this case's hashes to the stash**. Every eligible file's MD5 is
    saved with its code and the case name as the source note. The stash file is
@@ -1189,7 +1228,7 @@ The *Sharing* section of the Hash stash panel:
 | **Export a backup...** | writes a portable `hash-stash-<date>.hstash` into `%LOCALAPPDATA%\GLEAPP\hashsets\`; hand it to a colleague |
 | **Export CSV...** | same, as a `md5,category,source` CSV |
 | **Merge external hash stash...** | folds another `.hstash` or `.csv` stash into yours (an older `.gleapp`-named export still works too); the more-severe code wins on any overlapping hash |
-| **Merge external pre-categorized hash set...** | folds in MD5s another tool has already categorized, from a JSON file of records that each carry an `MD5` and a numeric `Category`. Categories 1–3 are kept; how many records fell outside them, or had no MD5, is reported. A file with no such records is refused |
+| **Merge external pre-categorized hash set...** | folds in MD5s another tool has already categorized, from a JSON file of records that each carry an `MD5` and a numeric `Category`. The codes are read as your region's, and its notable categories (1–3 in the US) are kept; how many records fell outside them, or had no MD5, is reported. A file with no such records is refused |
 | **Use a shared hash stash...** | point GLEAPP at one stash file on a shared / network drive; the whole team reads and writes the same stash |
 | **Back to my own** | revert to your per-user `stash.hstash` (the shared file is left untouched) |
 
@@ -1205,7 +1244,7 @@ undoable**; export a copy first if you're unsure.
 
 ```
 gleapp stash                       # show totals and the file location
-gleapp -c <case dir> stash --add   # add that case's category 1-3 MD5s
+gleapp -c <case dir> stash --add   # add that case's notable-category MD5s
 gleapp stash --export stash.hstash # portable copy  (.csv also works)
 gleapp stash --merge theirs.hstash # fold in a colleague's stash
 gleapp stash --merge-precategorized hashes.json   # MD5s another tool categorized
@@ -1866,7 +1905,7 @@ own **local hash stash**) and surfaces *signals*, and the categorization is
 always your professional judgment.
 
 The **local hash stash** (section 12) contains MD5 hash values only, no file
-content, names or paths, of files you categorized 1-3. It never leaves your
+content, names or paths, of files you put in notable categories. It never leaves your
 machine unless you explicitly **Export** it or point it at a shared location.
 
 ## 19. Maps (offline basemaps)

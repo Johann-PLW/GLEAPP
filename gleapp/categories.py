@@ -1,8 +1,9 @@
 """Categorization helpers.
 
 Categories are stored per case in the ``categories`` table (see ``db.py``).
-Codes 0-5 are locked Project VIC 2.0 (US) presets seeded into every case; the
-examiner can add their own (code 6+) but cannot edit the presets.  This module
+Each case is seeded with its region's locked presets (see ``regions.py``;
+Project VIC 2.0 codes 0-5 in a US case); the examiner can add their own above
+them but cannot edit the presets.  This module
 is just a thin read helper over a ``CaseDB`` plus the non-category triage
 buckets.
 """
@@ -12,7 +13,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .db import CATEGORY_PALETTE  # re-export for convenience
-from .db import is_uncategorized
 
 if TYPE_CHECKING:
     from .db import CaseDB
@@ -34,14 +34,14 @@ def label(db: "CaseDB", code: int | None) -> str:
 
 
 def color(db: "CaseDB", code: int | None) -> str:
-    if is_uncategorized(code):
+    if db.is_uncategorized(code):
         return "#8b93a3"
     row = db.get_category(code)
     return row["color"] if row else "#888888"
 
 
 def is_notable(db: "CaseDB", code: int | None) -> bool:
-    if is_uncategorized(code):
+    if db.is_uncategorized(code):
         return False
     row = db.get_category(code)
     return bool(row["notable"]) if row else True
@@ -53,7 +53,7 @@ def catmap(db: "CaseDB", *, include_inactive: bool = True) -> dict[int, dict]:
     for r in db.list_categories(include_inactive=include_inactive):
         out[r["code"]] = {
             "code": r["code"],
-            "name": r["name"] or ("Uncategorized" if is_uncategorized(r["code"])
+            "name": r["name"] or ("Uncategorized" if db.is_uncategorized(r["code"])
                                   else f"Category {r['code']}"),
             "color": r["color"],
             "notable": bool(r["notable"]),

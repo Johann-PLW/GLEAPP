@@ -1,7 +1,7 @@
 """The examiner's saved set of categories and flags, carried from case to case.
 
 Stored per user in ``config_dir()/categories.json``, outside any case. Saving
-copies the open case's own categories (never the locked Project VIC presets,
+copies the open case's own categories (never the locked regional presets,
 which every case gets anyway) and/or its flags into the file; applying copies
 them into a case. It is a copy, not a link: editing a case never changes the
 saved set, and saving a new set never reaches back into an older case.
@@ -17,7 +17,7 @@ import json
 from typing import Any
 
 from . import appconfig
-from .db import CATEGORY_PALETTE, VIC_PRESETS
+from .db import CATEGORY_PALETTE
 
 
 def _path():
@@ -118,10 +118,11 @@ def _apply_category(db, c: dict) -> dict:
             return {"name": name, "code": r["code"], "saved_code": want,
                     "status": "exists"}
     used = {r["code"] for r in rows}
-    if want is not None and want >= len(VIC_PRESETS) and want not in used:
+    first = db.scheme.first_custom
+    if want is not None and want >= first and want not in used:
         code, status = want, "added"
     else:
-        code = max(max(used, default=0) + 1, len(VIC_PRESETS))
+        code = max(max(used, default=0) + 1, first)
         status = "added" if want is None else "renumbered"
     color = c.get("color") if _is_color(c.get("color")) else \
         CATEGORY_PALETTE[(code - 1) % len(CATEGORY_PALETTE)]

@@ -136,7 +136,11 @@ def open_case(path: str | Path, *, create: bool = False, examiner: str | None = 
     root.mkdir(parents=True, exist_ok=True)
     (root / THUMB_DIR).mkdir(exist_ok=True)
     (root / REPORT_DIR).mkdir(exist_ok=True)
-    db = CaseDB(db_path)
+    region = None
+    if create:
+        from . import appconfig
+        region = appconfig.get_region()
+    db = CaseDB(db_path, region=region)
     if create and db.get_meta("case_name") is None:
         db.set_meta("case_name", root.name)
     if examiner:

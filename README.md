@@ -14,8 +14,10 @@ gallery** with right-click *find-similar* and *cursor-scrub video preview*.
 > authorized examiners. It does **not** ship, download, or connect to any
 > illegal-content hash database and it performs **no** content classification:
 > categorization is always a human decision. Every case is seeded with the
-> locked **Project VIC 2.0 (US)** category scheme (codes 0–5); the examiner adds
-> their own categories (code 6+) as needed.
+> locked category scheme of the examiner's region, chosen at first launch: the
+> **Project VIC 2.0 (US)** scheme (codes 0–5) in the US, or one of 16 other
+> countries' and agencies' schemes; the examiner adds their own categories
+> above those as needed.
 
 A full **manual** is built into the app (the **? Help** button, or press `?`)
 and mirrored at [`docs/MANUAL.md`](docs/MANUAL.md).
@@ -39,7 +41,7 @@ and mirrored at [`docs/MANUAL.md`](docs/MANUAL.md).
 | **Video** | Dimensions/duration (OpenCV, no ffmpeg needed), evenly-spaced **key-frame** extraction, per-frame pHash so a still can find its source video |
 | **Visual screening** | **YuNet** DNN face detection + broad **skin-tone ratio** as triage aids (pluggable: swap in another model behind the same functions) |
 | **Similarity search** | *Right-click → Find similar* across stills **and** video key frames; also on the CLI |
-| **Categories** | Locked **Project VIC 2.0 (US)** presets (codes 0–5) in every case; examiner adds their own (code 6+: rename / delete / reorder, auto colors), and can save them, plus flags if they choose, as a set that new cases start with; shown as a color bar + name on every tile |
+| **Categories** | Locked presets of the region chosen at first launch in every case (**Project VIC 2.0 (US)** codes 0–5, or one of 16 other countries' and agencies' schemes; `gleapp region` to change); examiner adds their own (code 6+: rename / delete / reorder, auto colors), and can save them, plus flags if they choose, as a set that new cases start with; shown as a color bar + name on every tile |
 | **Flags** | Independent of category: a file can carry any number (Evidence, Bondage, whatever the case calls for); examiner-defined, none preseeded or locked; searchable, filterable, and shown as colored labels in every report |
 | **Saving** | Every action commits to `case.gleapp` immediately (SQLite WAL); notes autosave; header shows save status; timestamped snapshots in `<case>/backups/` on a timer, on close, and on demand |
 | **Review workflow** | Filter to Uncategorized and work the backlog: categorizing *is* the review step, cursor auto-advances, ↻ Refresh clears done files; flags, per-file notes, audit log of every action |
@@ -346,8 +348,10 @@ Each file carries its VIC MD5 (processing trusts it, skips re-hashing), MediaID,
 original filename and device path, MIME type, victim/offender/distributed flags,
 and the Series and Tags the record carried, kept apart from the examiner's own flags. Existing `Category` values are imported; GLEAPP category codes map 1:1 to
 VIC codes (0 = Non-pertinent; 5 = Uncategorized, written back as `null`): the
-codes 0–5 GLEAPP seeds *are* the Project VIC scheme, so an imported category
-lands on the matching locked preset.
+codes 0–5 GLEAPP seeds in a US case *are* the Project VIC scheme, so an imported
+category lands on the matching locked preset. In another region's case codes are
+imported as they are, and an import whose `@odata.context` names a different
+region than the case's is reported.
 
 **Export back:** the **Export Project VIC** button (or `gleapp report --format vic`)
 re-reads the original file and writes `reports/projectvic_export.json` with each
@@ -601,7 +605,7 @@ folders / a JSON job, then watch processing progress, no CLI needed.
 |---|---|
 | Select | click; Ctrl-click add; Shift-click range; `←`/`→` move; `A` select all |
 | **See details** | **single-click** a file → the right pane fills instantly (no double-click). Toggle the pane with `I` or the header button |
-| Manage categories | **⚙ Categories** in the header: presets 0–5 are locked; add / rename / delete / reorder your own (order = the `1`–`9` keys) |
+| Manage categories | **⚙ Categories** in the header: the region's presets (0–5 in the US) are locked; add / rename / delete / reorder your own (order = the `1`–`9` keys) |
 | Categorize | keys `0`–`4` = VIC codes, `5` to clear, `6`–`9` your own categories in order, or the selection bar / right-click menu / details pane |
 | **Find similar** | **right-click → Find similar images**, key `F`, or the details-pane button |
 | **Scrub a video** | move the cursor left→right across a video tile: it steps through the key frames; a bar shows position |

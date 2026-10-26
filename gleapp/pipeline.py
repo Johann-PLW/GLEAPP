@@ -458,7 +458,6 @@ def rematch_hashes(case: Case, *, progress=None) -> int:
     ``use_stash`` meta flag is turned off (a non-CSAM case, say), and every
     Project VIC set when ``use_vic`` is - see ``hashdb.match_all``.
     """
-    from .db import NONPERTINENT_CATEGORY, is_uncategorized
     use_stash = case.db.get_meta("use_stash") != "0"
     use_vic = case.db.get_meta("use_vic") != "0"
     rows = list(case.db.iter_files(
@@ -477,7 +476,7 @@ def rematch_hashes(case: Case, *, progress=None) -> int:
             # headline does not hide it.
             vic = next((v for v in (hashdb.vic_record(case.db, h) for h in found)
                         if v), None)
-            asserted = hashdb.asserted_category(found)
+            asserted = hashdb.asserted_category(found, case.db)
             case.db.update_file(
                 r["id"], hashset_hit=top["name"],
                 hashset_cat=asserted if asserted is not None else top["category"],
@@ -488,13 +487,16 @@ def rematch_hashes(case: Case, *, progress=None) -> int:
             # auto-categorize only an as-yet-uncategorized file:
             #  - a 'known' set asserts its own category
             #  - a 'known-good' hit (NSRL etc.) -> Non-pertinent, unless a
-            #    notable source flags the file as well
-            if is_uncategorized(r["category"]):
+            #    notable source flags the file as well, or the case's region
+            #    names no non-pertinent category
+            nonpert = case.db.scheme.nonpertinent
+            if case.db.is_uncategorized(r["category"]):
                 if asserted is not None:
                     case.db.update_file(r["id"], category=asserted)
-                elif (not any(h["kind"] == "known" for h in found)
+                elif (nonpert is not None
+                      and not any(h["kind"] == "known" for h in found)
                       and any(h["kind"] == "known-good" for h in found)):
-                    case.db.update_file(r["id"], category=NONPERTINENT_CATEGORY)
+                    case.db.update_file(r["id"], category=nonpert)
         elif (r["hashset_hit"] is not None or r["hashset_vic"] is not None
               or r["hashset_sources"] is not None):
             case.db.update_file(r["id"], hashset_hit=None, hashset_cat=None,
