@@ -150,7 +150,8 @@ def _codes(record: dict) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _st_text(st: dict) -> str:
+def source_type_text(st: dict) -> str:
+    """IPTC's label and the code, or the URI as stated when IPTC has no label for it."""
     return f"{st['label']} ({st['code']})" if st.get("label") else st.get("uri", "")
 
 
@@ -186,7 +187,7 @@ def describe(entry: dict | None) -> list[tuple[str, list[tuple[str, str]]]]:
                 ("Time-stamp (stated, UTC)", sig.get("signing_time", "")),
                 ("Actions", ", ".join(m.get("actions") or [])),
                 ("Software agents", ", ".join(m.get("software_agents") or [])),
-                ("Digital source type", ", ".join(_st_text(st) for st in m.get("source_types") or [])),
+                ("Digital source type", ", ".join(source_type_text(st) for st in m.get("source_types") or [])),
                 ("Title", m.get("title", "")), ("Format", m.get("format", "")),
                 ("Ingredients", ", ".join(
                     f"{g['title'] or '(unnamed)'}" + (f" ({g['relationship']})" if g.get("relationship") else "")
@@ -194,7 +195,7 @@ def describe(entry: dict | None) -> list[tuple[str, list[tuple[str, str]]]]:
         out.append((f"Manifest {i} of {len(manifests)} ({role})", [r for r in rows if r[1]]))
     for x in rec.get("xmp") or []:
         if x.get("source_type"):
-            rows = [("Found in", x["where"]), ("Digital source type", _st_text(x["source_type"])),
+            rows = [("Found in", x["where"]), ("Digital source type", source_type_text(x["source_type"])),
                     ("Creator tool", x.get("creator_tool", "")),
                     ("Creators", ", ".join(x.get("creators") or []))]
             out.append(("XMP statement (unsigned)", [r for r in rows if r[1]]))

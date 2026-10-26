@@ -403,6 +403,8 @@ full-size viewer shows the complete image with nothing over it.
 | `ERR` (red) | processing error and no thumbnail: the file could not be decoded (open details for the reason) |
 | `N 👤` (teal) | face count from screening |
 | `📍` | has GPS coordinates |
+| `AI` (pink) | **AI declared**: a digital source type the file states names generative AI, in its C2PA manifest, an ingredient's manifest or its XMP (§8, Content Credentials). A declaration, not a finding, and not verified. Shown only once the file has been read |
+| `CR` (slate) | the file holds a **C2PA manifest store** (Content Credentials). Not verified: a signer is as stated. Shown only once the file has been read |
 | `≈ N` (blue) | in a **visual stack** of N: same picture re-encoded/resized (blue offset shadow) |
 | `⬚ N` (black) | in an **exact stack** of N: byte-identical copies (gray offset shadow) |
 | `✓` | selected |
@@ -1496,7 +1498,11 @@ Nothing is read during the export: a file not read says *Not read*.
 `gleapp report --c2pa` does the same. The CSV always carries `c2pa_credentials`,
 `c2pa_ai`, `c2pa_signer_stated`, `c2pa_generator`, `c2pa_source_types` and
 `c2pa_actions`, and the JSON a `c2pa` object with the whole reading, for
-pictures and videos (*Not read* and null until they are read).
+pictures and videos (*Not read* and null until they are read). The LAVA report's
+*Media Files* artifact carries *Content Credentials* and *AI Declared* for each
+picture and video, and a *Content Credentials* artifact has one row per manifest
+and per XMP statement, laid out as iLEAPP's and ALEAPP's C2PA artifact is; it is
+left out when nothing read declared anything.
 
 **Media** (dialog checkboxes, on by default, saved with the case; shown while
 **HTML report** is ticked and **Metadata only** is not):

@@ -490,6 +490,11 @@ function tileEl(f) {
   const hit = hashBadges(f);
   const gps = f.gps_lat != null ? `<span class="b">\u{1F4CD}</span>` : "";
   const err = f.error && !f.thumb ? `<span class="b err">ERR</span>` : "";
+  // Content Credentials, as the read pass kept them: a declaration, never a finding
+  const c2paB = (f.c2pa_ai === "yes"
+      ? `<span class="b ai" title="AI declared: a digital source type this file states names generative AI (in a C2PA manifest, an ingredient's manifest or XMP). A declaration, not a finding, and not verified.">AI</span>` : "")
+    + (f.c2pa_credentials === "c2pa"
+      ? `<span class="b cr" title="Content Credentials: the file holds a C2PA manifest store. Not verified: a signer is as stated.">CR</span>` : "");
   const flagB = f.flags && f.flags.length
     ? `<span class="b" title="${esc(f.flags.map(x => x.name).join(", "))}">⚑ ${f.flags.length}</span>`
     : "";
@@ -520,7 +525,7 @@ function tileEl(f) {
       ${media}
       ${f.kind === "video" ? `<div class="scrub"><i></i></div>
         <span class="vid">▶ ${fmtDur(f.duration)}</span>` : ""}
-      <div class="badges">${hit}${err}${dist}${faces}${gps}${flagB}</div>
+      <div class="badges">${hit}${err}${dist}${faces}${gps}${flagB}${c2paB}</div>
       ${stack}
       <span class="selcheck">✓</span>
     </div>
