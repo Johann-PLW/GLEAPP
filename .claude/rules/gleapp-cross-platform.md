@@ -763,6 +763,23 @@ on macOS 27.0.1 left a 16 MiB gap unallocated and wrote a 15 MiB one out in full
 why `_keeps_holes` probes with a 32 MiB hole. The test of it fails on a CI runner rather
 than skip, so a broken probe on one platform is not a quiet pass.
 
+**On Windows a seek is not a hole; the hole has to be declared.** Until 2026-10-25 the
+copy only seeked, and NTFS fills the gap between what was written and a later write when
+the cached data goes out to disk, so the leading zero run of a copy ended up allocated.
+Read while the file was still cached it looked sparse, which is why the test passed most
+of the time and failed on `windows-smoke` once (run 40254787007, PR #313, which touched
+none of this), whenever the write-out came first. Measured on Windows 11 ARM64 (the
+Parallels VM), 200 copies of a file of two 64 MiB zero runs around 64 KiB of data, the
+test's own shape: seeking alone, 9 of 200 grew after closing to between 30 and 60 MB
+allocated; seeking and then a flush, 67,174,400 bytes every time, the first run and the
+data, the number CI reported. `_declare_holes` now ends a sparse copy on Windows with
+FSCTL_SET_ZERO_DATA over each run it skipped, Microsoft's way to make a range of a sparse
+file a hole: 65,536 bytes allocated in 400 of 400 runs, flushed or not, every byte read
+back. The probe writes its file the way a copy is written and flushes it before measuring,
+and so does the test, which against the old code then fails 50 times of 50 on that VM
+and passes 50 of 50 against the new. Not measured: a real NTFS disk outside a VM (the CI
+runner is the other place this runs).
+
 A file the volume holds under several names is written once per `(volume base, node)` and
 linked for the rest (`_link`, which falls back to a second copy where the filesystem has no
 hard links). Each name keeps its own row.
