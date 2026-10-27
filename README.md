@@ -194,11 +194,13 @@ not help. Intel Mac wheels are different: they carried them through 4.12, and fr
 on they bundle no FFmpeg at all.
 
 Build the macOS app in an environment where OpenCV comes from conda-forge, with
-FFmpeg pinned to its LGPL build:
+FFmpeg pinned to its LGPL build. libabseil is pinned too: conda-forge's current
+Intel OpenCV build links that version and fails to load with a newer one.
 
 ```bash
 micromamba create -p ./build-env -c conda-forge python=3.12 \
-    "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*"
+    "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*" \
+    "libabseil=20260526"
 grep -v opencv requirements.txt > /tmp/req.txt
 ./build-env/bin/python -m pip install -r /tmp/req.txt -e .[build]
 ```

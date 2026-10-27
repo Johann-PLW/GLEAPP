@@ -71,6 +71,10 @@ jobs:
       # name into one. v2026.5.0 shipped a macOS app that could not import cv2 for
       # that reason. Taking both from conda-forge leaves one shared harfbuzz.
       # OpenCV 4.x cannot load the bundled content model, hence version >=5.
+      # libabseil is pinned because conda-forge's osx-64 libopencv 5.0.0 (build _11)
+      # links libabseil 20260526, while a later libprotobuf build lets the solver pick
+      # 20260817, and cv2 then fails to load on Intel. Drop the pin once libopencv
+      # is rebuilt against the newer abseil.
       - name: macOS, OpenCV and Pillow from conda-forge
         if: runner.os == 'macOS'
         shell: bash
@@ -78,7 +82,8 @@ jobs:
           curl -sL "https://micro.mamba.pm/api/micromamba/osx-$(uname -m | sed s/x86_64/64/)/latest" \
             | tar -xj bin/micromamba
           ./bin/micromamba create -y -p ./build-env -c conda-forge --no-rc \
-            python=3.12 "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*" pillow
+            python=3.12 "py-opencv[version='>=5',build='headless*']" "ffmpeg=*=lgpl*" pillow \
+            "libabseil=20260526"
           echo "$PWD/build-env/bin" >> "$GITHUB_PATH"
 
       - name: Install build dependencies
