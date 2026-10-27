@@ -246,6 +246,11 @@ async function refreshCats() {
       style="border-color:${c.color}">${esc(c.name || "Category " + c.code)}${
         k != null ? ` <span class="muted">${k}</span>` : ""}</button>`;
   }).join("");
+  // Clear cat sends the case's own Uncategorized code (5 only in a US case)
+  const clr = $("#selClear"), ck = catKey(UNCAT);
+  clr.dataset.cat = UNCAT;
+  clr.title = ck != null ? `key ${ck}` : "";
+  clr.innerHTML = `Clear cat${ck != null ? ` <span class="muted">${ck}</span>` : ""}`;
 }
 
 /* ---------- flags ---------- */
@@ -532,7 +537,7 @@ function tileEl(f) {
   const stack = stackBits.length ? `<div class="stacks">${stackBits.join("")}</div>` : "";
   const catbar = hasCat(f.category)
     ? `<div class="catbar" style="background:${catColor(f.category)}">${esc(catName(f.category))}</div>`
-    : `<div class="catbar none">Uncategorized</div>`;
+    : `<div class="catbar none">${esc(uncatName())}</div>`;
   const media = f.thumb
     ? `<img loading="lazy" src="/thumb/${f.thumb}" alt=""
          onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'noimg',textContent:'no preview'}))">`
