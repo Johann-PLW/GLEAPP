@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import vicdetails
+from . import regions, vicdetails
 from .vendor import exoprobe
 
 SCHEMA_VERSION = 18
@@ -266,9 +266,10 @@ CREATE TABLE IF NOT EXISTS audit (
     detail  TEXT
 );
 
--- Categories.  Codes 0-5 are locked Project VIC 2.0 (US) presets seeded in
--- every case (see VIC_PRESETS); the examiner may add their own (code 6+) but
--- cannot rename, recolor, reorder, hide or delete the presets.
+-- Categories.  The case's region (meta category_region, see regions.py) seeds
+-- its locked presets - Project VIC 2.0 (US) codes 0-5 in a US case; the
+-- examiner may add their own above them but cannot rename, recolor, reorder,
+-- hide or delete the presets.
 CREATE TABLE IF NOT EXISTS categories (
     code     INTEGER PRIMARY KEY,
     name     TEXT NOT NULL DEFAULT '',
@@ -276,7 +277,7 @@ CREATE TABLE IF NOT EXISTS categories (
     notable  INTEGER NOT NULL DEFAULT 1,   -- treat as evidential in reports
     position INTEGER NOT NULL DEFAULT 0,   -- display order + 1-9 shortcut order
     active   INTEGER NOT NULL DEFAULT 1,   -- 0 = hidden from picker, label kept
-    locked   INTEGER NOT NULL DEFAULT 0    -- 1 = Project VIC preset, not editable
+    locked   INTEGER NOT NULL DEFAULT 0    -- 1 = regional preset, not editable
 );
 
 -- Flags: examiner-defined labels, independent of category. Any number can
@@ -349,20 +350,24 @@ VIC_PRESETS = [
 ]
 
 
-def is_uncategorized(code: int | None) -> bool:
+# The defaults below are the US scheme's; a case of another region passes its
+# own (CaseDB.is_uncategorized and friends do that).
+def is_uncategorized(code: int | None,
+                     uncat: int = UNCATEGORIZED_CATEGORY) -> bool:
     """True for a file with no category yet (NULL is read the same way)."""
-    return code is None or int(code) == UNCATEGORIZED_CATEGORY
+    return code is None or int(code) == uncat
 
 
-def category_code(code: int | None) -> int:
+def category_code(code: int | None, uncat: int = UNCATEGORIZED_CATEGORY) -> int:
     """A stored category as a code, NULL read as Uncategorized."""
-    return UNCATEGORIZED_CATEGORY if code is None else int(code)
+    return uncat if code is None else int(code)
 
 
-def severity_key(code: int) -> tuple[bool, int]:
+def severity_key(code: int,
+                 nonpertinent: int | None = NONPERTINENT_CATEGORY) -> tuple[bool, int]:
     """Sort key putting the most severe category first: lowest code, except
-    that Non-pertinent (0) ranks after every other category."""
-    return (int(code) == NONPERTINENT_CATEGORY, int(code))
+    that Non-pertinent ranks after every other category."""
+    return (int(code) == nonpertinent, int(code))
 
 
 # The list view's File path column: the device path a Project VIC import recorded,
@@ -414,7 +419,10 @@ _SHARED_CONNECTION: dict[str, Any] = (
 
 
 class CaseDB:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, region: str | None = None):
+        """``region`` picks the category scheme of a case being created; an
+        existing case keeps the one it was created with."""
+        self._new_region = region
         self.path = str(path)
         # check_same_thread=False: the CLI pipeline (writer thread) and the Flask
         # dev server (per-request threads) share one connection.  All writes go
@@ -464,6 +472,12 @@ class CaseDB:
         if cur is None:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
             self.set_meta("created_at", str(time.time()))
+            if regions.is_region(self._new_region):
+                self.set_meta("category_region", self._new_region.upper())
+        # a case from before regions existed is a US case
+        if self.get_meta("category_region") is None:
+            self.set_meta("category_region", regions.DEFAULT_REGION)
+        self.scheme = regions.get(self.get_meta("category_region"))
         self._migrate()
         if cur is not None and int(cur) < 18:
             self._swap_vic_codes()
@@ -680,16 +694,32 @@ class CaseDB:
                 "UPDATE categories SET code = CASE code WHEN -1 THEN 5 "
                 "ELSE 0 END WHERE code IN (-1, -6)")
 
+    # -- the case's category scheme ------------------------------------------
+    @property
+    def uncat(self) -> int:
+        return self.scheme.uncategorized
+
+    def is_uncategorized(self, code: int | None) -> bool:
+        return is_uncategorized(code, self.scheme.uncategorized)
+
+    def category_code(self, code: int | None) -> int:
+        return category_code(code, self.scheme.uncategorized)
+
+    def severity_key(self, code: int) -> tuple[bool, int]:
+        return severity_key(code, self.scheme.nonpertinent)
+
     def _seed_categories(self) -> None:
-        """Seed the locked Project VIC presets (codes 0-5) and give any category
-        code already used by a file at least a placeholder row.
+        """Seed the region's locked presets and give any category code already
+        used by a file at least a placeholder row.
 
         Non-destructive for older cases: a preset slot the examiner has already
         named is left alone as an unlocked custom category; only empty slots and
         missing rows are filled and locked.
         """
         with self.lock:
-            for code, name, color, notable, pos in VIC_PRESETS:
+            for p in self.scheme.presets:
+                code, name, color = p.code, p.name, p.color
+                notable, pos = int(p.notable), p.position
                 row = self.conn.execute(
                     "SELECT name, locked FROM categories WHERE code=?", (code,)
                 ).fetchone()
@@ -699,9 +729,9 @@ class CaseDB:
                         "position, active, locked) VALUES(?,?,?,?,?,1,1)",
                         (code, name, color, notable, pos),
                     )
-                elif (row["locked"] or code == UNCATEGORIZED_CATEGORY
+                elif (row["locked"] or code == self.uncat
                       or not (row["name"] or "").strip()):
-                    # keep locked presets in sync with the canonical VIC scheme
+                    # keep locked presets in sync with the region's scheme
                     # (names/colors); an unnamed slot in an old case adopts it too
                     self.conn.execute(
                         "UPDATE categories SET name=?, color=?, notable=?, "
@@ -710,9 +740,8 @@ class CaseDB:
                     )
             used = [
                 r["category"] for r in self.conn.execute(
-                    "SELECT DISTINCT category FROM files "
-                    "WHERE category IS NOT NULL AND category NOT IN (0, 5)"
-                )
+                    "SELECT DISTINCT category FROM files WHERE category IS NOT NULL")
+                if r["category"] not in self.scheme.codes
             ]
             for i, code in enumerate(sorted(used), start=1):
                 exists = self.conn.execute(
@@ -741,8 +770,9 @@ class CaseDB:
         ).fetchone()
 
     def category_name(self, code: int | None) -> str:
-        if is_uncategorized(code):
-            return "Uncategorized"
+        if self.is_uncategorized(code):
+            row = self.get_category(self.uncat)
+            return row["name"] if row and row["name"] else "Uncategorized"
         row = self.get_category(code)
         if row and row["name"]:
             return row["name"]
@@ -771,8 +801,9 @@ class CaseDB:
                         notable: bool = True) -> None:
         """Add an examiner category at a chosen code (a saved set keeps its
         codes - see savedset.py), placed after the existing ones."""
-        if code < len(VIC_PRESETS):
-            raise ValueError(f"code {code} is a Project VIC preset")
+        if code < self.scheme.first_custom:
+            raise ValueError(f"code {code} is reserved by the "
+                             f"{self.scheme.label} presets")
         with self.lock:
             pos_row = self.conn.execute(
                 "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM categories"
@@ -789,10 +820,10 @@ class CaseDB:
         row = self.get_category(code)
         if row is not None and row["locked"]:
             raise ValueError(f"category {code} ({row['name']}) is a locked "
-                             "Project VIC preset and cannot be changed")
+                             "regional preset and cannot be changed")
         allowed = {"name", "color", "notable", "position", "active"}
         fields = {k: v for k, v in fields.items() if k in allowed}
-        if not fields or code == UNCATEGORIZED_CATEGORY and "active" in fields:
+        if not fields or code == self.uncat and "active" in fields:
             fields.pop("active", None)
         if not fields:
             return
@@ -808,17 +839,17 @@ class CaseDB:
     def delete_category(self, code: int, *, reassign: bool = False) -> None:
         """Soft-delete: hide from the picker but keep the label on tagged files.
         If ``reassign`` is True, move those files to Uncategorized first."""
-        if code == UNCATEGORIZED_CATEGORY:
+        if code == self.uncat:
             return
         row = self.get_category(code)
         if row is not None and row["locked"]:
             raise ValueError(f"category {code} ({row['name']}) is a locked "
-                             "Project VIC preset and cannot be deleted")
+                             "regional preset and cannot be deleted")
         with self.lock:
             if reassign:
                 self.conn.execute(
                     "UPDATE files SET category=? WHERE category=?",
-                    (UNCATEGORIZED_CATEGORY, code)
+                    (self.uncat, code)
                 )
             in_use = self.conn.execute(
                 "SELECT COUNT(*) n FROM files WHERE category=?", (code,)
@@ -833,12 +864,12 @@ class CaseDB:
             self.conn.commit()
 
     def reorder_categories(self, codes: list[int]) -> None:
-        """Reposition the examiner's own categories.  Locked VIC presets keep
-        their fixed positions (0-5) and are ignored if passed in."""
+        """Reposition the examiner's own categories.  Locked presets keep
+        their fixed positions and are ignored if passed in."""
         with self.lock:
             locked = {r["code"] for r in self.conn.execute(
                 "SELECT code FROM categories WHERE locked=1")}
-            pos = len(VIC_PRESETS)
+            pos = len(self.scheme.presets)
             for code in codes:
                 if code in locked:
                     continue
@@ -925,7 +956,7 @@ class CaseDB:
                 fields.get("orig_path"), fields.get("rel_path"), path)
             # set explicitly: a case made before schema v18 still has DEFAULT 0
             if fields.get("category") is None:
-                fields["category"] = UNCATEGORIZED_CATEGORY
+                fields["category"] = self.uncat
             keys = ["path", *fields.keys()]
             placeholders = ", ".join("?" * len(keys))
             cur = self.conn.execute(

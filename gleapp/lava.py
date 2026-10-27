@@ -44,7 +44,6 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 
-from .db import category_code, is_uncategorized
 from . import (__version__, archive, basemaps, categories, exocache, hashstore, provenance, stash,
                staticmap, timeutil, vicdetails)
 from .case import Case
@@ -806,10 +805,10 @@ _C2PA_NOTES = (
     "authentic: many platforms and tools remove them.")
 
 
-def _artifact_categorized(writer: "_Writer", rows: list[dict],
+def _artifact_categorized(writer: "_Writer", case: Case, rows: list[dict],
                           media: dict[int, str]) -> None:
     name = "Categorized Media"
-    marked = [r for r in rows if not is_uncategorized(r.get("category"))]
+    marked = [r for r in rows if not case.db.is_uncategorized(r.get("category"))]
     headers = [("Reviewed Timestamp", "datetime"), "Category", "File Name", "Path",
                ("Media", "media"), "Reviewed By", "Examiner Notes", "Flags",
                "MD5", "SHA1", "Kind", ("Size", "integer")]
@@ -834,9 +833,10 @@ def _artifact_categorized(writer: "_Writer", rows: list[dict],
             "Non-pertinent for a 'known-good' hit, and that match may have been on a "
             "hash or on perceptual similarity. The Known Hash Set Hits artifact "
             "lists every file that matched a source, which is all of those and "
-            "also files already categorised when the match was made. Codes 0 to 5 "
-            "are the Project VIC 2.0 (US) presets every GLEAPP case is seeded with; a case "
-            "may add its own above those. Reviewed Timestamp is when the row was "
+            "also files already categorised when the match was made. The locked "
+            "presets are the category scheme of the region the case was created "
+            "under (Project VIC 2.0 codes 0 to 5 in a US case); a case may add its "
+            "own above those. Reviewed Timestamp is when the row was "
             "last marked, not when the file was made. A file with no category is in "
             "the Media Files artifact and absent here, which records that it was not "
             "categorised, not that it was reviewed and cleared."))
@@ -1376,7 +1376,7 @@ def _artifact_vic_hashset_matches(writer: "_Writer", rows: list[dict],
             "ProjectVicDataModel.2.0.xml, Exif entity."))
 
 
-def _artifact_hashset_hits(writer: "_Writer", rows: list[dict],
+def _artifact_hashset_hits(writer: "_Writer", case: Case, rows: list[dict],
                            media: dict[int, str], *, sources: int = 0) -> None:
     name = "Known Hash Set Hits"
     hits = [r for r in rows if r.get("hashset_hit")]
@@ -1395,7 +1395,7 @@ def _artifact_hashset_hits(writer: "_Writer", rows: list[dict],
         data.append([
             row.get("hashset_hit") or "", row.get("hashset_kind") or "",
             top.get("category") if top else row.get("hashset_cat"),
-            (top.get("via") or "") if top else "", matched_in(found),
+            (top.get("via") or "") if top else "", matched_in(found, case.db),
             row.get("disp_name") or "", row.get("disp_path") or "",
             writer.reference(media.get(row["id"]), name, row.get("disp_name") or ""),
             row.get("md5") or "", row.get("sha1") or "", row.get("sha256") or "",
@@ -1444,13 +1444,15 @@ def _artifact_categories(writer: "_Writer", case: Case, rows: list[dict]) -> Non
     name = "Category Definitions"
     counts: dict[int, int] = {}
     for row in rows:
-        code = category_code(row.get("category"))
+        code = case.db.category_code(row.get("category"))
         counts[code] = counts.get(code, 0) + 1
+    preset = ("Project VIC preset" if case.db.scheme.id == "US"
+              else f"{case.db.scheme.label} preset")
     headers = [("Code", "integer"), "Category", "Origin", "Treated As Evidential",
                "Shown In The Picker", ("Files In This Report", "integer")]
     data = [[
         record["code"], record["name"] or "",
-        "Project VIC preset" if record["locked"] else "added in this case",
+        (preset if record["locked"] else "added in this case"),
         "yes" if record["notable"] else "no",
         "yes" if record["active"] else "no",
         counts.get(record["code"], 0),
@@ -1865,7 +1867,7 @@ def export_lava(case: Case, dest, where: str = "", *, thumbs: bool = False,
         video_frames = _stage_keyframes(case, writer, rows)
 
     _artifact_media_files(writer, rows, media, unavailable, thumbs=thumbs)
-    _artifact_categorized(writer, rows, media)
+    _artifact_categorized(writer, case, rows, media)
     _artifact_locations(writer, rows, media, location_maps)
     _artifact_overview(writer, covered, map_tally, flavor=map_flavor)
     _artifact_keyframes(writer, rows, video_frames)
@@ -1875,7 +1877,7 @@ def export_lava(case: Case, dest, where: str = "", *, thumbs: bool = False,
     _artifact_categories(writer, case, rows)
     _artifact_duplicates(writer, rows, media)
     _artifact_similar(writer, rows, media)
-    _artifact_hashset_hits(writer, rows, media, sources=sources)
+    _artifact_hashset_hits(writer, case, rows, media, sources=sources)
     _artifact_vic_hashset_matches(writer, rows, media)
     _artifact_c2pa(writer, rows, media)
     _artifact_audit(writer, case)

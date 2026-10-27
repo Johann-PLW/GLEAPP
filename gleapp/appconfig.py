@@ -103,6 +103,24 @@ def set_agency_logo(data_uri: str | None) -> None:
     save(cfg)
 
 
+def get_region() -> str | None:
+    """The category region the examiner chose at first launch (see
+    ``regions.py``), or None before they have chosen one. New cases are
+    seeded with it; an existing case keeps the region it was created under."""
+    from . import regions
+    v = load().get("category_region")
+    return v.upper() if isinstance(v, str) and regions.is_region(v) else None
+
+
+def set_region(region: str) -> None:
+    from . import regions
+    if not regions.is_region(region):
+        raise ValueError(f"unknown region: {region}")
+    cfg = load()
+    cfg["category_region"] = region.upper()
+    save(cfg)
+
+
 def get_show_intro() -> bool:
     """Whether the intro video opens with the launcher. On until the examiner ticks
     "Don't show this at startup" in it."""

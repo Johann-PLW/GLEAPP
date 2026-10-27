@@ -14,7 +14,11 @@ original name/path, MIME type and any existing category into the case DB.
 `export_vic` re-reads the original file and writes a copy with each entry's
 ``Category`` (and Comments / Tags) updated from the examiner's work, so the
 result can go back into Project VIC.  GLEAPP category codes map 1:1 to VIC codes
-(0 is Non-pertinent); Uncategorized (5) maps to ``null``.
+under the case's region (in a US case 0 is Non-pertinent); the region's
+Uncategorized maps to ``null``. A VIC file names its data model's region in
+``@odata.context`` (``.../2.0.xml/US/$metadata``); ``vic_region`` reads it, and
+a file of another region than the case's is imported with a warning, codes as
+they are.
 """
 
 from __future__ import annotations
@@ -27,7 +31,6 @@ from pathlib import Path
 from typing import Iterator
 
 from . import jsonstream, vicdetails
-from .db import is_uncategorized
 
 
 def _as_text(value) -> str | None:
@@ -347,6 +350,28 @@ def case_summary(doc: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
+_ODATA_REGION = re.compile(r"\.xml/([A-Za-z][A-Za-z-]*)/\$metadata")
+
+
+def vic_region(odata_context: str | None) -> str | None:
+    """The data model region a VIC file's ``@odata.context`` names (``US`` in
+    ``.../ProjectVic/DataModels/2.0.xml/US/$metadata#Cases``), or None."""
+    m = _ODATA_REGION.search(odata_context or "")
+    return m.group(1).upper() if m else None
+
+
+def region_mismatch(case, odata_context: str | None) -> str | None:
+    """A warning when a VIC file's region is not the case's, else None. Codes
+    are imported as they are either way."""
+    tag = vic_region(odata_context)
+    rid = case.db.scheme.id
+    if tag is None or tag == rid or rid.startswith(tag + "-"):
+        return None
+    return (f"this VIC file is from the {tag} data model but the case uses the "
+            f"{case.db.scheme.label} categories; its category codes were imported "
+            "as they are")
+
+
 def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = None):
     """Register every Media entry from ``vic_path`` into ``case``.
 
@@ -370,6 +395,8 @@ def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = Non
             case.db.set_meta(f"vic_{k}", str(summ[k]))
     if summ.get("case_number") and case.db.get_meta("case_name") in (None, ""):
         case.db.set_meta("case_name", str(summ["case_number"]))
+    warning = region_mismatch(case, summ.get("odata_context"))
+    case.db.set_meta("vic_region_warning", warning or "")
 
     seen_cats: set[int] = set()
     registered = missing = 0
@@ -441,7 +468,8 @@ def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = Non
         # A category recorded on any entry of the group is the group's category.
         # Reading it only off the first entry would drop a recorded verdict that
         # happened to sit on the second.
-        cat = next((x.category for x in recs if not is_uncategorized(x.category)),
+        cat = next((x.category for x in recs
+                    if not case.db.is_uncategorized(x.category)),
                    None)
         if cat is not None:
             fields["category"] = cat
@@ -466,6 +494,8 @@ def import_vic(case, vic_path: str | Path, *, files_dir: str | Path | None = Non
     note = (f"{vic_path.name}: {registered} entries on {present} files, {missing} missing"
             if present and registered != present
             else f"{vic_path.name}: {registered} files, {missing} missing")
+    if warning:
+        note += f" ({warning})"
     case.db.audit_log(case.examiner, "import_vic", note)
     return registered, missing
 
@@ -541,7 +571,7 @@ def export_vic(case, dest: str | Path, *, only_categorized: bool = False) -> Pat
                 info = by_md5.get((m.get("MD5") or "").strip().lower())
             if info is not None:
                 code = info["category"]
-                m["Category"] = None if is_uncategorized(code) else code
+                m["Category"] = None if case.db.is_uncategorized(code) else code
                 if m["Category"] is not None:
                     m["IsPrecategorized"] = True
                 if info["notes"]:

@@ -185,29 +185,49 @@ const pathHtml = (f, p) => {
 };
 
 /* ---------- categories ---------- */
-// Project VIC: 5 is Uncategorized and 0 is Non-pertinent (a real category)
-const UNCAT = 5;
+// The case's regional scheme (regions.py, sent as context.scheme): which code
+// is Uncategorized and which key each locked preset takes. In a US (Project
+// VIC) case 5 is Uncategorized and 0 is Non-pertinent (a real category).
+let UNCAT = 5;
+let PRESET_KEYS = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 };   // key -> code
+let SCHEME_LABEL = "Project VIC";
+function setScheme(s) {
+  if (!s) return;
+  UNCAT = s.uncategorized;
+  PRESET_KEYS = s.keys || {};
+  SCHEME_LABEL = s.label || "Regional";
+}
 const hasCat = c => c != null && c !== "" && +c !== UNCAT;
 const catByCode = c => state.cats.find(x => x.code === +c);
 const activeCats = () => state.cats
   .filter(c => c.code !== UNCAT && c.active)
   .sort((a, b) => a.position - b.position);
-// Number keys match the Project VIC codes: 0 Non-pertinent, 1-4, 5 clears
-// (Uncategorized). The examiner's own categories (code 6+) take keys 6-9 in
-// display order; any past the fourth has no key.
-const customCats = () => activeCats().filter(c => c.code > UNCAT);
+// Number keys are the ones the region's scheme gives its presets (in a US
+// case the Project VIC codes: 0 Non-pertinent, 1-4, 5 clears to Uncategorized).
+// The examiner's own categories take the digits the scheme leaves free, in
+// display order (6-9 in a US case); any past those has no key, and so has a
+// preset whose scheme key is a letter.
+const presetCodes = () => new Set(Object.values(PRESET_KEYS));
+const customCats = () => activeCats().filter(c => !presetCodes().has(c.code));
+const freeDigits = () => "0123456789".split("").filter(k => !(k in PRESET_KEYS));
 const catKey = code => {
-  if (code >= 0 && code < UNCAT) return code;
+  const own = Object.keys(PRESET_KEYS).find(k => PRESET_KEYS[k] === code && /^[0-9]$/.test(k));
+  if (own != null) return own;
   const i = customCats().findIndex(c => c.code === code);
-  return i >= 0 && i < 4 ? UNCAT + 1 + i : null;
+  const free = freeDigits();
+  return i >= 0 && i < free.length ? free[i] : null;
 };
 const keyCat = k => {
-  if (k === UNCAT) return UNCAT;
-  if (k < UNCAT) return catByCode(k) ? k : null;
-  const c = customCats()[k - UNCAT - 1];
+  k = String(k);
+  if (k in PRESET_KEYS) {
+    const code = PRESET_KEYS[k];
+    return code === UNCAT || catByCode(code) ? code : null;
+  }
+  const c = customCats()[freeDigits().indexOf(k)];
   return c ? c.code : null;
 };
-const catName = c => (catByCode(c) || {}).name || (hasCat(c) ? "Category " + c : "Uncategorized");
+const uncatName = () => (catByCode(UNCAT) || {}).name || "Uncategorized";
+const catName = c => (catByCode(c) || {}).name || (hasCat(c) ? "Category " + c : uncatName());
 const catColor = c => (catByCode(c) || {}).color || (hasCat(c) ? "#888" : "#3a3f4b");
 
 async function refreshCats() {
@@ -1969,7 +1989,7 @@ function openCtx(x, y, ids) {
     <button data-a="hex">\u{1F524} Hex view</button>
     <div class="sep"></div>
     ${catBtns}
-    <button data-a="c${UNCAT}"><span class="dot" style="background:#3a3f4b"></span>Clear category${many} <span class="muted">${UNCAT}</span></button>
+    <button data-a="c${UNCAT}"><span class="dot" style="background:#3a3f4b"></span>Clear category${many} <span class="muted">${catKey(UNCAT) ?? ""}</span></button>
     <div class="sep"></div>
     <button data-a="flag">\u{1F3F7} Flags…${many}</button>
     <div class="sep"></div>
@@ -2019,16 +2039,16 @@ $("#ctx").addEventListener("click", e => {
 function renderCatEd() {
   const rows = state.cats.filter(c => c.code !== UNCAT).sort((a, b) => a.position - b.position);
   const custom = rows.filter(c => !c.locked);
-  // the keyboard shortcut (see catKey): a preset's own code, keys 6-9 for the
-  // first four active categories of the examiner's own; the rest (including
-  // any hidden one) show no badge rather than a made-up one
+  // the keyboard shortcut (see catKey): a preset's scheme key, the free
+  // digits for the first active categories of the examiner's own; the rest
+  // (including any hidden one) show no badge rather than a made-up one
   const keyBadge = code => {
     const k = catByCode(code) && catByCode(code).active ? catKey(code) : null;
     return k != null ? `<span class="vcode">⌨ <b>${k}</b></span>` : "";
   };
   $("#catRows").innerHTML = rows.map(c => c.locked ? `
     <div class="cat locked" data-code="${c.code}">
-      <span class="grip" title="Project VIC preset — locked">🔒</span>
+      <span class="grip" title="${esc(SCHEME_LABEL)} preset — locked">🔒</span>
       <span class="dot" style="background:${c.color}"></span>
       <span class="lockname">${esc(c.name)}</span>
       ${keyBadge(c.code)}
@@ -2305,7 +2325,7 @@ document.addEventListener("keydown", e => {
   }
   const ids = selIds();
   if (e.key >= "0" && e.key <= "9" && e.key.length === 1) {
-    const code = keyCat(+e.key);
+    const code = keyCat(e.key);
     if (code != null && ids.length) categorize(ids, code);
   } else if (e.key.toLowerCase() === "f" && ids.length) showSimilar(ids[0]);
   else if (e.key.toLowerCase() === "h" && ids.length) openHex(ids[0]);
@@ -2595,6 +2615,8 @@ async function refreshContext() {
   state.basemap = c.basemap || null;
   showSourceStatus(c.archive_sources);
   showFolderStatus(c.folder_sources);
+  setScheme(c.scheme);
+  showRegionWarning(c.region_warning);
   state.cats = c.categories || [];
   try { await refreshCats(); } catch (e) {}
   state.flags = c.flags || [];
@@ -2764,7 +2786,7 @@ async function openReportDlg() {
       chosen.has(o.key) ? " checked" : ""}> ${esc(o.label)}</label>`).join("");
 
   const byCat = s.by_category || {};
-  $("#rscopeCats").innerHTML = [{ code: UNCAT, name: "Uncategorized" }]
+  $("#rscopeCats").innerHTML = [{ code: UNCAT, name: uncatName() }]
     .concat(state.cats.filter(c => c.code !== UNCAT).sort((a, b) => a.position - b.position))
     .map(c => `<label><input type="checkbox" class="rscat" value="${c.code}">
       ${esc(c.name || "Category " + c.code)}
@@ -2940,7 +2962,7 @@ function updateKnownHash(kh) {
   const st = kh.stash;
   $("#stashInfo").textContent = st && st.total
     ? `🔒 Hash stash: ${st.total.toLocaleString()} MD5(s) — click to manage`
-    : "🔒 Hash stash: empty — click to add your category 1–3 hashes";
+    : "🔒 Hash stash: empty — click to add your notable-category hashes";
   $("#fusestash").checked = kh.use_stash !== false;
   $("#fusevic").checked = kh.use_vic !== false;
 }
@@ -3880,12 +3902,15 @@ async function refreshStashDlg() {
   }
   stashLastTotal = d.stash.total || 0;
   $("#stashTotal").innerHTML = stashRows(d.stash.by_category, d.case.categories);
+  const others = Object.entries(d.stash.by_region || {}).filter(([k]) => k !== d.stash.region);
+  $("#stashRegion").textContent = `${d.stash.region} entries`
+    + (others.length ? ` (also held: ${others.map(([k, n]) => `${k} ${n.toLocaleString()}`).join(", ")} — matched only in cases of that region)` : "");
   if (hasCase) {
     $("#stashCase").innerHTML = stashRows(d.case.by_category, d.case.categories);
     $("#stashAdd").disabled = !d.case.eligible;
     $("#stashAdd").textContent = d.case.eligible
       ? `Add this case's ${d.case.eligible.toLocaleString()} hash(es) to the stash`
-      : "No category 1–3 files in this case yet";
+      : `No files in this case's stash categories (${d.case.categories.join(", ")}) yet`;
   }
   $("#stashClear").disabled = !d.stash.total;
   $("#stashUpdated").textContent = d.stash.updated
@@ -3963,7 +3988,7 @@ $("#stashMergePrecat").onclick = async () => {
     body: JSON.stringify({ path: p })
   });
   if (r.error) return toast(r.message || "Merge failed");
-  const skipped = r.skipped_category ? `, ${r.skipped_category.toLocaleString()} outside categories 1–3 skipped` : "";
+  const skipped = r.skipped_category ? `, ${r.skipped_category.toLocaleString()} outside the ${r.region} stash categories skipped` : "";
   toast(`Merged — +${r.added.toLocaleString()} new, ${r.total.toLocaleString()} total${skipped}`);
   stashRefreshAndSidebar();
 };
@@ -4653,6 +4678,49 @@ function openLogoDlg() {
 }
 $("#btnLogoLauncher").onclick = openLogoDlg;
 
+/* ---------- category region: app-wide, chosen on first launch and changed
+   from the launcher's ☰ Menu. It decides the locked categories a NEW case is
+   created with (regions.py); a case already made keeps its own, since its
+   stored codes only mean something under that scheme. */
+const Region = { choices: [], current: null, afterIntro: null };
+function renderRegionPreview() {
+  const r = Region.choices.find(x => x.id === $("#regionSel").value);
+  $("#regionCats").innerHTML = r ? r.categories.map(c =>
+    `<li><code>${esc(String(c.code))}</code> ${esc(c.name)}${
+      c.key ? ` <span class="muted">⌨ ${esc(c.key)}</span>` : ""}</li>`).join("") : "";
+}
+function openRegionDlg(ctx, firstRun) {
+  Region.choices = ctx.region_choices || Region.choices;
+  Region.current = ctx.region || null;
+  $("#regionSel").innerHTML = Region.choices.map(r =>
+    `<option value="${esc(r.id)}">${esc(r.label)}</option>`).join("");
+  $("#regionSel").value = Region.current || "US";
+  $("#regionFirst").style.display = firstRun ? "" : "none";
+  $("#regionCancel").style.display = firstRun ? "none" : "";
+  renderRegionPreview();
+  $("#regionDlg").style.display = "block";
+}
+$("#regionSel").onchange = renderRegionPreview;
+$("#regionCancel").onclick = () => { $("#regionDlg").style.display = "none"; };
+$("#regionSave").onclick = async () => {
+  const r = await api("/api/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ region: $("#regionSel").value })
+  }).catch(() => ({}));
+  // keep the dialog open on a failure, so it is never closed with nothing saved
+  if (!r.ok) { toast(r.message || "Could not save the region"); return; }
+  Region.current = r.region;
+  $("#regionDlg").style.display = "none";
+  toast(`New cases will use the ${r.label} categories`);
+};
+$("#btnRegionLauncher").onclick = () => openRegionDlg({ region: Region.current }, false);
+function showRegionWarning(msg) {
+  const el = $("#regionWarn");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.style.display = msg ? "" : "none";
+}
+
 /* ---------- intro video ----------
    Opens with the launcher until "Don't show this at startup" is ticked, and from
    Watch intro in either menu at any time. The box is saved as soon as it changes,
@@ -4685,6 +4753,10 @@ function openIntro(atStartup) {
 function closeIntro() {
   $("#introVideo").pause();
   $("#introDlg").classList.remove("show");
+  // first launch: the region question waits for the intro to close
+  const next = Region.afterIntro;
+  Region.afterIntro = null;
+  if (next) next();
 }
 $("#introClose").onclick = closeIntro;
 $("#introDlg").addEventListener("click", e => { if (e.target.id === "introDlg") closeIntro(); });
@@ -5506,6 +5578,14 @@ $("#mapViewClose").onclick = closeMapView;
   if (c.needs_case) {
     showLauncher(c); $("#bootLoad").style.display = "none";
     if (Intro.show) openIntro(true);
+    Region.choices = c.region_choices || [];
+    Region.current = c.region || null;
+    // first launch: no region yet - ask before the first case is made, once
+    // the intro video (if it opened) is closed
+    if (!c.region) {
+      if (introOpen()) Region.afterIntro = () => openRegionDlg(c, true);
+      else openRegionDlg(c, true);
+    }
     return;
   }
   try {
@@ -5526,6 +5606,8 @@ $("#mapViewClose").onclick = closeMapView;
       $("#btnRetryErr").style.display = "";
       $("#btnRetryErr").textContent = `Retry ${retry.toLocaleString()} failed files`;
     }
+    setScheme(c.scheme);
+    showRegionWarning(c.region_warning);
     state.cats = c.categories || [];
     state.flags = c.flags || [];
     state.sources = c.sources || [];

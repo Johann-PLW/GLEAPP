@@ -28,7 +28,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from .. import (appconfig, archive, backup, basemaps, categories, docmedia, exocache, flags,
-               lava, provenance, relink, report, savedset)
+               lava, provenance, regions, relink, report, savedset)
 from ..case import image_set_source, open_case, parse_source_spec
 from ..db import FILE_PATH_SQL, ORIGINS, TOOL_ACTOR
 from ..facematch import find_matching_faces
@@ -1185,16 +1185,24 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
 
     # ---- local hash stash (its own file - see gleapp/stash.py) -------
     def _stash_candidates(case):
-        """This case's files eligible for the stash: (md5, category) in 1-3,
-        with an MD5 the stash keeps (``stash.normalize_md5``), so the count the
-        panel shows is the number Add submits."""
+        """This case's files eligible for the stash: (md5, category) in its
+        region's stash categories (US 1-3), with an MD5 the stash keeps
+        (``stash.normalize_md5``), so the count the panel shows is the number
+        Add submits."""
         from .. import stash
-        ph = ",".join("?" * len(stash.STASH_CATEGORIES))
+        cats = stash.stash_categories(case.db.scheme.id)
+        ph = ",".join("?" * len(cats))
         rows = case.db.conn.execute(
             f"SELECT md5, category FROM files WHERE category IN ({ph}) "
-            "AND md5 IS NOT NULL AND md5 != ''",
-            tuple(stash.STASH_CATEGORIES)).fetchall()
+            "AND md5 IS NOT NULL AND md5 != ''", cats).fetchall()
         return [r for r in rows if stash.normalize_md5(r["md5"])]
+
+    def _stash_region() -> str:
+        """The region stash figures are shown for: the open case's, else the
+        app-wide one."""
+        case = state["case"]
+        return case.db.scheme.id if case is not None else regions.get(
+            appconfig.get_region()).id
 
     @app.get("/api/stash")
     def stash_status():
@@ -1202,6 +1210,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         # pre-case (from the launcher) with no case's hashes to add yet
         from .. import stash
         case = state["case"]
+        region = _stash_region()
         eligible, by_cat = 0, {}
         if case is not None:
             cand = _stash_candidates(case)
@@ -1209,9 +1218,9 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             for r in cand:
                 by_cat[r["category"]] = by_cat.get(r["category"], 0) + 1
         return jsonify({
-            "stash": stash.summary(),
+            "stash": stash.summary(region),
             "case": {"eligible": eligible, "by_category": by_cat,
-                     "categories": list(stash.STASH_CATEGORIES)},
+                     "categories": list(stash.stash_categories(region))},
         })
 
     @app.post("/api/stash/add")
@@ -1220,9 +1229,11 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         case = C()
         cand = _stash_candidates(case)
         label = case.db.get_meta("case_name") or case.root.name
-        res = stash.add((r["md5"], r["category"], label) for r in cand)
+        rid = case.db.scheme.id
+        res = stash.add(((r["md5"], r["category"], label) for r in cand), rid)
         case.db.audit_log(case.examiner, "stash_add",
-                          f"{res['submitted']} md5s (cat {stash.STASH_CATEGORIES}), "
+                          f"{res['submitted']} md5s ({rid} cat "
+                          f"{stash.stash_categories(rid)}), "
                           f"{res['added']} new; stash now {res['total']}")
         return jsonify({"ok": True, **res})
 
@@ -1245,7 +1256,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             new = stash.set_path(p or None)
         except OSError as exc:
             abort(400, description=str(exc))
-        return jsonify({"ok": True, **stash.summary(), "path": str(new)})
+        return jsonify({"ok": True, **stash.summary(_stash_region()), "path": str(new)})
 
     @app.post("/api/stash/export")
     def stash_export():
@@ -1260,7 +1271,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             stash.export(dest)
         except OSError as exc:
             abort(500, description=str(exc))
-        return jsonify({"ok": True, **stash.summary(),
+        return jsonify({"ok": True, **stash.summary(_stash_region()),
                         "written": str(dest), "dir": str(out_dir)})
 
     @app.post("/api/stash/merge")
@@ -1288,14 +1299,15 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         if not src or not Path(src).is_file():
             abort(400, description=f"file not found: {src}")
         try:
-            res = stash.merge_precategorized(src)
+            res = stash.merge_precategorized(src, _stash_region())
         except (OSError, ValueError, sqlite3.Error) as exc:
             abort(400, description=f"could not read {Path(src).name}: {exc}")
         case = state["case"]
         if case is not None:
             case.db.audit_log(case.examiner, "stash_merge_precategorized",
                               f"{Path(src).name}: +{res['added']} new, {res['total']} total, "
-                              f"{res['skipped_category']} outside categories 1-3")
+                              f"{res['skipped_category']} outside the {res['region']} "
+                              "stash categories")
         return jsonify({"ok": True, **res})
 
     @app.post("/api/redup")
@@ -2104,7 +2116,10 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                             "saved_set": savedset.load(),
                             # whether the intro video opens with the launcher -
                             # see /api/settings {show_intro}
-                            "show_intro": appconfig.get_show_intro()})
+                            "show_intro": appconfig.get_show_intro(),
+                            # the category region (regions.py): None until the
+                            # examiner picks one on first launch
+                            **_region_payload(None)})
         try:
             return jsonify(_context_payload(case))
         except Exception:  # noqa: BLE001 - a broken stat query must not blank the UI
@@ -2116,10 +2131,33 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
                 "clusters": [],
                 "categories": list(categories.catmap(case.db).values()),
                 "flags": list(flags.flagmap(case.db).values()),
+                **_region_payload(case),
                 "stats": {}, "vic": None, "errors": 0, "retryable": 0,
                 "known_hash": {}, "screening": {},
                 "timezone": appconfig.get_timezone(), "timezone_options": [],
             })
+
+    def _region_payload(case) -> dict:
+        """``region`` (the app-wide choice, None until made), ``region_choices``
+        and, with a case open, ``scheme`` (the case's own, see Scheme.to_json)
+        and ``region_warning`` when the two differ or a VIC import's data model
+        region did not match."""
+        out = {"region": appconfig.get_region(),
+               "region_choices": regions.choices()}
+        if case is not None:
+            sch = case.db.scheme
+            out["scheme"] = sch.to_json()
+            warn = []
+            app_region = regions.get(appconfig.get_region()).id
+            if app_region != sch.id:
+                warn.append(f"This case was created with the {sch.label} "
+                            f"categories; GLEAPP is now set to "
+                            f"{regions.get(app_region).label}. The case keeps its own.")
+            if case.db.get_meta("vic_region_warning"):
+                warn.append("Project VIC import: "
+                            + case.db.get_meta("vic_region_warning") + ".")
+            out["region_warning"] = " ".join(warn) or None
+        return out
 
     def _context_counts(case) -> dict:
         """The part of the context that comes from the case's rows and nothing else.
@@ -2214,7 +2252,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
         except Exception:  # noqa: BLE001 - never let a bad store break the app
             hstore = {"sets": [], "entries": 0}
         try:
-            stash_sum = stash.summary()
+            stash_sum = stash.summary(case.db.scheme.id)
         except Exception:  # noqa: BLE001
             stash_sum = {"total": 0, "by_category": {}, "updated": None,
                          "path": "", "shared": False}
@@ -2239,6 +2277,7 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             "clusters": clusters,
             "categories": list(categories.catmap(case.db).values()),
             "flags": list(flags.flagmap(case.db).values()),
+            **_region_payload(case),
             "stats": cst,
             "vic": vic,
             "errors": n_err,
@@ -2642,6 +2681,18 @@ def create_app(case_dir: str | None = None, *, native: bool = False) -> Flask:
             appconfig.set_timezone(tz)
             return jsonify({"ok": True, "timezone": tz,
                             "label": timeutil.label(tz)})
+        if "region" in body:
+            # app-wide: the category region new cases are created with. A case
+            # already made keeps its own - its stored codes are that scheme's.
+            rid = str(body.get("region") or "").strip().upper()
+            if not regions.is_region(rid):
+                abort(400, description=f"unknown region: {rid}")
+            appconfig.set_region(rid)
+            case = state["case"]
+            if case is not None:
+                case.db.audit_log(case.examiner, "set_region", rid)
+            return jsonify({"ok": True, "region": rid,
+                            "label": regions.get(rid).label})
         if "show_intro" in body:
             # app-wide: the intro video's "Don't show this at startup" box
             show = body.get("show_intro")

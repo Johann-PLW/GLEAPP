@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Iterator
 
-from .db import is_uncategorized
 
 # The element that holds one file, and the child naming the exported copy.
 _ENTRY_NAME = {"Image": "picture", "Movie": "movie"}
@@ -180,7 +179,7 @@ def import_c4all(case, index_path: str | Path) -> tuple[int, int]:
         if others:
             fields["alt_paths"] = json.dumps(others)
         cat = next((x.category for x in recs
-                    if x.category is not None and not is_uncategorized(x.category)),
+                    if x.category is not None and not case.db.is_uncategorized(x.category)),
                    None)
         if cat is not None:
             fields["category"] = cat

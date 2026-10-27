@@ -2,8 +2,13 @@
 
 A standalone, portable SQLite file (kept **separate** from the shared global
 hash store / NSRL data) holding the MD5s of every file the examiner has
-categorised VIC code 1 (CAM), 2 (Child Exploitative) or 3 (CGI/Animation), with
-the code kept per hash.
+put in one of their region's notable categories (in the US, VIC code 1 (CAM),
+2 (Child Exploitative) or 3 (CGI/Animation)), with the code kept per hash.
+
+Every entry carries the region whose scheme its code belongs to (see
+``regions.py``): a code only means something under its own scheme, so a case
+matches only the entries of its own region. One MD5 can be stashed under
+several regions. Entries from before regions existed are US entries.
 
 * It is consulted for every case during known-hash matching
   (``hashdb.match_file``) - a stashed hash re-flags matching media in new cases
@@ -24,7 +29,8 @@ renamed in place the first time ``default_path()`` runs (see there); a
 stash at a location the examiner chose explicitly is never touched.
 
 File format (deliberately simple so any tool can read it):
-    stash(md5 TEXT PRIMARY KEY, category INTEGER, added_at REAL, source TEXT)
+    stash(md5 TEXT, region TEXT, category INTEGER, added_at REAL, source TEXT,
+          PRIMARY KEY (md5, region))
     stash_meta(key TEXT PRIMARY KEY, value TEXT)
 """
 
@@ -37,22 +43,56 @@ import threading
 import time
 from pathlib import Path
 
-from . import appconfig
+from . import appconfig, regions
 from .db import is_empty_file_hash
 
 STASH_NAME = "Local Hash Stash"
-STASH_CATEGORIES = (1, 2, 3)
-FORMAT_VERSION = "1"
+FORMAT_VERSION = "2"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS stash_meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS stash (
-    md5      TEXT PRIMARY KEY,
+    md5      TEXT NOT NULL,
+    region   TEXT NOT NULL DEFAULT 'US',
     category INTEGER NOT NULL,
     added_at REAL,
-    source   TEXT
+    source   TEXT,
+    PRIMARY KEY (md5, region)
 );
 """
+
+
+def stash_categories(region: str | None) -> tuple[int, ...]:
+    """The codes the stash keeps for ``region``: its scheme's notable ones."""
+    return regions.get(region).notable_codes
+
+
+def _region_id(region: str | None) -> str:
+    return regions.get(region).id
+
+
+def _add_region_column(c: sqlite3.Connection) -> None:
+    """A format-1 stash keyed on md5 alone becomes a US one keyed on both."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(stash)")}
+    if "region" in cols:
+        return
+    c.executescript("""
+        ALTER TABLE stash RENAME TO stash_v1;
+        CREATE TABLE stash (
+            md5      TEXT NOT NULL,
+            region   TEXT NOT NULL DEFAULT 'US',
+            category INTEGER NOT NULL,
+            added_at REAL,
+            source   TEXT,
+            PRIMARY KEY (md5, region)
+        );
+        INSERT INTO stash(md5, region, category, added_at, source)
+            SELECT md5, 'US', category, added_at, source FROM stash_v1;
+        DROP TABLE stash_v1;
+    """)
+    c.execute("INSERT OR REPLACE INTO stash_meta(key, value) VALUES('format_version', ?)",
+              (FORMAT_VERSION,))
+    c.commit()
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -135,6 +175,7 @@ def connect() -> sqlite3.Connection:
         c.execute("PRAGMA journal_mode = WAL")
         c.execute("PRAGMA busy_timeout = 5000")
         c.executescript(_SCHEMA)
+        _add_region_column(c)
         c.execute("INSERT OR IGNORE INTO stash_meta(key, value) VALUES('format_version', ?)",
                   (FORMAT_VERSION,))
         c.commit()
@@ -170,8 +211,9 @@ def _migrate_from_global(c: sqlite3.Connection) -> None:
         now = time.time()
         for r in rows:
             c.execute(
-                "INSERT INTO stash(md5, category, added_at, source) VALUES(?,?,?,?) "
-                "ON CONFLICT(md5) DO UPDATE SET category = MIN(category, excluded.category)",
+                "INSERT INTO stash(md5, region, category, added_at, source) "
+                "VALUES(?,'US',?,?,?) ON CONFLICT(md5, region) "
+                "DO UPDATE SET category = MIN(category, excluded.category)",
                 (r["v"], r["cat"], now, "migrated"))
             moved += 1
         if moved:
@@ -201,44 +243,56 @@ def normalize_md5(value: object) -> str | None:
 
 
 # -- reads ----------------------------------------------------------------
-def _load_cache() -> dict[str, dict]:
+def _load_cache() -> dict[tuple[str, str], dict]:
     global _cache
     with _lock:
         if _cache is None:
-            d: dict[str, dict] = {}
+            d: dict[tuple[str, str], dict] = {}
             try:
                 # connect() may run the one-time migration, which invalidates
                 # the cache - so build into a local dict and publish it last.
-                for r in connect().execute("SELECT md5, category, source FROM stash"):
-                    d[r["md5"]] = {"category": r["category"], "source": r["source"]}
+                for r in connect().execute(
+                        "SELECT md5, region, category, source FROM stash"):
+                    d[(r["md5"], r["region"])] = {"category": r["category"],
+                                                  "source": r["source"]}
             except sqlite3.Error:
                 pass
             _cache = d
         return _cache
 
 
-def lookup(md5: str) -> dict | None:
-    """{'category', 'source'} for a stashed MD5, or None."""
+def lookup(md5: str, region: str | None = None) -> dict | None:
+    """{'category', 'source'} for an MD5 stashed under ``region``, or None."""
     v = normalize_md5(md5)
-    return (_load_cache() or {}).get(v) if v else None
+    return (_load_cache() or {}).get((v, _region_id(region))) if v else None
 
 
-def summary() -> dict:
+def summary(region: str | None = None) -> dict:
+    """Totals for the whole stash, ``by_category`` for ``region``'s entries
+    only, and ``by_region``."""
+    rid = _region_id(region)
     by_cat: dict[int, int] = {}
+    by_region: dict[str, int] = {}
     updated = None
     try:
         with _lock:
             c = connect()
             for r in c.execute(
-                    "SELECT category, COUNT(*) n FROM stash GROUP BY category"):
-                by_cat[int(r["category"])] = int(r["n"])
+                    "SELECT region, category, COUNT(*) n FROM stash "
+                    "GROUP BY region, category"):
+                by_region[r["region"]] = by_region.get(r["region"], 0) + int(r["n"])
+                if r["region"] == rid:
+                    by_cat[int(r["category"])] = int(r["n"])
             row = c.execute("SELECT MAX(added_at) m FROM stash").fetchone()
             updated = row["m"] if row else None
     except sqlite3.Error:
         pass
     return {
-        "total": sum(by_cat.values()),
+        "total": sum(by_region.values()),
+        "region": rid,
+        "region_total": sum(by_cat.values()),
         "by_category": by_cat,
+        "by_region": by_region,
         "updated": updated,
         "path": str(stash_path()),
         "shared": is_shared(),
@@ -246,48 +300,51 @@ def summary() -> dict:
 
 
 def iter_all():
-    """Yield (md5, category, source, added_at) for every entry, sorted."""
+    """Yield (md5, region, category, source, added_at) for every entry, sorted."""
     try:
         with _lock:
             rows = connect().execute(
-                "SELECT md5, category, source, added_at FROM stash ORDER BY md5"
+                "SELECT md5, region, category, source, added_at FROM stash "
+                "ORDER BY md5, region"
             ).fetchall()
     except sqlite3.Error:
         rows = []
     for r in rows:
-        yield r["md5"], r["category"], r["source"], r["added_at"]
+        yield r["md5"], r["region"], r["category"], r["source"], r["added_at"]
 
 
 # -- writes ---------------------------------------------------------------
-def add(entries) -> dict:
-    """Add ``(md5, category[, source])`` rows.  Only categories in
-    ``STASH_CATEGORIES`` are kept; a repeat hash keeps the more-severe (lower)
-    code.  Returns ``summary()`` plus ``submitted`` and ``added``."""
+def add(entries, region: str | None = None) -> dict:
+    """Add ``(md5, category[, source[, region]])`` rows under ``region`` (or
+    the row's own).  Only the region's ``stash_categories`` are kept; a repeat
+    hash in one region keeps the lower code.  Returns ``summary(region)`` plus
+    ``submitted`` and ``added``."""
     rows = []
     for e in entries:
         md5, cat = e[0], e[1]
         src = e[2] if len(e) > 2 else None
+        rid = _region_id(e[3] if len(e) > 3 and e[3] else region)
         v = normalize_md5(md5)
         try:
             cat = int(cat)
         except (TypeError, ValueError):
             continue
-        if v and cat in STASH_CATEGORIES:
-            rows.append((v, cat, src))
+        if v and cat in stash_categories(rid):
+            rows.append((v, rid, cat, src))
     with _lock:
         c = connect()
         before = int(c.execute("SELECT COUNT(*) FROM stash").fetchone()[0])
         now = time.time()
         c.executemany(
-            "INSERT INTO stash(md5, category, added_at, source) VALUES(?,?,?,?) "
-            "ON CONFLICT(md5) DO UPDATE SET "
+            "INSERT INTO stash(md5, region, category, added_at, source) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(md5, region) DO UPDATE SET "
             "category = MIN(category, excluded.category), "
             "source = COALESCE(stash.source, excluded.source)",
-            [(v, cat, now, src) for v, cat, src in rows])
+            [(v, rid, cat, now, src) for v, rid, cat, src in rows])
         after = int(c.execute("SELECT COUNT(*) FROM stash").fetchone()[0])
         c.commit()
     _invalidate()
-    s = summary()
+    s = summary(region)
     s.update(submitted=len(rows), added=after - before)
     return s
 
@@ -304,15 +361,15 @@ def clear() -> int:
 
 # -- share --------------------------------------------------------------
 def export(dest: str | Path) -> Path:
-    """Write the stash to ``dest``.  ``.csv`` -> ``md5,category`` list;
-    anything else -> a standalone copy of the stash database."""
+    """Write the stash to ``dest``.  ``.csv`` -> ``md5,category,source,region``
+    list; anything else -> a standalone copy of the stash database."""
     dest = Path(dest)
     if dest.suffix.lower() == ".csv":
         with open(dest, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
-            w.writerow(["md5", "category", "source"])
-            for md5, cat, src, _ in iter_all():
-                w.writerow([md5, cat, src or ""])
+            w.writerow(["md5", "category", "source", "region"])
+            for md5, rid, cat, src, _ in iter_all():
+                w.writerow([md5, cat, src or "", rid])
     else:
         with _lock:
             src_conn = connect()
@@ -327,7 +384,10 @@ def export(dest: str | Path) -> Path:
 
 
 def merge(src: str | Path) -> dict:
-    """Fold another examiner's stash (``.csv`` or a stash ``.db``) into this one."""
+    """Fold another examiner's stash (``.csv`` or a stash ``.db``) into this one.
+
+    Each entry keeps its own region. A stash or CSV from before regions existed
+    has none, and its entries are US entries."""
     src = Path(src)
     entries = []
     with open(src, "rb") as fh:
@@ -336,9 +396,12 @@ def merge(src: str | Path) -> dict:
         s = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
         s.row_factory = sqlite3.Row
         try:
-            for r in s.execute("SELECT md5, category, source FROM stash"):
+            cols = {r[1] for r in s.execute("PRAGMA table_info(stash)")}
+            reg = "region" if "region" in cols else "'US' AS region"
+            for r in s.execute(f"SELECT md5, category, source, {reg} FROM stash"):
                 entries.append((r["md5"], r["category"],
-                                (r["source"] or "") + f" (merged {src.name})"))
+                                (r["source"] or "") + f" (merged {src.name})",
+                                r["region"]))
         finally:
             s.close()
     else:
@@ -347,17 +410,20 @@ def merge(src: str | Path) -> dict:
                 if not row or not normalize_md5(row[0]):
                     continue                       # skips a header row too
                 cat = row[1].strip() if len(row) > 1 else ""
+                rid = row[3].strip() if len(row) > 3 else ""
                 if cat.isdigit():
-                    entries.append((row[0], int(cat), f"merged {src.name}"))
+                    entries.append((row[0], int(cat), f"merged {src.name}",
+                                    rid if regions.is_region(rid) else "US"))
     return add(entries)
 
 
-def merge_precategorized(src: str | Path) -> dict:
+def merge_precategorized(src: str | Path, region: str | None = None) -> dict:
     """Fold an external pre-categorized hash set into the stash: a JSON list of
     records, each carrying an ``MD5`` and a numeric ``Category``. The records may sit
     at the top level or under ``value``.
 
-    Only categories 1-3 are kept, as for every stash entry. Returns ``add()``'s
+    The codes are read as ``region``'s, and only its ``stash_categories`` are
+    kept, as for every stash entry. Returns ``add()``'s
     result plus ``records``, ``skipped_category`` and ``skipped_no_md5``. Raises
     ``ValueError`` when no record carries both fields, rather than reporting a
     merge that added nothing.
@@ -382,12 +448,12 @@ def merge_precategorized(src: str | Path) -> dict:
             cat = None
         if not md5:
             no_md5 += 1
-        elif cat not in STASH_CATEGORIES:
+        elif cat not in stash_categories(region):
             other_cat += 1
         else:
             entries.append((md5, cat, label))
     if not entries and not other_cat:
         raise ValueError("no records with an MD5 and a Category were found")
-    res = add(entries)
+    res = add(entries, region)
     res.update(records=records, skipped_category=other_cat, skipped_no_md5=no_md5)
     return res

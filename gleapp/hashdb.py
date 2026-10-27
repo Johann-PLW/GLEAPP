@@ -602,7 +602,7 @@ def match_all(db: CaseDB, row, *, phash_threshold: int = 6,
                  "via": algo, "store": "case", "vic": bool(h["vic"]),
                  "hashset_id": h["hashset_id"], "media_id": h["media_id"]})
         if algo == "md5" and use_stash:
-            st = stash.lookup(val)
+            st = stash.lookup(val, db.scheme.id)
             if st:
                 add({"name": stash.STASH_NAME, "kind": "known",
                      "category": st["category"], "via": "md5-stash", "vic": False})
@@ -666,13 +666,16 @@ def sources_json(hits: list[dict]) -> str:
         ensure_ascii=False)
 
 
-def asserted_category(hits: list[dict]) -> int | None:
+def asserted_category(hits: list[dict], db: CaseDB | None = None) -> int | None:
     """The category a file takes from its hits, when it has none of its own: the
     most severe one a notable set asserts (the lowest code, Non-pertinent last).
-    None when no notable set asserts one; Uncategorized (5) asserts nothing."""
+    None when no notable set asserts one; Uncategorized asserts nothing. ``db``
+    gives the case's region; without it the US scheme is assumed."""
+    uncat = (db.is_uncategorized if db is not None else is_uncategorized)
+    key = (db.severity_key if db is not None else severity_key)
     cats = [int(h["category"]) for h in hits
-            if h["kind"] == "known" and not is_uncategorized(h["category"])]
-    return min(cats, key=severity_key) if cats else None
+            if h["kind"] == "known" and not uncat(h["category"])]
+    return min(cats, key=key) if cats else None
 
 
 def vic_record(db: CaseDB, hit: Mapping[str, object] | None) -> dict | None:

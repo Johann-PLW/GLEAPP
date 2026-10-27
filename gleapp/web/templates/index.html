@@ -276,7 +276,7 @@
   .modal .vbar input[type=range]:disabled{opacity:.4}
   .modal .vbar .amt{width:2.5em;text-align:right;color:var(--muted)}
   /* category editor */
-  #catEd,#reportDlg,#helpDlg,#snapDlg,#histDlg,#stashDlg,#stashWipeDlg,#hashImportDlg,#refDlg,#vicDlg,#mapsDlg,#logoDlg,#vicExportDlg,#addEvDlg,#flagDlg,#flagEd,#setDlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:75;display:none}
+  #catEd,#reportDlg,#helpDlg,#snapDlg,#histDlg,#stashDlg,#stashWipeDlg,#hashImportDlg,#refDlg,#vicDlg,#mapsDlg,#logoDlg,#vicExportDlg,#addEvDlg,#flagDlg,#flagEd,#setDlg,#regionDlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:75;display:none}
   #hashImportDlg .box,#refDlg .box,#vicDlg .box,#vicExportDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,94vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #addEvDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #hashImportDlg h2,#refDlg h2,#vicDlg h2,#vicExportDlg h2,#addEvDlg h2{margin:0 0 4px;font-size:15px}
@@ -301,9 +301,9 @@
     border-radius:5px;padding:6px}
   #askDlg .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
   #askDlg .ok{border-color:var(--accent)}
-  #snapDlg .box,#histDlg .box,#stashDlg .box,#mapsDlg .box,#logoDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:82vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  #snapDlg .box,#histDlg .box,#stashDlg .box,#mapsDlg .box,#logoDlg .box,#regionDlg .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:82vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
   #histDlg .box{width:min(720px,94vw)}
-  #snapDlg h2,#histDlg h2,#stashDlg h2,#mapsDlg h2,#logoDlg h2{margin:0 0 8px;font-size:15px}
+  #snapDlg h2,#histDlg h2,#stashDlg h2,#mapsDlg h2,#logoDlg h2,#regionDlg h2{margin:0 0 8px;font-size:15px}
   #histList .histrow{padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
   #histList .histrow .htop{display:flex;gap:8px;align-items:baseline}
   #histList .histrow time{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -356,6 +356,7 @@
   #reportDlg details.rsec > summary::before{content:"\25B8 ";color:var(--muted,#8b93a3);display:inline-block;width:14px}
   #reportDlg details.rsec[open] > summary::before{content:"\25BE "}
   #helpDlg,#refDlg,#vicDlg,#mapsDlg,#stashDlg,#logoDlg{z-index:100}
+  #regionDlg{z-index:120}
   /* intro video: over everything, launcher included; closes with the button, Esc, a click outside it, or its end */
   #introDlg{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:110;display:none;align-items:center;justify-content:center}
   #introDlg.show{display:flex}
@@ -562,6 +563,7 @@
     <h1 id="caseName">GLEAPP</h1>
     <span class="stat" id="statLine"></span>
     <span id="saveState" title="">All changes saved</span>
+    <span id="regionWarn" class="muted" style="display:none;color:#e6a23c;font-size:12px"></span>
   </div>
   <div class="hdr-tools">
     <button class="btn" id="btnMenu" title="Case tools, reference data, and help">☰ Menu</button>
@@ -573,7 +575,7 @@
       <button id="btnVic" style="display:none" title="Export a Project VIC 2.0 JSON with your categories">Export Project VIC</button>
       <div class="hd">Reference</div>
       <button id="btnMaps" title="Offline maps: import a basemap file and see geolocated files on it. Nothing is fetched from the internet.">Maps</button>
-      <button id="btnStash" title="Save the MD5s of your category 1–3 files to the local hash stash, and re-use them in future cases">Hash stash</button>
+      <button id="btnStash" title="Save the MD5s of your files in your region's notable categories (1–3 in the US) to the local hash stash, and re-use them in future cases">Hash stash</button>
       <button id="btnRefStore" title="Add or manage the shared NSRL / reference-hash store">Reference data (NSRL)</button>
       <button id="btnVicSets" title="Connect a Project VIC hash set: matches are flagged VIC and go into the category Project VIC gave them">Project VIC hash sets</button>
       <div class="hd">Help</div>
@@ -624,7 +626,7 @@
           <select id="fhashset"><option value="">— all files —</option></select></label>
         <label class="fck"><input type="checkbox" id="fhit"> Any known-hash hit</label>
         <label class="fck"><input type="checkbox" id="fhidegood"> Hide known-NSRL <span id="goodCount" class="muted"></span></label>
-        <label class="fck" title="Match this case's files against your hash stash (category 1-3 hashes from past cases). Turn off for a case that isn't CSAM / Project VIC related - any existing stash hits are cleared immediately. Turning it back on needs Re-check to find them again."><input type="checkbox" id="fusestash" checked> Match against my hash stash</label>
+        <label class="fck" title="Match this case's files against your hash stash (notable-category hashes from past cases of the same region). Turn off for a case that isn't CSAM / Project VIC related - any existing stash hits are cleared immediately. Turning it back on needs Re-check to find them again."><input type="checkbox" id="fusestash" checked> Match against my hash stash</label>
         <label class="fck" title="Match this case's files against your Project VIC hash sets. Turn off for a case that has nothing to do with them - existing VIC hits are cleared immediately. Turning it back on needs Re-check to find them again."><input type="checkbox" id="fusevic" checked> Match against Project VIC sets</label>
         <div class="fbtns">
           <button class="btn sm" id="btnImportHash" title="Browse to an MD5/SHA hash list (e.g. from a CyberTip) and flag matching files">Import hash set…</button>
@@ -830,10 +832,11 @@
     <button class="btn" id="btnRefMenuLauncher" title="Offline maps, hash stash, NSRL reference data, and the agency logo — usable before opening a case">☰ Menu</button>
     <div id="refMenuLauncher" class="hdrmenu">
       <button id="btnMapsLauncher" title="Offline maps: import a basemap file and see geolocated files on it. Nothing is fetched from the internet.">Maps</button>
-      <button id="btnStashLauncher" title="Save the MD5s of your category 1–3 files to the local hash stash, and re-use them in future cases">Hash stash</button>
+      <button id="btnStashLauncher" title="Save the MD5s of your files in your region's notable categories (1–3 in the US) to the local hash stash, and re-use them in future cases">Hash stash</button>
       <button id="btnRefStoreLauncher" title="Add or manage the shared NSRL / reference-hash store">Reference data (NSRL)</button>
       <button id="btnVicSetsLauncher" title="Connect a Project VIC hash set: matches are flagged VIC and go into the category Project VIC gave them">Project VIC hash sets</button>
       <button id="btnLogoLauncher" title="The default logo on every case's report header, unless that case sets its own">Agency logo</button>
+      <button id="btnRegionLauncher" title="The country or agency whose locked categories new cases are created with">Category region</button>
       <button id="btnIntroLauncher" title="Play the intro video that opens with GLEAPP, and choose whether it shows at startup">Watch intro</button>
     </div>
     <button class="btn" id="btnHelpLauncher" title="Manual — features, filters, categories, shortcuts">Help / Manual</button>
@@ -893,7 +896,7 @@
     <details class="psec" id="procOpts">
     <summary>Processing options</summary>
     <label><input type="checkbox" id="optScreen" checked> Face / skin tone pre-processing</label>
-    <label title="Match this case's files against your hash stash (category 1-3 hashes from past cases). Turn off for a case that isn't CSAM / Project VIC related, so an old stashed hit can't re-flag unrelated media. Changeable later from the Known hashes section."><input type="checkbox" id="optStash" checked> Enable hash stash matching</label>
+    <label title="Match this case's files against your hash stash (notable-category hashes from past cases of the same region). Turn off for a case that isn't CSAM / Project VIC related, so an old stashed hit can't re-flag unrelated media. Changeable later from the Known hashes section."><input type="checkbox" id="optStash" checked> Enable hash stash matching</label>
     <label id="optSavedCatsRow" style="display:none" title="Add the categories you saved with Save as my set (category editor) to this case. They keep their numbers."><input type="checkbox" id="optSavedCats"> Start with my saved categories <span id="optSavedCatsN"></span></label>
     <label id="optSavedFlagsRow" style="display:none" title="Add the flags you saved with Save as my set (category or flag editor) to this case."><input type="checkbox" id="optSavedFlags"> Start with my saved flags <span id="optSavedFlagsN"></span></label>
     <label title="Open each .zip / .7z / .tar / .gz found inside a source and register the images and videos in it. Slow on a full file-system extraction that holds many compressed files. Off, the archives are still listed (Type: Archives) and you can open them later with Expand archives in the sidebar."><input type="checkbox" id="optExpand"> Expand archives found inside the sources</label>
@@ -919,8 +922,10 @@
 <div id="catEd"><div class="box">
   <h2>Categories</h2>
   <div class="muted" style="font-size:12px;margin-bottom:8px">
-    Codes 0–5 are locked Project VIC categories; their number keys are their codes
-    (5 clears). Add your own below — order sets keys 6–9, colors are auto-assigned.
+    The 🔒 rows are the locked categories of the region this case was created with
+    (Project VIC codes 0–5 in a US case, where 5 clears); each shows its key. Add your
+    own below — their order gives them the number keys the region leaves free (6–9 in a
+    US case), colors are auto-assigned.
   </div>
   <div id="catRows"></div>
   <div class="row" style="margin-top:12px">
@@ -1354,12 +1359,28 @@
     <button class="btn" id="logoClose">Done</button></div>
 </div></div>
 
+<div id="regionDlg"><div class="box">
+  <h2>Category region</h2>
+  <p class="note" id="regionFirst">Choose the country or agency whose categories you work
+    with. GLEAPP seeds every new case with that region's locked categories.</p>
+  <p class="note">A case already created keeps the categories it was made with. The hash
+    stash keeps each entry under its own region and matches a case only against its
+    region's entries.</p>
+  <select id="regionSel" style="width:100%"></select>
+  <ul id="regionCats" style="margin:10px 0 0;padding-left:18px;font-size:12px"></ul>
+  <div class="row" style="margin-top:14px"><span style="flex:1"></span>
+    <button class="btn" id="regionCancel">Cancel</button>
+    <button class="btn" id="regionSave">Save</button></div>
+</div></div>
+
 <div id="stashDlg"><div class="box">
   <h2>Local hash stash</h2>
   <p class="note">
     A private, on-this-machine list of the <b>MD5 hashes</b> of every file you
-    categorize as <b>1&nbsp;CAM</b>, <b>2&nbsp;Child&nbsp;Exploitative</b> or
-    <b>3&nbsp;CGI/Animation</b>. It is checked automatically in every case you
+    put in one of your region's notable categories (in the US <b>1&nbsp;CAM</b>,
+    <b>2&nbsp;Child&nbsp;Exploitative</b> or <b>3&nbsp;CGI/Animation</b>). Each
+    entry keeps its region, and a case is matched only against its own region's
+    entries. It is checked automatically in every case you
     process from now on — a matching file is flagged <span class="b" style="background:#7c4dff;color:#fff;padding:0 5px;border-radius:4px">STASH</span>
     and, if still uncategorized, adopts the category you stashed it under. You
     always confirm the final call.
@@ -1371,7 +1392,7 @@
     <button class="btn" id="stashAdd" style="border-color:var(--accent)">Add this case's hashes to the stash</button>
   </div>
 
-  <div style="font-weight:600;font-size:12px;margin-top:16px">Stash total</div>
+  <div style="font-weight:600;font-size:12px;margin-top:16px">Stash total — <span id="stashRegion"></span></div>
   <div class="statgrid" id="stashTotal"></div>
   <div class="note" id="stashUpdated"></div>
 
@@ -1386,7 +1407,7 @@
     <button class="btn sm" id="stashExportDb">Export a backup…</button>
     <button class="btn sm" id="stashExportCsv">Export CSV…</button>
     <button class="btn sm" id="stashMerge">Merge external hash stash…</button>
-    <button class="btn sm" id="stashMergePrecat" title="Add MD5s that another tool has already categorized 1–3 (JSON records with MD5 and Category)">Merge external pre-categorized hash set…</button>
+    <button class="btn sm" id="stashMergePrecat" title="Add MD5s that another tool has already categorized in your region's stash categories (JSON records with MD5 and Category, read as your region's codes)">Merge external pre-categorized hash set…</button>
     <button class="btn sm" id="stashSetPath">Use a shared hash stash…</button>
     <button class="btn sm" id="stashResetPath" style="display:none">Back to my own</button>
   </div>
