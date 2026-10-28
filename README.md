@@ -110,11 +110,11 @@ python gleapp.py web              # opens the review gallery in your browser
 
 `python gleappGUI.py` opens the same interface in a native desktop window
 instead of a browser tab; `requirements.txt` installs what that needs on Windows
-and macOS. Python 3.10 or newer. No external binaries are required, OpenCV
+and macOS. Python 3.11 or newer. No external binaries are required, OpenCV
 handles video.
 
-Everything installs from prebuilt wheels on Windows x64 with Python 3.10 through
-3.14, and on macOS with Python 3.10 through 3.13 (macOS 13 or newer on Apple
+Everything installs from prebuilt wheels on Windows x64 with Python 3.11 through
+3.14, and on macOS with Python 3.11 through 3.13 (macOS 13 or newer on Apple
 silicon, 14 or newer on Intel, which is where OpenCV's wheels start), with two
 exceptions. `proxy_tools`, a small pure-Python package pywebview depends on, is
 published only as a source archive, and pip builds it with no compiler involved.
@@ -124,7 +124,7 @@ its own; it decodes Apple's LZFSE-compressed GPU textures and is reached only fo
 that format, and its Windows x64 wheels are vendored in `whl_files/` so Windows
 x64 never needs a compiler. Windows on ARM is a different case: on every one of
 these Python versions `opencv-python-headless`, `brotli` and `pyliblzfse` have no
-wheel for it (and more packages on 3.10 and 3.11), so it needs a full build
+wheel for it (and more packages on 3.11), so it needs a full build
 toolchain and builds them from source. Measured against PyPI on 2026-09-15.
 
 ## Desktop app (offline, no browser)

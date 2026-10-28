@@ -1,13 +1,11 @@
 name: Python Runtime Contract
 
-# pyproject.toml declares requires-python = ">=3.10". That is a promise to anyone who
+# pyproject.toml declares requires-python = ">=3.11". That is a promise to anyone who
 # installs GLEAPP, and nothing else in CI checks it: the other jobs run one newer
-# Python, where the standard library is more permissive than it is on 3.10.
+# Python, where the standard library and the grammar are more permissive than on 3.11.
 #
-# The breaks this catches are quiet ones. datetime.fromisoformat accepted only 3 or 6
-# fractional-second digits before 3.11 and any count from 3.11 on, so a timestamp that
-# parses on a developer machine raises on the oldest supported runtime. Syntax is the
-# other half: a multi-line expression inside an f-string parses from 3.12 and is a
+# The breaks this catches are quiet ones. A multi-line expression inside an f-string,
+# or a quote inside one that matches the f-string's own, parses from 3.12 and is a
 # syntax error before it, which no amount of linting on a newer version will show.
 #
 # If a version in this matrix is genuinely not supportable, the honest fix is to raise
@@ -33,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         # The range pyproject.toml's requires-python promises.
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
 
     steps:
       - name: Checkout code
