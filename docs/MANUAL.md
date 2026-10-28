@@ -657,7 +657,7 @@ What a picture or video declares about its own provenance: a **C2PA manifest
 store** (Content Credentials: who signed it, with what tool, the actions and
 digital source types it states, the files it was made from) and an **IPTC
 digital source type** in its XMP. GLEAPP reads them with
-[c2paprobe](https://github.com/abrignoni/c2paprobe), the same reader iLEAPP and
+[c2pareader](https://github.com/abrignoni/c2pareader), the same reader iLEAPP and
 ALEAPP use.
 
 Nothing is read until you ask. Tick *Read Content Credentials (C2PA)* when you
@@ -2208,9 +2208,10 @@ its own license file, `gleapp/vendor/LICENSE-<name>`):
 - **[exoprobe](https://github.com/abrignoni/exoprobe)** reads the media caches
   Android apps keep through ExoPlayer, joins each cached item's pieces and each
   DASH stream's segments, and puts a video and its audio into one MP4.
-- **[c2paprobe](https://github.com/abrignoni/c2paprobe)** reads the Content
+- **[c2pareader](https://github.com/abrignoni/c2pareader)** reads the Content
   Credentials (C2PA) and IPTC digital source type a picture or video declares,
-  without verifying them. iLEAPP and ALEAPP vendor the same file.
+  without verifying them. iLEAPP and ALEAPP vendor the same file. It was called
+  c2paprobe up to v0.1.1, the version GLEAPP v2026.5.6 recorded as its reader.
 
 All five are MIT licensed, © Alexis Brignoni. GLEAPP's Android storage-view
 table (`gleapp/storage_views.py`), which knows that credential-encrypted,

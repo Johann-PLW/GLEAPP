@@ -1,13 +1,13 @@
 """Synthetic C2PA test files, copied from c2paprobe's tests/build.py
-(github.com/abrignoni/c2paprobe, MIT, commit c51e601) so these tests need nothing
+(now github.com/abrignoni/c2pareader, MIT, commit c51e601) so these tests need nothing
 beyond this repository. Nothing here is evidence.
 
 Writers for synthetic test files: CBOR, JUMBF, a C2PA manifest store, a DER
-certificate, an RFC 3161 token and each container c2paprobe reads.
+certificate, an RFC 3161 token and each container c2pareader reads.
 
 Everything here is built from the specifications, so a test that passes shows the
 reader and these writers agree. That the reader also agrees with files signed by
-real C2PA producers is shown by the corpus comparison recorded in c2paprobe's README, not
+real C2PA producers is shown by the corpus comparison recorded in c2pareader's README, not
 by these tests.
 """
 

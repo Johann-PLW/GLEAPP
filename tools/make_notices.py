@@ -62,7 +62,7 @@ REPO_NOTICES = [
     ("ewfprobe (gleapp/vendor/ewfprobe.py)", "gleapp/vendor/LICENSE-ewfprobe"),
     ("mediacarve (gleapp/vendor/mediacarve.py)", "gleapp/vendor/LICENSE-mediacarve"),
     ("exoprobe (gleapp/vendor/exoprobe.py)", "gleapp/vendor/LICENSE-exoprobe"),
-    ("c2paprobe (gleapp/vendor/c2paprobe.py)", "gleapp/vendor/LICENSE-c2paprobe"),
+    ("c2pareader (gleapp/vendor/c2pareader.py)", "gleapp/vendor/LICENSE-c2pareader"),
     ("SFace face-recognition model (gleapp/models/face_recognition_sface_2021dec.onnx)",
      "gleapp/models/LICENSE-sface"),
     ("DINOv2-small image model (gleapp/models/dinov2_small.onnx)",
