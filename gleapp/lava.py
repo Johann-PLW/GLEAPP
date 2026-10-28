@@ -717,7 +717,7 @@ _C2PA_MEDIA_NOTE = (
 
 
 def _utc_epoch(text: str) -> int | None:
-    """'YYYY-MM-DD HH:MM:SS' in UTC, as c2paprobe writes a time-stamp, to epoch."""
+    """'YYYY-MM-DD HH:MM:SS' in UTC, as c2pareader writes a time-stamp, to epoch."""
     if not text:
         return None
     with suppress(ValueError):
@@ -788,7 +788,7 @@ def _artifact_c2pa(writer: "_Writer", rows: list[dict], media: dict[int, str]) -
 
 
 _C2PA_NOTES = (
-    "Read by the vendored c2paprobe (github.com/abrignoni/c2paprobe), the reader iLEAPP "
+    "Read by the vendored c2pareader (github.com/abrignoni/c2pareader), the reader iLEAPP "
     "and ALEAPP use, when the examiner ran the Content Credentials read; a file not "
     "read has no row. Signed By, Certificate Issuer, Certificate Validity, Signature "
     "Algorithm and Signing Time are what the manifest states: no signature is checked, "

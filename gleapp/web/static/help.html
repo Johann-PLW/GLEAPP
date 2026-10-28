@@ -618,7 +618,7 @@ Processing history.</p>
 </ul>
 
 <h3>Content Credentials</h3>
-<p>What a picture or video declares about its own provenance: a <strong>C2PA manifest store</strong> (Content Credentials: who signed it, with what tool, the actions and digital source types it states, the files it was made from) and an <strong>IPTC digital source type</strong> in its XMP. GLEAPP reads them with <a href="https://github.com/abrignoni/c2paprobe">c2paprobe</a>, the same reader iLEAPP and ALEAPP use.</p>
+<p>What a picture or video declares about its own provenance: a <strong>C2PA manifest store</strong> (Content Credentials: who signed it, with what tool, the actions and digital source types it states, the files it was made from) and an <strong>IPTC digital source type</strong> in its XMP. GLEAPP reads them with <a href="https://github.com/abrignoni/c2pareader">c2pareader</a>, the same reader iLEAPP and ALEAPP use.</p>
 <p>Nothing is read until you ask. Tick <em>Read Content Credentials (C2PA)</em> when you create the case or add evidence, or press <strong>Read Content Credentials</strong> in this section to read every picture and video not read yet. Once all are read the button reads them all again. On the command line, <code>gleapp provenance</code> does the same, <code>--reread</code> reads all again, and <code>--c2pa</code> on <code>ingest</code> or <code>process</code> reads after processing.</p>
 <ul>
   <li><strong>Credentials</strong>: <em>Any declared (C2PA or XMP)</em>; <em>C2PA manifest</em> (the file holds a manifest store); <em>XMP source type only</em> (no manifest store, but its XMP states a digital source type, which nothing signs); <em>None found</em> (the whole container was read and holds neither); <em>Not settled</em> (the read stopped early, or the container is not one the reader walks, so absence is not established); <em>Not read</em>.</li>
@@ -1957,9 +1957,11 @@ verbatim under <code>gleapp/vendor/</code> (each with its own license file,
     reads the media caches Android apps keep through ExoPlayer, joins each cached
     item's pieces and each DASH stream's segments, and puts a video and its audio
     into one MP4.</li>
-  <li><strong><a href="https://github.com/abrignoni/c2paprobe">c2paprobe</a></strong>
+  <li><strong><a href="https://github.com/abrignoni/c2pareader">c2pareader</a></strong>
     reads the Content Credentials (C2PA) and IPTC digital source type a picture or
-    video declares, without verifying them. iLEAPP and ALEAPP vendor the same file.</li>
+    video declares, without verifying them. iLEAPP and ALEAPP vendor the same file.
+    It was called c2paprobe up to v0.1.1, the version GLEAPP v2026.5.6 recorded as
+    its reader.</li>
 </ul>
 <p>All five are MIT licensed, &copy; Alexis&nbsp;Brignoni. GLEAPP's Android
 storage-view table (<code>gleapp/storage_views.py</code>), which knows that

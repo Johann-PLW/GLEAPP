@@ -3,7 +3,7 @@
 What a picture or video declares about its own provenance: a C2PA manifest store
 (who signed it, with what tool, the actions and digital source types it states,
 its ingredients) and an IPTC DigitalSourceType in XMP. The reading is the vendored
-c2paprobe's (``abrignoni/c2paprobe``, ``gleapp/vendor/c2paprobe.py``), shared with
+c2pareader's (``abrignoni/c2pareader``, ``gleapp/vendor/c2pareader.py``), shared with
 iLEAPP and ALEAPP; fix it there and re-vendor.
 
 Nothing is verified. No signature is checked and no certificate chain is built, so
@@ -24,11 +24,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import archive
-from .vendor import c2paprobe
+from .vendor import c2pareader
 
-READER = f"c2paprobe {c2paprobe.__version__}"
+READER = f"c2pareader {c2pareader.__version__}"
 
-# The kinds a pass reads. c2paprobe decides the container from the bytes; a file
+# The kinds a pass reads. c2pareader decides the container from the bytes; a file
 # GLEAPP called 'other' is not media and is not read.
 KINDS = ("image", "video")
 
@@ -99,10 +99,10 @@ def summarize(result: dict) -> dict:
 
 
 def read_path(path) -> dict:
-    """c2paprobe's result for the file at ``path``, with the file's size beside it
+    """c2pareader's result for the file at ``path``, with the file's size beside it
     (``file_size``). Raises OSError when it cannot be opened; anything wrong inside
     the file is in the result's ``errors``."""
-    result = c2paprobe.probe(path)
+    result = c2pareader.probe(path)
     result["file_size"] = os.path.getsize(path)
     return result
 

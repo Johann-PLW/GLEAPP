@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS exiftool_meta (
 );
 
 -- What a picture or video declares about its own provenance, read by the
--- vendored c2paprobe when the examiner asks for it (gleapp/provenance.py). A
+-- vendored c2pareader when the examiner asks for it (gleapp/provenance.py). A
 -- file with no row here has not been read. ``credentials`` is 'c2pa' (a manifest
 -- store), 'xmp' (only an XMP digital source type), 'none' (the whole container
 -- was read and holds neither) or 'unsettled' (the read stopped early or the
