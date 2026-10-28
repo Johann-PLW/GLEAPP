@@ -11,7 +11,6 @@ texture2ddecoder>=1.0
 # the machine as well as the OS: these are win_amd64, and on Windows-on-ARM pip
 # would otherwise try to install them and fail. Anything the markers do not
 # match compiles from the sdist on the line after them.
-whl_files/pyliblzfse-0.4.1-cp310-cp310-win_amd64.whl; python_version == "3.10" and platform_system == "Windows" and platform_machine == "AMD64"
 whl_files/pyliblzfse-0.4.1-cp311-cp311-win_amd64.whl; python_version == "3.11" and platform_system == "Windows" and platform_machine == "AMD64"
 whl_files/pyliblzfse-0.4.1-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows" and platform_machine == "AMD64"
 whl_files/pyliblzfse-0.4.1-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows" and platform_machine == "AMD64"

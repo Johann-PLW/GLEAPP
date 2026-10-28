@@ -1,8 +1,8 @@
 # CI facts that are not obvious from the workflow files
 
-## Seven checks are required, and none of them has a paths filter
+## Six checks are required, and none of them has a paths filter
 
-`pytest`, `windows-smoke` and `runtime-contract` on 3.10 through 3.14 are required to
+`pytest`, `windows-smoke` and `runtime-contract` on 3.11 through 3.14 are required to
 merge into `main`, for everyone including admins. Their workflows deliberately carry no
 `pull_request` paths filter. A required check that never triggers never reports, and
 GitHub then blocks the pull request permanently rather than passing it; measured on a PR

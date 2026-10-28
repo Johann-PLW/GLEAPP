@@ -29,7 +29,7 @@ def package_version() -> str:
 
 
 def pyproject_version() -> str:
-    """The [project] version, read without tomllib, which Python 3.10 does not have."""
+    """The [project] version, read with a regular expression rather than tomllib."""
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     section = re.search(r"^\[project\]$(.*?)^\[", text, re.M | re.S)
     assert section, "no [project] section in pyproject.toml"

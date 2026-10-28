@@ -59,7 +59,7 @@ def _windows_db(items: dict[int, tuple[str, str]]) -> bytes:
     """items: {cache_id: (path, name)}.
 
     Built on a real temp file, not ``:memory:`` + ``Connection.serialize()`` -
-    that method needs Python 3.11+, and this suite runs on 3.10 too.
+    a habit from when the suite also ran on Python 3.10, which lacks that method.
     """
     import os
     import tempfile

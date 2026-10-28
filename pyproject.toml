@@ -12,7 +12,7 @@ name = "gleapp-forensics"
 version = "2026.5.6"
 description = "GLEAPP - Graphics · Logs · Examination · Automated Processing · Parsing: an open-source image/video forensic triage toolkit"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 # The licence of the whole wheel, what it bundles included: GLEAPP, the vendored
 # readers and the YuNet model are MIT, Impacket's ESE code Apache 1.1, the SFace and
 # DINOv2 models Apache 2.0, the map code BSD-3-Clause with some MIT parts, the map style design CC0

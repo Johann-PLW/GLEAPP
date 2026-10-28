@@ -16,10 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-try:
-    import tomllib
-except ImportError:  # Python 3.10, where pytest itself depends on tomli
-    import tomli as tomllib
+import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import make_notices  # noqa: E402  pylint: disable=wrong-import-position
